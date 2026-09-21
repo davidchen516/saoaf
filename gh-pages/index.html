@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#07111f" />
+    <meta
+      name="description"
+      content="An open reference architecture for sovereign, interoperable enterprise AI."
+    />
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <title>Sovereign AI & Open AI Fabric</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main" data-i18n="skip">Skip to content</a>
+    <div class="page-grid" aria-hidden="true"></div>
+
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="Sovereign AI & Open AI Fabric home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>SAOAF</span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="#architecture" data-i18n="navArchitecture">Architecture</a>
+        <a href="#getting-started" data-i18n="navStart">Get started</a>
+        <a href="#standards" data-i18n="navStandards">Standards</a>
+        <a href="#contribute" data-i18n="navContribute">Contribute</a>
+        <a href="https://github.com/davidchen516/saoaf" target="_blank" rel="noreferrer">GitHub ↗</a>
+      </nav>
+      <button class="language-switch" type="button" aria-label="Switch language" aria-pressed="false">
+        <span aria-hidden="true">文</span><span class="language-label">中文</span>
+      </button>
+    </header>
+
+    <main id="main">
+      <section id="top" class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow"><span></span><span data-i18n="eyebrow">OPEN REFERENCE ARCHITECTURE · PRE-RELEASE</span></p>
+          <h1 id="hero-title" data-i18n="heroTitle">Sovereign AI<br />&amp; Open AI Fabric</h1>
+          <p class="hero-lede" data-i18n="heroLede">
+            A practical architecture for enterprises that need to choose, connect, govern, replace, and prove control over AI capabilities.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#getting-started" data-i18n="heroPrimary">Read the implementation guide</a>
+            <a class="button secondary" href="#architecture" data-i18n="heroSecondary">Explore the modules <span aria-hidden="true">↓</span></a>
+          </div>
+          <dl class="hero-facts">
+            <div><dt data-i18n="factOneLabel">Control plane</dt><dd data-i18n="factOne">One policy, registry, and evidence fabric</dd></div>
+            <div><dt data-i18n="factTwoLabel">Data planes</dt><dd data-i18n="factTwo">Independent model, tool, agent, and compute paths</dd></div>
+            <div><dt data-i18n="factThreeLabel">Principle</dt><dd data-i18n="factThree">Open contracts; replaceable providers</dd></div>
+          </dl>
+        </div>
+
+        <div class="fabric-map" role="img" aria-label="Sovereign AI Fabric module map">
+          <div class="map-caption"><span class="pulse"></span><span data-i18n="mapCaption">03 / SOVEREIGN CONTROL PLANE</span></div>
+          <div class="core-node">
+            <small data-i18n="coreKicker">UNIFIED CONTROL</small>
+            <strong data-i18n="coreTitle">Sovereignty<br />Control Plane</strong>
+            <span data-i18n="coreDetail">Policy · Registry · Resolver · Evidence</span>
+          </div>
+          <div class="orbit orbit-model"><b>03.4</b><span data-i18n="moduleModel">Model Fabric</span></div>
+          <div class="orbit orbit-tool"><b>03.5</b><span data-i18n="moduleTool">Tool &amp; Data / MCP</span></div>
+          <div class="orbit orbit-agent"><b>03.6</b><span data-i18n="moduleAgent">Agent Federation / A2A</span></div>
+          <div class="orbit orbit-place"><b>03.7</b><span data-i18n="modulePlace">Placement &amp; Portability</span></div>
+          <svg viewBox="0 0 560 500" aria-hidden="true">
+            <path d="M280 250 C350 190 370 125 440 108" /><path d="M280 250 C370 255 402 310 470 322" />
+            <path d="M280 250 C210 340 142 367 84 360" /><path d="M280 250 C190 190 155 125 103 118" />
+            <circle cx="280" cy="250" r="154" /><circle cx="280" cy="250" r="211" />
+          </svg>
+        </div>
+      </section>
+
+      <section class="principles section-shell" aria-labelledby="principles-title">
+        <div class="section-heading"><p class="eyebrow"><span></span><span data-i18n="principlesTag">THE OPERATING IDEA</span></p><h2 id="principles-title" data-i18n="principlesTitle">Sovereignty is the ability to change without losing control.</h2></div>
+        <div class="principle-grid">
+          <article><span>01</span><h3 data-i18n="p1Title">Choose</h3><p data-i18n="p1Body">Use logical capabilities, rather than hard-coded models, tools, agents, clouds, or endpoints.</p></article>
+          <article><span>02</span><h3 data-i18n="p2Title">Connect</h3><p data-i18n="p2Body">Use MCP, A2A, OpenAPI, CloudEvents, OCI, and OpenTelemetry where each protocol belongs.</p></article>
+          <article><span>03</span><h3 data-i18n="p3Title">Control</h3><p data-i18n="p3Body">Keep policy, identity, delegated authority, evidence, and lifecycle decisions explicit.</p></article>
+          <article><span>04</span><h3 data-i18n="p4Title">Replace</h3><p data-i18n="p4Body">Prove that a provider, agent, tool, or deployment zone can be changed through tested contracts.</p></article>
+        </div>
+      </section>
+
+      <section id="architecture" class="architecture section-shell" aria-labelledby="architecture-title">
+        <div class="section-heading split"><div><p class="eyebrow"><span></span><span data-i18n="architectureTag">ARCHITECTURE</span></p><h2 id="architecture-title" data-i18n="architectureTitle">One control plane. Four independent execution fabrics.</h2></div><p data-i18n="architectureBody">The control plane carries metadata, constraints, plans, and evidence links. Business payloads go directly to their specialist data plane.</p></div>
+        <div class="architecture-frame">
+          <div class="control-band">
+            <div class="band-label"><span data-i18n="controlPlane">SOVEREIGN CONTROL PLANE</span><small data-i18n="controlPlaneDetail">No model prompts, tool parameters, or business payloads</small></div>
+            <div class="control-modules">
+              <article><b>03.1</b><h3 data-i18n="governanceTitle">Governance &amp; Policy</h3><p data-i18n="governanceBody">Sovereignty constraints and provider rules</p></article>
+              <article><b>03.2</b><h3 data-i18n="registryTitle">Capability Registry &amp; Hub</h3><p data-i18n="registryBody">Stable capability IDs, ownership, bindings, lifecycle</p></article>
+              <article class="highlight"><b>03.3</b><h3 data-i18n="resolverTitle">AI Resource Router</h3><p data-i18n="resolverBody">Deterministic capability resolution into Resource Plans</p></article>
+              <article><b>03.8</b><h3 data-i18n="opsTitle">Operations &amp; Exit Assurance</h3><p data-i18n="opsBody">Evidence links, replacement coverage, exit drills</p></article>
+            </div>
+          </div>
+          <div class="execution-band">
+            <div class="band-label"><span data-i18n="dataPlane">SPECIALIST EXECUTION FABRICS</span><small data-i18n="dataPlaneDetail">Independently deployed, scaled, and operated</small></div>
+            <div class="execution-modules">
+              <article><b>03.4</b><h3 data-i18n="modelTitle">Model Fabric</h3><p data-i18n="modelBody">Multi-Model Router selects concrete models and handles quotas, cost, retries, and fallback.</p></article>
+              <article><b>03.5</b><h3 data-i18n="toolTitle">Tool &amp; Data Access</h3><p data-i18n="toolBody">MCP gateway connects controlled enterprise tools and data services.</p></article>
+              <article><b>03.6</b><h3 data-i18n="agentTitle">Agent Federation</h3><p data-i18n="agentBody">A2A gateway enables discovery and delegated work across agents.</p></article>
+              <article><b>03.7</b><h3 data-i18n="placementTitle">Placement &amp; Portability</h3><p data-i18n="placementBody">Placement intent and portable profiles connect to the AI Factory.</p></article>
+            </div>
+          </div>
+        </div>
+        <aside class="boundary-note"><span aria-hidden="true">↳</span><p data-i18n="boundaryNote"><strong>Boundary:</strong> the Resource Router does not choose a concrete model, execute a tool, orchestrate an agent, retrieve context, authorize an action, or schedule infrastructure.</p></aside>
+      </section>
+
+      <section class="flow section-shell" aria-labelledby="flow-title">
+        <div class="section-heading"><p class="eyebrow"><span></span><span data-i18n="flowTag">RUNTIME FLOW</span></p><h2 id="flow-title" data-i18n="flowTitle">Plan centrally. Execute directly.</h2></div>
+        <ol class="runtime-flow">
+          <li><span>01</span><div><h3 data-i18n="flow1Title">Declare capabilities</h3><p data-i18n="flow1Body">An Agent Harness sends structured requirements and sovereignty constraints.</p></div></li>
+          <li><span>02</span><div><h3 data-i18n="flow2Title">Resolve a plan</h3><p data-i18n="flow2Body">The Resource Router returns providers, profiles/actions, contract versions, and a short-lived plan ID.</p></div></li>
+          <li><span>03</span><div><h3 data-i18n="flow3Title">Call direct data planes</h3><p data-i18n="flow3Body">The Harness invokes MMR, Context, MCP, or A2A endpoints directly.</p></div></li>
+          <li><span>04</span><div><h3 data-i18n="flow4Title">Link evidence</h3><p data-i18n="flow4Body">Model route, tool execution, agent task, and policy decision IDs remain traceable without copying payloads.</p></div></li>
+        </ol>
+      </section>
+
+      <section id="getting-started" class="getting-started section-shell" aria-labelledby="start-title">
+        <div class="section-heading split"><div><p class="eyebrow"><span></span><span data-i18n="startTag">GET STARTED</span></p><h2 id="start-title" data-i18n="startTitle">Start with one narrow, verifiable capability path.</h2></div><p data-i18n="startBody">The first production slice should be small enough to audit and meaningful enough to prove replacement and governance.</p></div>
+        <div class="start-grid">
+          <article><span>1</span><h3 data-i18n="start1Title">Publish a capability</h3><p data-i18n="start1Body">Define a stable capability ID, owner, risk level, data classification, and contract version.</p><code>tool.erp.work-order.read</code></article>
+          <article><span>2</span><h3 data-i18n="start2Title">Register a provider</h3><p data-i18n="start2Body">Publish a signed logical profile or action snapshot. Do not expose credentials or internal instances.</p><code>enterprise-mcp-gateway</code></article>
+          <article><span>3</span><h3 data-i18n="start3Title">Bind and resolve</h3><p data-i18n="start3Body">Create an environment-specific binding. Resolve it into a short-lived Resource Plan at runtime.</p><code>POST /resource-plans:resolve</code></article>
+          <article><span>4</span><h3 data-i18n="start4Title">Run an exit drill</h3><p data-i18n="start4Body">Switch to an alternate provider and verify the same capability works with the same Agent contract.</p><code>provider A → provider B</code></article>
+        </div>
+      </section>
+
+      <section id="standards" class="standards section-shell" aria-labelledby="standards-title">
+        <div class="section-heading split"><div><p class="eyebrow"><span></span><span data-i18n="standardsTag">OPEN CONTRACTS</span></p><h2 id="standards-title" data-i18n="standardsTitle">Use each standard for its native job.</h2></div><p data-i18n="standardsBody">Interoperability improves when protocols are composed instead of being forced through a single private abstraction.</p></div>
+        <div class="standard-table" role="table" aria-label="Open standards mapping">
+          <div class="table-row table-head" role="row"><span role="columnheader" data-i18n="stdHeadStandard">Standard</span><span role="columnheader" data-i18n="stdHeadRole">Role in the fabric</span><span role="columnheader" data-i18n="stdHeadOwner">Operational owner</span></div>
+          <div class="table-row" role="row"><a href="https://modelcontextprotocol.io/" target="_blank" rel="noreferrer">MCP ↗</a><span data-i18n="stdMcpRole">Tools and data service connectivity</span><span data-i18n="stdMcpOwner">Tool &amp; Data Access Fabric</span></div>
+          <div class="table-row" role="row"><a href="https://github.com/a2aproject/A2A" target="_blank" rel="noreferrer">A2A ↗</a><span data-i18n="stdA2aRole">Agent-to-agent discovery and delegation</span><span data-i18n="stdA2aOwner">Agent Federation Fabric</span></div>
+          <div class="table-row" role="row"><a href="https://spec.openapis.org/oas/latest.html" target="_blank" rel="noreferrer">OpenAPI ↗</a><span data-i18n="stdApiRole">Synchronous contracts and enterprise adapters</span><span data-i18n="stdApiOwner">Control Plane &amp; domain teams</span></div>
+          <div class="table-row" role="row"><a href="https://cloudevents.io/" target="_blank" rel="noreferrer">CloudEvents ↗</a><span data-i18n="stdEventsRole">Configuration and lifecycle change notifications</span><span data-i18n="stdEventsOwner">All modules</span></div>
+          <div class="table-row" role="row"><a href="https://opentelemetry.io/" target="_blank" rel="noreferrer">OpenTelemetry ↗</a><span data-i18n="stdOtelRole">Trace context, metrics, logs, and evidence links</span><span data-i18n="stdOtelOwner">Operations &amp; Exit Assurance</span></div>
+          <div class="table-row" role="row"><a href="https://opencontainers.org/" target="_blank" rel="noreferrer">OCI ↗</a><span data-i18n="stdOciRole">Portable artifacts and deployment manifests</span><span data-i18n="stdOciOwner">Placement &amp; AI Factory</span></div>
+        </div>
+      </section>
+
+      <section class="governance section-shell" aria-labelledby="governance-title">
+        <div class="governance-panel"><div><p class="eyebrow"><span></span><span data-i18n="governanceTag">GOVERNANCE</span></p><h2 id="governance-title" data-i18n="governanceTitleLarge">Open protocols do not replace accountable control.</h2></div><ul>
+          <li data-i18n="gov1">Identity &amp; Trust makes authentication, authorization, delegation, and approval decisions.</li>
+          <li data-i18n="gov2">The Resource Router carries constraints; specialist gateways enforce decisions at execution time.</li>
+          <li data-i18n="gov3">The control plane stores metadata and evidence references, never prompts, tool parameters, credentials, or model responses.</li>
+          <li data-i18n="gov4">Every critical provider needs an owner, contract, lifecycle, and tested exit path.</li>
+        </ul></div>
+      </section>
+
+      <section id="contribute" class="contribute section-shell" aria-labelledby="contribute-title">
+        <div class="section-heading"><p class="eyebrow"><span></span><span data-i18n="contributeTag">CONTRIBUTE</span></p><h2 id="contribute-title" data-i18n="contributeTitle">Help make enterprise AI portable by design.</h2></div>
+        <div class="contribute-grid">
+          <article><h3 data-i18n="contrib1Title">Architecture</h3><p data-i18n="contrib1Body">Propose a boundary, ADR, threat model, or reference deployment that preserves domain authority.</p></article>
+          <article><h3 data-i18n="contrib2Title">Contracts</h3><p data-i18n="contrib2Body">Add capability schemas, provider snapshots, compatibility fixtures, or protocol conformance tests.</p></article>
+          <article><h3 data-i18n="contrib3Title">Adapters</h3><p data-i18n="contrib3Body">Build thin, replaceable adapters for MMR, MCP, A2A, Context, and AI Factory integrations.</p></article>
+        </div>
+        <div class="contribute-callout"><p data-i18n="contributeCallout">This reference is pre-release. Begin by reading the architecture, opening a scoped proposal, and validating the hardest integration with a proof of concept.</p><a class="button primary" href="https://github.com/davidchen516/saoaf/tree/main/docs" data-i18n="contributeButton">Start with the guide</a><a class="button secondary" href="https://github.com/davidchen516/saoaf/issues">GitHub Issues ↗</a></div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>SAOAF</span></div>
+      <p data-i18n="footer">Sovereign AI &amp; Open AI Fabric · Open reference architecture for enterprise AI.</p>
+      <a href="https://github.com/davidchen516/saoaf" target="_blank" rel="noreferrer">GitHub ↗</a>
+      <a href="#top" data-i18n="backTop">Back to top ↑</a>
+    </footer>
+    <script src="app.js"></script>
+  </body>
+</html>
