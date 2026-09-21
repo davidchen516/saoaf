@@ -19,6 +19,8 @@ The program is divided into eight bounded modules:
 | 03.7 Placement & Portability Fabric | Converts placement intent into portable deployment profiles |
 | 03.8 Sovereignty Operations & Exit Assurance | Links evidence, measures portability, and validates exit paths |
 
+Current delivery scope: 03.3 and 03.8 are implemented in this project, with the minimum 03.1/03.2 control-plane capabilities they require. 03.4 is an existing system and is integrated through its published contracts. 03.5, 03.6, and 03.7 are contract-only in this phase; their runtime implementations are deferred.
+
 The control plane carries metadata, constraints, plans, and evidence references. Prompts, tool parameters, model responses, and other business payloads travel directly through the specialist execution fabrics.
 
 AI Resource Router and Multi-Model Router are sibling modules. The Resource Router selects a logical provider and contract profile; the Multi-Model Router selects and invokes a concrete model endpoint.
@@ -39,6 +41,6 @@ The bilingual project homepage is published through GitHub Pages from [`gh-pages
 
 ## Project status / 项目状态
 
-The architecture is currently **proposed / pre-release**. The first implementation baseline should be approved after the Phase 0 inventory of the existing Multi-Model Router, capacity baseline, IAM model, and evidence-retention policy.
+The architecture is currently **proposed / pre-release**. This delivery implements AI Resource Router and Sovereignty Operations & Exit Assurance, integrates the existing Multi-Model Router, and freezes interfaces for MCP, A2A, and Placement without implementing those three execution fabrics.
 
 Please use [GitHub Issues](https://github.com/davidchen516/saoaf/issues) for scoped architecture proposals, contract questions, and implementation feedback.

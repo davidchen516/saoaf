@@ -276,6 +276,8 @@ MCP Registry 是协议目录，Capability Registry 是企业语义目录。一�
 
 ### 4.8 03.8 Sovereignty Operations & Exit Assurance
 
+**本期状态：实现。** 本模块与 03.3 同属本期生产交付范围，不再按接口占位处理。03.5、03.6、03.7 尚未建设时，通过其冻结契约、Mock evidence producer 和契约测试验证证据接入；03.4 使用已建成 MMR 的真实证据接口。
+
 **负责**
 
 - Sovereignty SLO、替代覆盖率、供应商集中度、协议兼容率；
@@ -291,6 +293,15 @@ MCP Registry 是协议目录，Capability Registry 是企业语义目录。一�
 - 对业务结果作评估。
 
 它消费 OTel、MMR、MCP、A2A、Placement、Identity 和 Learning Factory 的证据引用，形成主权视图。
+
+**本期最小可交付实现**
+
+- Evidence Index：保存证据引用、摘要、来源、时间、租户、策略与 Resource Plan 关联，不保存业务正文；
+- Sovereignty Metrics：替代覆盖率、供应商集中度、契约兼容率、证据完整率和出口包完整率；
+- Exit Pack Registry：登记导出清单、替代 Provider、恢复步骤、Owner、验证结果和有效期；
+- Drill Management：创建、审批、执行跟踪和关闭退出演练，保留不可抵赖结果引用；
+- Dashboard/API：提供主权风险、证据断链、过期 Exit Pack 和演练状态查询；
+- Event Consumer：消费 ARR、MMR 和未来 03.5/03.6/03.7 的标准事件，支持幂等、重放和隔离队列。
 
 ## 5. 控制面与数据面
 

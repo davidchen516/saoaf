@@ -21,12 +21,12 @@ related:
 
 ## 1. 开发目标
 
-2027 年完成一个可生产运行的主权控制面和三条开放互操作主链：
+2027 年本期完成可生产运行的主权控制面、模型主链和主权运营闭环：
 
 1. `Agent Harness → ARR → MMR`：模型能力可替换、可追溯；
-2. `Agent Harness → ARR → MCP Gateway → Enterprise Tool`：Tool 能力可发现、受控执行；
-3. `Agent Harness → ARR → A2A Gateway → Domain Agent`：Agent 能力可发现、受控委派；
-4. `Portable Profile → Placement Plan → Enterprise AI Factory`：至少一个工作负载完成跨区/跨平台迁移演练。
+2. `ARR/MMR → Evidence Index → Sovereignty Dashboard`：决策证据可关联、可度量、可审计；
+3. `Exit Pack → Drill → Finding/Remediation`：至少完成一次模型 Provider 替代或失效演练；
+4. MCP、A2A、Placement 本期冻结边界和接口契约，以 Mock/Stub 和契约测试验证，不建设运行时。
 
 不以模块数量作为完成标准，以关键 Capability 的替代能力、执行证据和真实退出演练作为验收标准。
 
@@ -36,11 +36,9 @@ related:
 
 | 团队 | 建议核心投入 | 责任 |
 |---|---:|---|
-| 03 Control Plane | 5–7 FTE | Policy、Registry、Hub、ARR、Ops |
-| Model Fabric / MMR | 3–5 FTE | 既有 MMR 演进、profile、证据 |
-| MCP Fabric | 4–6 FTE | Registry、Gateway、SDK、首批 adapters |
-| A2A Fabric | 3–5 FTE | Agent Registry、Gateway、SDK、信任域 |
-| Placement/Portability | 3–4 FTE | Profile、Resolver、AI Factory adapters |
+| 03 Control Plane | 6–8 FTE | Policy、Registry、Hub、ARR、Evidence Index、Exit Assurance |
+| Model Fabric / MMR | 兼职接口人 | 既有 MMR 的 profile、证据和联调，不重复建设 |
+| MCP/A2A/Placement | 兼职契约 Owner | 边界、Schema、Mock/Stub 和契约评审 |
 | Identity/Trust 联合小组 | 2–3 FTE（跨工程） | workload identity、delegation、PDP、审批 |
 | SRE/Quality/Security | 3–4 FTE（共享） | SLO、测试平台、供应链、演练 |
 
@@ -90,7 +88,7 @@ sovereign-control-plane/   # modular monolith initially
 └── migrations/
 ```
 
-MCP Gateway、A2A Gateway、MMR 和 Placement Controller 是独立部署单元。Control Plane 一期保持模块化单体，避免过早拆分。
+MMR 是已存在的独立部署单元。MCP Gateway、A2A Gateway 和 Placement Controller 本期不实现，只保留独立部署边界和适配契约。Control Plane 一期保持模块化单体，其中 03.8 的 Evidence Index、Metrics、Exit Pack 和 Drill Management 为真实实现模块。
 
 ## 4. 2026 Q4 准备阶段
 
@@ -108,8 +106,8 @@ MCP Gateway、A2A Gateway、MMR 和 Placement Controller 是独立部署单元�
 - 本文档三件套批准；
 - contract repository；
 - 10–20 个首批 Capability 清单；
-- 三个首批 Provider：MMR、一个只读 MCP Tool、一个内部 Domain Agent；
-- 一个迁移演练工作负载；
+- 首批真实 Provider 使用已建成 MMR；MCP Tool、Domain Agent 和 Placement 使用契约 Mock；
+- 一个模型 Provider 退出/失效演练场景；
 - Phase 0 PoC 计划。
 
 ## 5. 2027 路线图
@@ -135,49 +133,45 @@ MCP Gateway、A2A Gateway、MMR 和 Placement Controller 是独立部署单元�
 - Resource Plan、授权决定和模型子决定可关联；
 - Q1 Go/No-Go 清单全部通过。
 
-### Q2：MCP Tool & Data Access Fabric
+### Q2：03.8 Evidence Index 与外部织网契约冻结
 
-**目标**：完成企业 Tool 的开放接入和受控执行。
-
-**交付**
-
-1. MCP 规范基线和企业扩展 namespace；
-2. 企业 MCP Registry 投影和 MCP Gateway v1；
-3. workload identity/OAuth、Tool 风险、参数 Schema、幂等、approval ref；
-4. `preview/execute/status/cancel` 统一执行契约；
-5. ERP/MES/PLM 中至少 3 个只读、1 个低风险写 Tool adapter；
-6. ARR 启用 TOOL_PROVIDER；
-7. Tool execution evidence 和安全监控；
-8. Official MCP Registry/reference implementation 对照 PoC。
-
-**退出条件**
-
-- 同一 Capability 可在不修改 Agent 的情况下切换两个 Tool Provider；
-- 高风险/缺审批请求 fail closed；
-- Tool 参数和结果不进入 ARR/Registry；
-- MCP 标准兼容测试通过。
-
-### Q3：A2A Agent Federation 与 Placement
-
-**目标**：建立跨框架 Agent 委派和可移植放置路径。
+**目标**：形成可运行的证据关联底座，并冻结 MCP、A2A、Placement 的边界接口。
 
 **交付**
 
-1. Agent Registry/Agent Card 投影和 A2A Gateway v1；
-2. delegation chain、task status/cancel、artifact digest、跨信任域控制；
-3. ARR 启用 AGENT_PROVIDER；
-4. 两个内部 Domain Agent 通过 A2A 协作；外部 Agent 仅在安全评审后试点；
-5. PortableDeploymentProfile 和 ZoneProfile v1；
-6. Placement Resolver 与 AI Factory adapter；
-7. OCI/SBOM/signature 基线；
-8. 一个非关键工作负载完成 private ↔ cloud 或 central ↔ edge 迁移演练。
+1. Evidence Index v1：证据引用、摘要、来源、保留期和完整性状态；
+2. ARR/MMR 证据事件消费、幂等、重放和断链检测；
+3. Sovereignty Metrics v1 和查询 API；
+4. MCP/A2A/Placement OpenAPI、JSON Schema、CloudEvents 契约；
+5. 三类外部织网 Mock/Stub 与 Provider contract test kit；
+6. 契约兼容性矩阵和 N/N-1 门禁。
 
 **退出条件**
 
-- Agent 实现替换不改变上游 capability contract；
-- 子 Agent 权限不超过委派范围；
-- Placement Plan 与实际 deployment ID 可关联；
-- 迁移不依赖手工重写应用配置。
+- ARR 与 MMR 的关键决策证据可完整关联；
+- 证据缺失、重复、乱序和重放场景验证通过；
+- MCP/A2A/Placement 契约通过 Mock/Stub 和消费者驱动契约测试；
+- 未部署任何 03.5/03.6/03.7 生产运行时。
+
+### Q3：03.8 Exit Pack 与演练管理
+
+**目标**：把供应商退出从文档要求变为可执行、可审计的运营流程。
+
+**交付**
+
+1. Exit Pack Registry v1：清单、Owner、替代方案、恢复步骤、验证证据和有效期；
+2. Drill Management v1：计划、审批、执行、暂停、发现项和整改闭环；
+3. 供应商集中度与替代覆盖率计算；
+4. 过期 Exit Pack、证据断链和覆盖不足告警；
+5. 基于既有 MMR 完成模型 Provider 替代演练预演；
+6. MCP/A2A/Placement 仅补充 exit/evidence 接口契约与测试夹具。
+
+**退出条件**
+
+- Exit Pack 可导出、校验并追溯到 Owner 和有效证据；
+- 演练全过程有状态、有审批、有证据、有整改闭环；
+- 至少一个 MMR Provider 替代场景通过预演；
+- 外部织网未实现时不会被错误标记为生产可用。
 
 ### Q4：规模化、退出保证与生产治理
 
@@ -188,14 +182,14 @@ MCP Gateway、A2A Gateway、MMR 和 Placement Controller 是独立部署单元�
 1. Sovereignty dashboard：替代覆盖率、供应商集中度、协议兼容、Snapshot、出口完整性；
 2. 关键 Capability 分级和替代 Provider 覆盖；
 3. Vendor Exit Pack 自动检查；
-4. 模型供应商退出/失效演练、MCP Provider 迁移、A2A Agent 替换；
+4. 模型供应商退出/失效实战演练；MCP Provider、A2A Agent 和 Placement 仅执行基于契约的桌面演练；
 5. DR、Provider suspend、协议版本升级和凭证轮转演练；
 6. 性能、容量、成本和安全收敛；
 7. 2028 多区域/外部生态扩展决策。
 
 **退出条件**
 
-- 至少一个关键模型 Provider 和一个 Tool Provider 完成实际替代演练；
+- 至少一个关键模型 Provider 完成实际替代演练；
 - 关键 Capability 替代覆盖率达到批准目标；
 - 生产 SLO、RTO/RPO 和安全评审通过；
 - 所有关键 Vendor Exit Pack 可读取、可验证、可执行。
@@ -208,10 +202,10 @@ MCP Gateway、A2A Gateway、MMR 和 Placement Controller 是独立部署单元�
 | E03-02 Capability Registry | 03.2 | E03-01、领域 Owner | 版本/Owner/Binding/退役闭环 |
 | E03-03 Resource Resolver | 03.3 | E03-02、04 PDP | 确定性 Plan、P99、审计 |
 | E03-04 MMR Integration | 03.4 | 既有 MMR | logical profile 与子决定关联 |
-| E03-05 MCP Fabric | 03.5 | 04 identity、领域 API | 受控 Tool 执行与 provider 替换 |
-| E03-06 A2A Fabric | 03.6 | 01 Agent Runtime、04 delegation | 跨 Agent 委派与撤销 |
-| E03-07 Portability | 03.7 | AI Factory、制品库 | Placement Plan 和迁移演练 |
-| E03-08 Sovereignty Ops | 03.8 | 所有专业域 evidence | 指标、exit pack、演练闭环 |
+| E03-05 MCP Contracts | 03.5 | 04 identity、领域 API | 接口、Schema、Mock 与契约测试；暂缓运行时 |
+| E03-06 A2A Contracts | 03.6 | 01 Agent Runtime、04 delegation | 接口、Schema、Mock 与契约测试；暂缓运行时 |
+| E03-07 Placement Contracts | 03.7 | AI Factory、制品库 | 接口、Schema、Mock 与契约测试；暂缓运行时 |
+| E03-08 Sovereignty Ops | 03.8 | ARR/MMR evidence；其他域契约 | 本期实现指标、Evidence Index、Exit Pack 和演练闭环 |
 | E03-09 Resource Hub | 03.2 | Registry、企业门户 | 搜索/申请/Owner/影响分析 |
 | E03-10 Contract & Conformance | 横向 | contract repo | MCP/A2A/API/事件 N-1 门禁 |
 

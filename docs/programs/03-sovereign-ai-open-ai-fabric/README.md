@@ -28,13 +28,13 @@ classification: internal
 
 工程内一级模块：
 
-| 编号 | 模块 | 主要主权 |
-|---|---|---|
-| 03.1 | Sovereignty Governance & Policy Plane | Operation、Data、Context、Learning |
-| 03.2 | Capability Registry & AI Resource Hub | Operation、Agent、Context |
-| 03.3 | AI Resource Router | 跨域资源选择权 |
-| 03.4 | Model Fabric / Multi-Model Router | Model |
-| 03.5 | Tool & Data Access Fabric / MCP | Data、Tool、Context 接入 |
-| 03.6 | Agent Federation Fabric / A2A | Agent |
-| 03.7 | Placement & Portability Fabric | Compute、Cloud/Private/Edge |
-| 03.8 | Sovereignty Operations & Exit Assurance | Operation、Learning、供应商退出 |
+| 编号 | 模块 | 主要主权 | 本期状态 |
+|---|---|---|---|
+| 03.1 | Sovereignty Governance & Policy Plane | Operation、Data、Context、Learning | 实现 03.3/03.8 所需最小能力 |
+| 03.2 | Capability Registry & AI Resource Hub | Operation、Agent、Context | 实现 03.3/03.8 所需最小能力 |
+| 03.3 | AI Resource Router | 跨域资源选择权 | 本期实现 |
+| 03.4 | Model Fabric / Multi-Model Router | Model | 已实现，本期集成 |
+| 03.5 | Tool & Data Access Fabric / MCP | Data、Tool、Context 接入 | 仅定义接口，暂缓实现 |
+| 03.6 | Agent Federation Fabric / A2A | Agent | 仅定义接口，暂缓实现 |
+| 03.7 | Placement & Portability Fabric | Compute、Cloud/Private/Edge | 仅定义接口，暂缓实现 |
+| 03.8 | Sovereignty Operations & Exit Assurance | Operation、Learning、供应商退出 | 本期实现 |
