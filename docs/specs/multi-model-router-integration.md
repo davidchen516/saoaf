@@ -31,6 +31,23 @@ Capability requirement
   -> Harness/Telemetry: correlate resource_plan_id + model_route_decision_id
 ```
 
+### 1.1 MMR 实现基线
+
+已建成 MMR 主要基于 [vLLM Semantic Router](https://github.com/vllm-project/semantic-router) 构建。该项目采用 Apache-2.0，定位为异构模型推理前的可编程 Mixture-of-Models 决策层。其官方拓扑由 Envoy 承载数据面流量，通过 ExtProc 调用 Semantic Router；后端 vLLM 或其他 OpenAI-compatible Provider 负责实际推理。Semantic Router 不加载模型权重，也不替代企业 API Gateway、模型 Serving、GPU 调度或容量管理。
+
+SAOAF 与 vLLM Semantic Router 对象的映射如下：
+
+| SAOAF / MMR 对象 | vLLM Semantic Router 对象 | 集成规则 |
+|---|---|---|
+| MMR logical profile | stable Entrypoint + Recipe | ARR 只看稳定 profile ID 和契约摘要 |
+| 任务/风险/模态/复杂度信号 | Signal / Projection | MMR 内部持有，不复制到 ARR |
+| 硬约束与路由策略 | Decision | MMR 执行；主权和授权约束仍来自 03.1/04 |
+| 单模型、级联或受控多模型路径 | Algorithm + Plugins | MMR 负责执行和证据，ARR 不编排 |
+| 具体模型或供应商 endpoint | Provider model | MMR 权威，禁止进入 ARR Snapshot |
+| `model_route_decision_id` | 企业证据扩展 | 必须由 MMR 生成并跨响应/事件保持唯一 |
+
+上游版本必须按不可变 tag/digest 锁定。当前架构评审以 v0.3.0 能力和官方文档为参考；生产采用版本、企业 fork 差异、Canonical YAML/Recipe 管理、升级和回滚路径仍由 MMR Phase 0 盘点确认。SAOAF 不 fork 或内嵌 Semantic Router，仅维护面向 MMR 稳定契约的薄 adapter。
+
 ## 2. 权威边界
 
 | 对象/决策 | ARR | MMR |
@@ -182,11 +199,13 @@ MMR CI 在每次 profile/API 变更时运行：
 3. Snapshot 乱序、重复、篡改、过期均按规则处理；
 4. profile 被 RETIRED 后不产生新 Plan；
 5. ARR 不保存被注入的模型名、权重、密钥等禁止字段；
-6. MMR 故障不会拖垮 Resolve 线程池，因为运行调用不经过 ARR。
+6. Semantic Router 内部 entrypoint/recipe 的候选模型、级联和 plugin 变化不改变 ARR Resource Plan；
+7. 生产 Harness 只使用批准的 virtual entrypoint；未批准的物理模型直选被拒绝或隔离在管理/诊断路径；
+8. MMR 故障不会拖垮 Resolve 线程池，因为运行调用不经过 ARR。
 
 ## 8. 上线切换
 
-1. 盘点 MMR 当前 API、profile/别名、鉴权、错误码、trace 和发布流程。
+1. 盘点 MMR 当前 vLLM Semantic Router 版本、fork 差异、Envoy/ExtProc 拓扑、entrypoint/recipe、API、鉴权、错误码、trace 和发布流程。
 2. 在 MMR 外围增加 `ProfileSnapshotPublisher` 薄适配器，不改核心路由算法。
 3. 先把现有稳定模型入口映射为 1–3 个逻辑 profile，避免复制整个模型目录。
 4. ARR 以 shadow 模式解析；Harness 比较 ARR profile 与旧静态配置。
@@ -196,8 +215,9 @@ MMR CI 在每次 profile/API 变更时运行：
 
 ## 9. Phase 0 必答问题
 
-- [ ] MMR 的语言、框架、部署单元和版本策略是什么？
-- [ ] 当前逻辑 profile 是否已存在，还是只有具体模型别名？
+- [ ] 当前 vLLM Semantic Router 的版本/tag/digest、企业 fork 和上游差异是什么？
+- [ ] MMR 的 Envoy/ExtProc、控制面、模型 backend 和企业 Gateway 部署边界是什么？
+- [ ] 当前逻辑 profile 如何映射到 Entrypoint/Recipe，是否仍存在业务方直配物理模型的路径？
 - [ ] MMR API 使用 HTTP、gRPC 还是兼有？流式协议是什么？
 - [ ] workload identity、租户和授权上下文如何传递？
 - [ ] 当前 error taxonomy 和 retry contract 是什么？
@@ -207,3 +227,10 @@ MMR CI 在每次 profile/API 变更时运行：
 - [ ] MMR 的 SLO、容量、灾备和发布窗口是什么？
 
 这些答案缺失不妨碍 4A 评审，但不允许进入实现承诺和最终技术栈冻结。
+
+## 10. 官方实现参考
+
+- [vLLM Semantic Router repository](https://github.com/vllm-project/semantic-router)
+- [Introduction: stable API and Mixture-of-Models](https://github.com/vllm-project/semantic-router/blob/main/website/docs/intro.md)
+- [System Overview: Envoy, Router, Recipes and Provider Models](https://github.com/vllm-project/semantic-router/blob/main/website/docs/overview/semantic-router-overview.md)
+- [vLLM Semantic Router releases](https://github.com/vllm-project/semantic-router/releases)

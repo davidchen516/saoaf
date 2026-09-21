@@ -122,7 +122,7 @@ MMR 是已存在的独立部署单元。MCP Gateway、A2A Gateway 和 Placement 
 2. Capability Registry v1：Capability、Provider、Binding、Snapshot、生命周期。
 3. AI Resource Hub 最小只读/管理界面；可先使用内部管理 UI，Backstage 仅在已有时投影。
 4. ARR v1：MODEL/CONTEXT/TOOL 三类计划模型，首期实际启用 MODEL。
-5. MMR Logical Profile Publisher、`resource_plan_id/model_route_decision_id` 关联。
+5. 基于既有 vLLM Semantic Router MMR 的 Logical Profile Publisher、Entrypoint/Recipe 映射和 `resource_plan_id/model_route_decision_id` 关联。
 6. Decision/Evidence Index v1、OTel 属性规范。
 7. OpenAPI/JSON Schema/CloudEvents 和 N-1 契约门禁。
 
@@ -201,7 +201,7 @@ MMR 是已存在的独立部署单元。MCP Gateway、A2A Gateway 和 Placement 
 | E03-01 Sovereignty Domain Model | 03.1 | 法务/数据/安全规则 | 七类主权可结构化表达 |
 | E03-02 Capability Registry | 03.2 | E03-01、领域 Owner | 版本/Owner/Binding/退役闭环 |
 | E03-03 Resource Resolver | 03.3 | E03-02、04 PDP | 确定性 Plan、P99、审计 |
-| E03-04 MMR Integration | 03.4 | 既有 MMR | logical profile 与子决定关联 |
+| E03-04 MMR Integration | 03.4 | 既有 vLLM Semantic Router MMR | logical profile 到 Entrypoint/Recipe 的稳定映射与子决定关联；不复制物理模型目录 |
 | E03-05 MCP Contracts | 03.5 | 04 identity、领域 API | 接口、Schema、Mock 与契约测试；暂缓运行时 |
 | E03-06 A2A Contracts | 03.6 | 01 Agent Runtime、04 delegation | 接口、Schema、Mock 与契约测试；暂缓运行时 |
 | E03-07 Placement Contracts | 03.7 | AI Factory、制品库 | 接口、Schema、Mock 与契约测试；暂缓运行时 |

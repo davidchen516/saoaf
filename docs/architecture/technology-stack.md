@@ -33,6 +33,7 @@ classification: internal
 | 缓存 | 进程内不可变 Published Snapshot | Resolve 热路径不逐次访问数据库；不在一期引入分布式缓存 |
 | 可观测 | OpenTelemetry SDK + Collector | 复用企业观测后端，统一关联 `trace_id/resource_plan_id/model_route_decision_id` |
 | 身份 | 企业 OIDC/OAuth 2.1 + workload mTLS | 复用 04 Identity & Trust；Keycloak 仅作为开源参考环境 |
+| MMR 决策核心 | **vLLM Semantic Router** | 既有 MMR 的主要开源实现；SAOAF 只集成稳定 logical profile 和 decision evidence，不部署第二套模型路由 |
 | 管理前端 | TypeScript + React 19 + Ant Design 6/ProComponents | Resource Hub、Evidence、Exit Pack、Drill 和风险视图 |
 | 接口 Mock/测试 | Microcks + Testcontainers + Schemathesis | 03.5/03.6/03.7 只生成 Mock、Stub 与契约测试，不建设运行时 |
 | 部署 | OCI Image + Kubernetes/Helm | 复用 MMR/企业平台；数据库已有托管能力优先，否则评估 CloudNativePG |
@@ -47,7 +48,7 @@ classification: internal
 | 03.1 Governance & Policy | 最小实现 | Policy Set、约束 Schema、版本和决定引用；不自建 IAM/PDP |
 | 03.2 Registry & Resource Hub | 最小实现 | 自有权威数据模型与管理 UI；Backstage/xRegistry 只作可替换投影或实验适配 |
 | 03.3 AI Resource Router | 完整实现 | Go 领域模块、不可变 Snapshot、确定性 Resolver、Runtime/Admin API |
-| 03.4 Multi-Model Router | 已实现 | 只开发 `MMRAdapter`、Snapshot Publisher/Consumer 和父子决策关联 |
+| 03.4 Multi-Model Router | 已实现 | MMR 主要复用 vLLM Semantic Router；本项目只开发 `MMRAdapter`、Snapshot Publisher/Consumer 和父子决策关联 |
 | 03.5 MCP Fabric | 不实现运行时 | OpenAPI/JSON Schema/CloudEvents、Microcks Mock、契约测试 |
 | 03.6 A2A Fabric | 不实现运行时 | Agent Card/Task/Event 契约、Microcks Mock、契约测试 |
 | 03.7 Placement Fabric | 不实现运行时 | Placement/Profile/Plan 契约、Mock、契约测试 |
@@ -262,6 +263,7 @@ Microcks 当前支持 OpenAPI、AsyncAPI、gRPC 等 Mock 和一致性测试，�
 | oapi-codegen | OpenAPI Go 生成 | Apache-2.0 | 固定版本、生成边界类型 | 3.1 PoC 不通过则评估 ogen/手写边界 |
 | CEL-Go | 类型化约束表达 | Apache-2.0 | 注册受控变量/函数，不 fork | 规则无需配置则退回纯 Go；复杂 PDP 交给 04/OPA |
 | OpenTelemetry | Telemetry/OTLP | Apache-2.0 | 只增加 SAOAF semantic attributes | 企业标准变更但保留 OTel export |
+| vLLM Semantic Router | MMR 的 Mixture-of-Models 决策层 | Apache-2.0 | 由既有 MMR 锁定上游版本并维护企业薄 adapter；SAOAF 不 fork | MMR 项目证明上游安全、性能、协议或运维不再满足要求，并完成替代 PoC |
 | Microcks | Mock/Conformance | Apache-2.0 | 加载本项目契约和示例，不 fork | 协议覆盖不足或运维成本过高 |
 | React/Ant Design | 管理 UI | MIT | 自有页面和领域组件 | 企业门户标准变化 |
 
@@ -290,6 +292,8 @@ Microcks 当前支持 OpenAPI、AsyncAPI、gRPC 等 Mock 和一致性测试，�
 | Camunda 8 | 不采用 | 授权与宽松开源优先目标不一致，且一期不需要通用 BPM 引擎 |
 | 自研消息队列/规则引擎/工作流引擎 | 不采用 | 使用现有组件或最小领域状态机，避免创建基础设施产品 |
 | Backstage/xRegistry 作为权威 Registry | 不采用 | 无法直接表达并强制本项目的 Binding、发布和审计不变量 |
+
+`Envoy AI Gateway` 产品不由 SAOAF 新增；这不限制既有 MMR 按 vLLM Semantic Router 官方架构使用 Envoy ExtProc 承载其数据面。
 
 ## 11. 建议仓库结构
 
@@ -365,9 +369,18 @@ saoaf/
 - **决策**：一期不引入 Temporal/Camunda；数据库状态机 + Outbox 满足当前演练流程。
 - **退出条件**：满足第 5.4 节任一 durable workflow 门槛后重新评估 Temporal。
 
+### ADR-TECH-005：MMR 主要复用 vLLM Semantic Router
+
+- **状态**：Accepted as external baseline；具体生产版本待 MMR Phase 0 盘点。
+- **决策**：MMR 使用 vLLM Semantic Router 作为 entrypoint/recipe、signal/decision 和模型路径选择的主要开源核心；企业差异通过薄 adapter、配置和标准扩展实现。SAOAF 不内嵌、不 fork、不复制该路由能力。
+- **原因**：该项目已提供稳定虚拟入口、显式策略、单模型/级联/受控多模型路径、OpenAI/Anthropic 兼容入口和可观测评估能力，符合 MMR 边界。
+- **许可证**：Apache-2.0。
+- **限制**：它不替代企业 Gateway、模型 Serving、GPU 调度、IAM/PDP 或 SAOAF 的跨域 Capability/Resource Plan。
+- **退出条件**：上游安全、性能、协议或运维经 PoC 无法满足要求，或 MMR 已验证的替代实现能保持相同 logical profile 与 decision evidence 契约。
+
 ## 14. 实现前待确认项
 
-1. MMR 的主语言、框架、API/流式协议、认证、服务发现、OTel 和 CI/CD 基线；
+1. MMR 当前 vLLM Semantic Router 版本/tag/digest、fork 差异、Envoy/ExtProc 拓扑、entrypoint/recipe、API/流式协议、认证、服务发现、OTel 和 CI/CD 基线；
 2. 企业现有消息平台是 Kafka、NATS、Pulsar 还是无统一平台；
 3. 企业 PostgreSQL 当前支持版本、HA、备份和 K8s 运维方式；
 4. 04 Identity & Trust 的 OIDC issuer、scope、workload identity 和 PDP 接口；
@@ -388,4 +401,5 @@ saoaf/
 - [Temporal](https://github.com/temporalio/temporal)
 - [CloudNativePG](https://github.com/cloudnative-pg/cloudnative-pg)
 - [Ant Design Pro](https://github.com/ant-design/ant-design-pro)
-
+- [vLLM Semantic Router](https://github.com/vllm-project/semantic-router)
+- [vLLM Semantic Router system overview](https://github.com/vllm-project/semantic-router/blob/main/website/docs/overview/semantic-router-overview.md)

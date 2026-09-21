@@ -206,6 +206,8 @@ ARR 是 03 工程子项目。它与 MMR、MCP Fabric、A2A Fabric、Placement Fa
 
 ### 4.4 03.4 Model Fabric / Multi-Model Router
 
+**实现基线**：已建成 MMR 主要基于 [vLLM Semantic Router](https://github.com/vllm-project/semantic-router)（Apache-2.0）实现。该开源项目作为 Mixture-of-Models 决策层，通过稳定 entrypoint、recipe、signal、decision 和 algorithm 选择或组合模型路径；Envoy 承载请求转发，vLLM 或其他 OpenAI-compatible backend 承担实际推理。企业 MMR 在其外围补充身份、配额、成本、供应商 adapter、证据 ID、发布和运维能力。
+
 **负责**
 
 - 统一模型 API 和逻辑 model profile；
@@ -219,7 +221,7 @@ ARR 是 03 工程子项目。它与 MMR、MCP Fabric、A2A Fabric、Placement Fa
 - GPU/NPU 实际调度和模型部署；
 - 业务任务规划。
 
-已建成的 Multi-Model Router 保持模型域唯一权威。ARR 只消费逻辑 profile Snapshot。
+已建成的 Multi-Model Router 保持模型域唯一权威。ARR 只消费逻辑 profile Snapshot；逻辑 profile 可映射到 Semantic Router 的稳定 entrypoint/recipe，但 ARR 不读取 canonical YAML、signal、decision、candidate model、plugin 或物理 backend。
 
 ### 4.5 03.5 Tool & Data Access Fabric / MCP
 
@@ -489,12 +491,16 @@ ARR 选择专业 Provider；MMR 选择具体模型。二者可以共享工程基
 
 企业扩展必须命名空间化、有 Schema、有版本、有标准回归计划；任何 Provider 在移除企业扩展后仍应保持核心 MCP/A2A/OCI 互操作。
 
+### ADR-03-007：MMR 复用 vLLM Semantic Router，ARR 不复制模型决策层
+
+MMR 使用 vLLM Semantic Router 作为主要开源决策核心，并通过薄 adapter 增加企业身份、治理和证据能力。ARR 只选择 MMR 的逻辑 profile 并保存父级 Resource Plan；entrypoint/recipe 到物理模型、级联、验证和回退仍由 MMR 持有。上游版本必须锁定，fork 差异应保持最小并有回归、升级和退出计划。
+
 ## 13. 未决项
 
 | ID | 问题 | Owner | 关闭时间 |
 |---|---|---|---|
 | 03-TODO-01 | 八大战略工程正式编号、Owner 和治理委员会 | CTO/CIO | 2027 立项前 |
-| 03-TODO-02 | MMR 技术栈、逻辑 profile 和 API 现状 | MMR负责人 | Phase 0 第 1 周 |
+| 03-TODO-02 | MMR 当前 vLLM Semantic Router 版本、fork 差异、entrypoint/recipe、API、鉴权、decision ID、事件和 OTel 现状 | MMR负责人 | Phase 0 第 1 周 |
 | 03-TODO-03 | 企业现有 MCP Registry/Gateway 和 API Gateway 能力 | 集成平台负责人 | Phase 0 |
 | 03-TODO-04 | A2A 首批跨 Agent 场景和信任域 | Agentic/Identity负责人 | Q1 |
 | 03-TODO-05 | AI Factory 的多云/边缘编排现状 | 基础设施负责人 | Q1 |
@@ -512,3 +518,4 @@ ARR 选择专业 Provider；MMR 选择具体模型。二者可以共享工程基
 - [Crossplane documentation](https://docs.crossplane.io/latest/)
 - [Karmada documentation](https://karmada.io/docs/)
 - [OpenCost specification](https://opencost.io/docs/specification/)
+- [vLLM Semantic Router](https://github.com/vllm-project/semantic-router)
