@@ -1,6 +1,6 @@
 ---
 title: 03 Sovereign AI & Open AI Fabric — AI Resource Router 子项目 4A 架构
-version: 1.1.0
+version: 1.2.0
 status: proposed
 owner: TODO-AI平台负责人
 reviewers:
@@ -14,6 +14,7 @@ classification: internal
 related:
   - ../programs/03-sovereign-ai-open-ai-fabric/architecture.md
   - ../programs/03-sovereign-ai-open-ai-fabric/module-contracts.md
+  - ./technology-stack.md
   - ./ai-resource-router.md
   - ../specs/resource-resolver-api.md
   - ../specs/resource-resolver-events-and-data.md
@@ -477,7 +478,7 @@ ARR 无状态运行 3 个副本，跨故障域分布；Readiness 必须验证数
 | 数据库迁移 | MMR 已采用的 Flyway/Liquibase 等 | Schema migration | 依实际组件 | 不并存两套迁移工具 |
 | 测试环境 | Testcontainers | PostgreSQL/契约集成测试 | MIT | CI 能运行容器时采用 |
 
-服务语言、Web 框架、迁移工具、认证 SDK 必须与 MMR 对齐；当前仓库没有 MMR 实现资料，因此在 Phase 0 前保持为 `TODO-MMR技术栈`，不得另起技术栈。
+技术栈基线见 [03 工程技术栈设计](./technology-stack.md)：默认使用 Go 1.27.x；若 Phase 0 证明 MMR 已有可复用的 Java/Spring Boot 公共 SDK 和企业生产基线，则按 ADR 覆盖规则切换为 Java 25 LTS + Spring Boot 4.1.x。无论使用哪种语言，鉴权、服务发现、错误模型、OTel 和 CI/CD 必须与 MMR 对齐，不能长期维护两套工程体系。
 
 ### 7.3 可选或实验组件
 
@@ -487,7 +488,7 @@ ARR 无状态运行 3 个副本，跨故障域分布；Readiness 必须验证数
 | xRegistry spec/server | Registry 互操作模型与工具验证 | 实验 PoC | 当前规范为 1.0 RC；须验证扩展模型、版本兼容、性能和升级路径 |
 | OPA | 外部授权/发布准入策略 | 可选，由 IAM 项目持有 | 企业没有统一 PDP 且策略复杂度已超过代码规则；ARR 只消费决定 |
 | Kafka/Pulsar | 跨团队事件分发 | 可选复用 | 已有平台或消费者/重放/吞吐达到明确阈值 |
-| Redis | 分布式缓存 | 二期候选 | 单进程缓存无法满足跨实例失效或数据库保护目标，经压测证明需要 |
+| Valkey | 分布式缓存 | 二期候选 | 单进程缓存无法满足跨实例失效或数据库保护目标，经压测证明需要 |
 
 ### 7.4 保持自研的领域能力
 

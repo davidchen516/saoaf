@@ -1,6 +1,6 @@
 ---
 title: 03 Sovereign AI & Open AI Fabric 工程索引
-version: 1.0.0
+version: 1.1.0
 status: proposed
 owner: TODO-03工程负责人
 reviewers:
@@ -22,9 +22,10 @@ classification: internal
 1. [总体架构与模块边界](./architecture.md)
 2. [模块交互与契约设计](./module-contracts.md)
 3. [2027 开发实施计划](./development-plan.md)
-4. [AI Resource Router 子项目架构](../../architecture/ai-routing-platform-4a.md)
-5. [AI Resource Router 与 Multi-Model Router 集成](../../specs/multi-model-router-integration.md)
-6. [架构一致性审计](./architecture-audit.md)
+4. [技术栈设计](../../architecture/technology-stack.md)
+5. [AI Resource Router 子项目架构](../../architecture/ai-routing-platform-4a.md)
+6. [AI Resource Router 与 Multi-Model Router 集成](../../specs/multi-model-router-integration.md)
+7. [架构一致性审计](./architecture-audit.md)
 
 工程内一级模块：
 

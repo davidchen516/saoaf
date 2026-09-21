@@ -1,6 +1,6 @@
 ---
 title: 制造企业 AI Resource Router 边界与资源能力设计
-version: "0.8.0"
+version: "0.9.0"
 status: draft
 created: 2026-09-16
 updated: 2026-09-21
@@ -10,6 +10,7 @@ related:
   - ../programs/03-sovereign-ai-open-ai-fabric/architecture.md
   - ../programs/03-sovereign-ai-open-ai-fabric/module-contracts.md
   - ./ai-routing-platform-4a.md
+  - ./technology-stack.md
   - ../specs/resource-resolver-api.md
   - ../specs/resource-resolver-events-and-data.md
   - ../specs/multi-model-router-integration.md
@@ -462,7 +463,7 @@ Router 的返回值中不得出现具体模型 ID、模型供应商、模型回�
 | 服务实现 | 与 Multi-Model Router 相同的主语言和 Web/RPC 框架 | 若 MMR 是 Java 则 Spring Boot；若是 Go 则沿用 Go 服务框架；若是 Python 则沿用 FastAPI/现有框架 |
 | 接口 | REST + OpenAPI 3.1；内部已有统一 gRPC 时可补充 gRPC | 请求量不需要为了性能先上复杂协议 |
 | 主数据库 | PostgreSQL | 保存 Capability、Provider、Binding、Snapshot 和 Decision Record |
-| 缓存 | 首期进程内版本化快照；有压测证据后再引入 Redis | 避免无依据增加基础组件 |
+| 缓存 | 首期进程内版本化快照；有压测证据后再引入 Valkey | 避免无依据增加基础组件并保持宽松开源许可证 |
 | 事件 | 复用企业现有 Kafka/Pulsar；首期可选 | 只用于快照变化和审计事件，不参与同步解析主路径 |
 | 配置/服务发现 | 复用 MMR 和企业现有配置中心/Kubernetes Service | `endpoint_ref` 只保存逻辑引用 |
 | 身份与授权 | 调用既有 IAM、Agent Identity、Authorization Gateway | 本项目不内置 Keycloak、OPA、OpenFGA 或 SPIRE |

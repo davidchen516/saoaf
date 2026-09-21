@@ -1,6 +1,6 @@
 ---
 title: AI Resource Router 子项目架构一致性审计报告
-version: 1.1.0
+version: 1.2.0
 status: reviewed
 owner: AI 架构交付
 created: 2026-09-21
@@ -11,6 +11,7 @@ scope:
   - ../programs/03-sovereign-ai-open-ai-fabric/module-contracts.md
   - ./ai-routing-platform-4a.md
   - ./ai-resource-router.md
+  - ./technology-stack.md
   - ../specs/resource-resolver-api.md
   - ../specs/resource-resolver-events-and-data.md
   - ../specs/multi-model-router-integration.md
@@ -37,7 +38,7 @@ scope:
 | API/数据字段 | 通过 | Plan、Binding、Snapshot、Decision ID 和 revision 语义一致 |
 | 事件与事务 | 通过 | CloudEvents + Transactional Outbox；至少一次、消费者幂等 |
 | 安全边界 | 通过 | 身份/授权权威在 IAM，ARR 只消费声明和决定引用 |
-| 技术栈边界 | 通过 | 首选复用 MMR 工程栈；未在信息缺失时擅自确定新语言/框架 |
+| 技术栈边界 | 通过 | 默认 Go 1.27.x；MMR/企业 Java 基线满足覆盖规则时切换 Java 25 + Spring Boot 4.1，禁止长期双栈 |
 | 开源优先 | 通过 | 主路径、可选、自研和否决组件已分组，并含许可证/退出条件 |
 | 实施可执行性 | 通过 | 有 PoC、WBS、测试、CI/CD、Go/No-Go、Runbook 和验收场景 |
 
@@ -57,8 +58,8 @@ scope:
 
 | 类别 | 结论 | 审计意见 |
 |---|---|---|
-| 主路径 | PostgreSQL、OpenAPI/JSON Schema、CloudEvents、OpenTelemetry；运行平台复用 MMR | 成熟、可替换，未侵入领域权威边界 |
-| 可选 | Backstage、OPA、Kafka/Pulsar、Redis | 均设置业务/规模准入条件，不作 Day-1 依赖 |
+| 主路径 | Go、PostgreSQL、pgx/sqlc、OpenAPI/JSON Schema、CloudEvents、CEL-Go、OpenTelemetry；运行平台复用 MMR | 成熟、可替换，未侵入领域权威边界 |
+| 可选 | Backstage、OPA、Kafka/NATS、Valkey、Temporal、CloudNativePG | 均设置业务/规模准入条件，不作无依据的 Day-1 依赖 |
 | 实验 | xRegistry | 规范和实现仍需稳定性/兼容 PoC，当前不承载生产 SoT |
 | 自研 | Binding、Resolver、Plan、Snapshot adapters | 属于项目特有且代码面小，已通过端口隔离 |
 | 否决 | 新模型网关、Consul Runtime Registry、工作流/规则引擎、搜索/图/向量库 | 有明确边界、许可证、复杂度或能力不匹配理由 |
@@ -67,7 +68,7 @@ scope:
 
 | ID | 阻塞的决定 | 所需证据 |
 |---|---|---|
-| A-01 | 最终服务语言、框架、迁移工具和 SDK | MMR 代码库与流水线盘点 |
+| A-01 | 确认采用 Go 主路径或触发 Java 覆盖规则 | MMR 代码库、公共 SDK、团队能力与流水线盘点 |
 | A-02 | MMR profile/Snapshot 具体 Schema | MMR 现有别名、版本和变更流程 |
 | A-03 | 生产容量与缓存参数 | QPS、对象规模、工厂/区域数量、压测 |
 | A-04 | 保留期和灾备等级 | 合规政策、业务 RTO/RPO 签字 |
@@ -78,5 +79,5 @@ scope:
 
 1. 先评审“边界与权威”，再讨论技术组件；边界未通过时不得进入框架选型。
 2. Phase 0 必须用 MMR 真实接口完成最难链路 PoC，不能只用 Mock 得出结论。
-3. xRegistry、OPA、Kafka、Redis 均按门槛后置；未达门槛不进入生产依赖清单。
+3. xRegistry、OPA、Kafka/NATS、Valkey、Temporal 均按门槛采用；未达门槛不进入生产依赖清单。
 4. 架构批准后，把 OpenAPI、JSON Schema、数据库 migration 和联合契约测试纳入同一版本库并设置 breaking-change 门禁。

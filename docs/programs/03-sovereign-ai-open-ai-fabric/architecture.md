@@ -1,6 +1,6 @@
 ---
 title: 03 Sovereign AI & Open AI Fabric 总体架构与模块边界
-version: 1.0.0
+version: 1.1.0
 status: proposed
 owner: TODO-03工程负责人
 reviewers:
@@ -16,6 +16,7 @@ source_context: 27年技术架构战略规划会话
 related:
   - ./module-contracts.md
   - ./development-plan.md
+  - ../../architecture/technology-stack.md
   - ../../architecture/ai-routing-platform-4a.md
 ---
 
@@ -400,6 +401,8 @@ erDiagram
 MCP 官方 Registry 可作为协议目录 Schema 和实现参考；A2A 官方 SDK 可作为协议 adapter。两者都不能代替企业 Capability Registry、IAM 或领域审批。
 
 ## 10. 开源选型
+
+完整的语言、框架、数据、事件、前端、测试、部署与供应链选型见 [03 工程技术栈设计](../../architecture/technology-stack.md)。该文档定义本期实现基线、PoC 门禁和替换条件；本节保留工程级边界摘要。
 
 ### 10.1 主路径
 

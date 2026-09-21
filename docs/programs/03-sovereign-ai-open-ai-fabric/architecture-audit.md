@@ -1,6 +1,6 @@
 ---
 title: 03 Sovereign AI & Open AI Fabric 架构一致性审计
-version: 1.0.0
+version: 1.1.0
 status: reviewed
 owner: AI 架构交付
 created: 2026-09-21
@@ -12,6 +12,7 @@ scope:
   - ./development-plan.md
   - ../../architecture/ai-routing-platform-4a.md
   - ../../architecture/ai-resource-router.md
+  - ../../architecture/technology-stack.md
 ---
 
 # 03 Sovereign AI & Open AI Fabric 架构一致性审计
@@ -34,6 +35,7 @@ scope:
 | AI Factory 边界 | 通过 | 03 产生 Placement Plan；Factory 实际部署和调度 |
 | Learning 边界 | 通过 | 08 生产学习资产；03 保证归属、导出和可迁移 |
 | 开源优先 | 通过 | 标准/主路径、可选、实验、自研和否决项均已区分 |
+| 技术栈可落地性 | 通过 | 默认 Go 主路径、MMR Java 覆盖规则、组件许可证、PoC 门禁和退出条件已定义 |
 | 实施可执行性 | 通过 | 有团队、仓库、季度路线、Epic、PoC、CI/CD 和 Go/No-Go |
 | 文档链接/metadata | 通过 | 架构包内链接和 metadata 已校验 |
 
@@ -54,7 +56,7 @@ scope:
 
 | ID | 阻塞项 | 未关闭时的限制 |
 |---|---|---|
-| G-01 | MMR 技术栈和 profile/API 现状 | 不能冻结 ARR 实现栈和 MMR adapter |
+| G-01 | MMR 技术栈和 profile/API 现状 | Go 为建议基线；确认是否触发 Java/Spring Boot 覆盖规则后才能冻结生产实现栈 |
 | G-02 | 04 Identity/Trust 的 PDP、delegation、approval 接口 | 不能开放生产 Tool/A2A 执行 |
 | G-03 | 企业 MCP/API Gateway 现状 | 不能确定复用、扩展或新建范围 |
 | G-04 | AI Factory 多云/边缘控制面现状 | 不能选择 Crossplane/Karmada 等 adapter |
@@ -64,8 +66,7 @@ scope:
 ## 5. 开源决策审计
 
 - MCP/A2A 使用官方规范与 SDK，企业层只做 policy/gateway adapter，禁止私有协议替代。
-- PostgreSQL、OpenAPI/JSON Schema、CloudEvents、OpenTelemetry、OCI/SBOM 是主路径标准能力。
-- Backstage、xRegistry、OPA、Crossplane、Karmada、OpenCost 都有明确 Owner 和采用门槛。
+- Go 1.27.x、PostgreSQL 18、pgx/sqlc、OpenAPI/JSON Schema、CloudEvents、CEL-Go 和 OpenTelemetry 构成建议主路径；若 MMR 的 Java 基线复用价值更高则按 ADR 切换。
+- Backstage、xRegistry、OPA、Valkey、Temporal、CloudNativePG 等都有明确 Owner、采用门槛和退出条件。
 - MMR 已存在，因此不把 LiteLLM、Envoy AI Gateway 等重新引入 03 主路径。
 - 项目特有的 Capability、Binding、Resource Plan、Sovereignty Score 和 Exit Rule 保持小型自研。
-
