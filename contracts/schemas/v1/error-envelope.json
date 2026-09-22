@@ -5,7 +5,11 @@
   "description": "所有 4xx/5xx 响应与校验失败共用的错误结构。每个校验路由命中映射唯一 error_code（I03 校验路由优先级：请求 Schema 校验 → 语义校验 → 兼容性门禁）。",
   "type": "object",
   "additionalProperties": false,
-  "required": ["error_code", "message", "request_id"],
+  "required": [
+    "error_code",
+    "message",
+    "request_id"
+  ],
   "properties": {
     "error_code": {
       "type": "string",
@@ -21,7 +25,6 @@
         "FORBIDDEN_FIELD",
         "NOT_FOUND",
         "METHOD_NOT_ALLOWED",
-        "CONFLICT",
         "INTERNAL"
       ]
     },
