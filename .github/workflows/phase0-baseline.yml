@@ -1,0 +1,65 @@
+name: phase0-baseline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      # F5 guard: an accepted/superseded ADR may only be edited to become
+      # 'superseded' (with superseded-by); deletion or in-place content edits
+      # of frozen ADRs fail the gate.
+      - name: Guard against in-place edits or deletion of frozen ADRs
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags origin "$BASE_SHA"
+          bad=0
+          while IFS=$'\t' read -r status path; do
+            case "$status" in
+              D)
+                echo "::error file=$path::frozen ADR deleted (review F5); ADRs are immutable history"
+                bad=1
+                ;;
+              M)
+                if ! grep -q '^status: superseded' "$path"; then
+                  echo "::error file=$path::frozen ADR modified in place (review F5); supersede it with a new ADR instead"
+                  bad=1
+                fi
+                ;;
+            esac
+          done < <(git diff --no-renames --name-status "$BASE_SHA" HEAD -- docs/adr/)
+          exit $bad
+
+      - name: Phase 0 baseline gate (ledger / ADR / fixtures / license)
+        run: python3 tools/phase0/baseline_check.py
+
+      - name: Gate unit tests (F1/F3/F6 regression)
+        run: python3 tests/phase0/test_baseline_check.py
+
+  mmr-fixture-replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Replay MMR contract fixtures against Prism mock (real E2E)
+        run: python3 tools/phase0/replay_mmr_fixtures.py

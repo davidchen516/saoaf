@@ -1,0 +1,24 @@
+{
+  "provider_id": "multi-model-router",
+  "snapshot_version": "vllm-sr-v0.3.0-contract-1",
+  "contract_version": "2026-09",
+  "generated_at": "2026-09-22T00:00:00Z",
+  "valid_until": "2099-01-01T00:00:00Z",
+  "profiles": [
+    {
+      "profile_id": "reasoning-high-v1",
+      "capability_keys": ["model.reasoning.high"],
+      "regions": ["mock-region-1"],
+      "data_classification_max": "CONFIDENTIAL",
+      "features": {
+        "streaming": false,
+        "structured_output": true,
+        "tool_calling": false
+      },
+      "constraint_schema_version": "1.0",
+      "status": "AVAILABLE"
+    }
+  ],
+  "digest": "sha256:2f7d1e0a0b6f4b0ceeeb6b1c1cb9d7a8d90cbb1b3e6ea2d1e4d1b0d7a8c3f2f1",
+  "signature": "mock-only-not-cryptographic"
+}

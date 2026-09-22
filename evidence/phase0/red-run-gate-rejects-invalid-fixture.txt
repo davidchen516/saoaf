@@ -1,0 +1,9 @@
+PHASE0 BASELINE GATE: FAIL
+  - Q-MMR-01: intermediate/invalid state 'OPEN' (must be ANSWERED or RISK-ACCEPTED)
+  - Q-MMR-02: ANSWERED/RISK-ACCEPTED without evidence link
+  - Q-LANG-01: intermediate/invalid state 'IN-PROGRESS' (must be ANSWERED or RISK-ACCEPTED)
+  - no accepted ADRs found in docs/adr
+  - snapshot fixture digest must be sha256-prefixed
+  - missing fixture: fixtures/mmr/recorded-calls.json
+  - missing docs/phase0/license-decision.md
+exit=1

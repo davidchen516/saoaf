@@ -1,0 +1,18 @@
+# F4 死锁复现证据（2026-09-22，真实 GitHub 状态）
+
+探针 PR #25（draft，仅改 README.md——workflow pull_request.paths 之外的路径）：
+
+$ gh pr checks 25 --repo davidchen516/saoaf
+no checks reported on the 'f4-deadlock-probe' branch        ← exit 1，无任何 check 上报
+
+$ gh pr view 25 --json mergeStateStatus,mergeable
+{"mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE"}      ← 必检 baseline-gate/mmr-fixture-replay
+                                                              永远不会跑（paths 过滤使 workflow 不触发），
+                                                              PR 被 BLOCKED，无法合并
+
+$ gh run list --repo davidchen516/saoaf --branch f4-deadlock-probe
+（空——该分支没有任何 workflow run）
+
+结论：pull_request.paths 过滤 + 分支保护必检（strict）组合，使任何只改 paths 外文件的 PR
+永久死锁。修复：去掉 paths 过滤（两个 job 合计 <1 分钟，代价可忽略）。
+探针 PR #25 已关闭并删除分支；main 未受影响。

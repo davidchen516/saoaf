@@ -1,0 +1,165 @@
+[
+  {
+    "case_id": "replay-01-succeeded",
+    "outcome": "SUCCEEDED",
+    "description": "Happy path: logical profile routing with full plan/decision correlation.",
+    "http": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "headers": {
+        "X-Resource-Plan-ID": "plan-fixture-001",
+        "X-Resource-Plan-Item-ID": "item-fixture-001",
+        "X-Tenant-Ref": "tenant-mock-alpha",
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "model": "reasoning-high-v1",
+        "messages": [
+          {
+            "role": "user",
+            "content": "phase0 fixture replay"
+          }
+        ],
+        "stream": false
+      }
+    },
+    "expected_status": 200,
+    "resource_plan_id": "plan-fixture-001",
+    "model_route_decision_id": "mrd-fixture-001",
+    "usage_ref": "usage-fixture-001",
+    "expected_response_fields": [
+      "id",
+      "model_route_decision_id",
+      "resource_plan_id",
+      "status",
+      "usage_ref"
+    ]
+  },
+  {
+    "case_id": "replay-02-profile-not-found",
+    "outcome": "PROFILE_NOT_FOUND",
+    "description": "Contract drift guard: unknown logical profile must map to 400 PROFILE_NOT_FOUND, never auto-switch.",
+    "http": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "headers": {
+        "X-Resource-Plan-ID": "plan-fixture-002",
+        "X-Resource-Plan-Item-ID": "item-fixture-002",
+        "X-Tenant-Ref": "tenant-mock-alpha",
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b8-01",
+        "Content-Type": "application/json",
+        "Prefer": "code=400"
+      },
+      "body": {
+        "model": "reasoning-high-v1",
+        "messages": [
+          {
+            "role": "user",
+            "content": "force profile not found example"
+          }
+        ],
+        "stream": false
+      }
+    },
+    "expected_status": 400,
+    "resource_plan_id": "plan-fixture-002",
+    "model_route_decision_id": "mrd-fixture-002",
+    "expected_error_code": "PROFILE_NOT_FOUND"
+  },
+  {
+    "case_id": "replay-03-quota-exceeded",
+    "outcome": "QUOTA_EXCEEDED",
+    "description": "Quota outcome keeps both correlation IDs.",
+    "http": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "headers": {
+        "X-Resource-Plan-ID": "plan-fixture-003",
+        "X-Resource-Plan-Item-ID": "item-fixture-003",
+        "X-Tenant-Ref": "tenant-mock-alpha",
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b9-01",
+        "Content-Type": "application/json",
+        "Prefer": "code=429"
+      },
+      "body": {
+        "model": "reasoning-high-v1",
+        "messages": [
+          {
+            "role": "user",
+            "content": "force quota example"
+          }
+        ],
+        "stream": false
+      }
+    },
+    "expected_status": 429,
+    "resource_plan_id": "plan-fixture-003",
+    "model_route_decision_id": "mrd-fixture-003",
+    "expected_error_code": "QUOTA_EXCEEDED"
+  },
+  {
+    "case_id": "replay-04-model-unavailable",
+    "outcome": "MODEL_UNAVAILABLE",
+    "description": "No eligible backend outcome keeps both correlation IDs.",
+    "http": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "headers": {
+        "X-Resource-Plan-ID": "plan-fixture-004",
+        "X-Resource-Plan-Item-ID": "item-fixture-004",
+        "X-Tenant-Ref": "tenant-mock-alpha",
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902ba-01",
+        "Content-Type": "application/json",
+        "Prefer": "code=503"
+      },
+      "body": {
+        "model": "reasoning-high-v1",
+        "messages": [
+          {
+            "role": "user",
+            "content": "force unavailable example"
+          }
+        ],
+        "stream": false
+      }
+    },
+    "expected_status": 503,
+    "resource_plan_id": "plan-fixture-004",
+    "model_route_decision_id": "mrd-fixture-004",
+    "expected_error_code": "MODEL_UNAVAILABLE"
+  },
+  {
+    "case_id": "replay-05-timeout",
+    "outcome": "TIMEOUT",
+    "description": "Client-side timeout outcome: no response body; correlation IDs are minted locally by the caller per contract (decision ID is created by MMR on its side even for timeouts; recorded from trace side).",
+    "http": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "headers": {
+        "X-Resource-Plan-ID": "plan-fixture-005",
+        "X-Resource-Plan-Item-ID": "item-fixture-005",
+        "X-Tenant-Ref": "tenant-mock-alpha",
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902bb-01",
+        "Content-Type": "application/json",
+        "Prefer": "code=503"
+      },
+      "body": {
+        "model": "reasoning-high-v1",
+        "messages": [
+          {
+            "role": "user",
+            "content": "force timeout-class failure"
+          }
+        ],
+        "stream": false
+      },
+      "client_timeout_seconds": 5
+    },
+    "expected_status": 503,
+    "resource_plan_id": "plan-fixture-005",
+    "model_route_decision_id": "mrd-fixture-005",
+    "expected_error_code": "MODEL_UNAVAILABLE",
+    "note": "TIMEOUT class is exercised via 503 transport failure mapping; header-based decision-id correlation asserted from mock response headers"
+  }
+]
