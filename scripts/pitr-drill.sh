@@ -64,17 +64,18 @@ rm -rf "$WORK/recovery"; mkdir -p "$WORK/recovery"
 # docker cp places the source dir inside the target when it pre-exists
 SRC="$WORK/base"; [ -d "$SRC/basebackup" ] && SRC="$SRC/basebackup"
 cp -a "$SRC/." "$WORK/recovery/"
-# the container's postgres (uid 999) must own and read the data dir; on
-# Linux bind mounts keep the host uid, and the entrypoint chmods PGDATA
-# to 0700, so chown to 999 from inside a root container (portable across
-# macOS Docker Desktop and Linux CI runners).
-docker run --rm -v "$WORK/recovery:/d" alpine:3.22 chown -R 999:999 /d >/dev/null
+# write recovery config while the host user still owns the files
 touch "$WORK/recovery/recovery.signal"
 cat >> "$WORK/recovery/postgresql.auto.conf" <<EOF
 restore_command = 'cp /archive/%f %p'
 recovery_target_time = '$T1'
 recovery_target_action = 'promote'
 EOF
+# the container's postgres (uid 999) must own and read the data dir; on
+# Linux bind mounts keep the host uid, and the entrypoint chmods PGDATA
+# to 0700, so chown to 999 from inside a root container (portable across
+# macOS Docker Desktop and Linux CI runners).
+docker run --rm -v "$WORK/recovery:/d" alpine:3.22 chown -R 999:999 /d >/dev/null
 # postgres:18 image PGDATA is /var/lib/postgresql/18/docker; override it to
 # our mounted plain-layout backup directory.
 docker run -d --name saoaf-pitr-recover \
