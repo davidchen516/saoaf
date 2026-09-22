@@ -28,6 +28,10 @@ classification: public
 14. [身份认证、登录与授权 Mock](./specs/authentication-authorization-mock.md)
 15. [当前未决项清单](./plans/open-decisions.md)
 16. [Phase 0 最小 MVP 基线](./architecture/mvp-baseline.md)
+17. [Phase 0 必答问题台账](./phase0/answers.md)（Issue #1 关闭条件，由基线门禁强制）
+18. [Phase 0 ADR 冻结记录](./adr/)（语言、数据库、消息、身份 Mock、NFR/MMR 契约基线）
+19. [Phase 0 LICENSE 决策记录](./phase0/license-decision.md)
+20. [Phase 0 验证证据](../evidence/phase0/README.md)（门禁红运行与夹具重放绿运行）
 
 当前状态为 `proposed`。完成 Phase 0 的 MMR 盘点、容量基线、IAM 与保留期确认后，主文档可升级为 `approved`，接口文档可进入实现基线。
 

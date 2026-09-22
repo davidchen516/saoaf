@@ -1,0 +1,3 @@
+  - recorded call (SUCCEEDED): missing model_route_decision_id
+  - recorded calls missing outcomes: ['MODEL_UNAVAILABLE', 'PROFILE_NOT_FOUND', 'QUOTA_EXCEEDED', 'TIMEOUT']
+exit=1 (fixture check failed as designed)

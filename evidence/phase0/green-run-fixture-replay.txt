@@ -1,0 +1,11 @@
+prism mock: up
+snapshot fixture: OK (provider=multi-model-router, digest=sha256:mock-profile-snapshot)
+replay-01-succeeded: SUCCEEDED status=200 plan=plan-mock-001 decision=mrd-mock-001
+replay-02-profile-not-found: PROFILE_NOT_FOUND status=400 plan=plan-mock-001 decision=mrd-mock-not-found
+replay-03-quota-exceeded: QUOTA_EXCEEDED status=429 plan=plan-mock-001 decision=mrd-mock-quota
+replay-04-model-unavailable: MODEL_UNAVAILABLE status=503 plan=plan-mock-001 decision=mrd-mock-unavailable
+replay-05-timeout: TIMEOUT status=503 plan=plan-mock-001 decision=mrd-mock-unavailable
+prism mock: down
+MMR FIXTURE REPLAY: PASS
+  cases replayed: 5 (5 outcomes: SUCCEEDED/PROFILE_NOT_FOUND/QUOTA_EXCEEDED/MODEL_UNAVAILABLE/TIMEOUT-class)
+  snapshot fixture cross-checked against live mock

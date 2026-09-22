@@ -1,0 +1,43 @@
+name: phase0-baseline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'docs/phase0/**'
+      - 'docs/adr/**'
+      - 'fixtures/mmr/**'
+      - 'tools/phase0/**'
+      - 'mocks/mmr/**'
+      - 'evidence/phase0/**'
+      - '.github/workflows/phase0-baseline.yml'
+      - 'LICENSE'
+
+permissions:
+  contents: read
+
+jobs:
+  baseline-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Phase 0 baseline gate (ledger / ADR / fixtures / license)
+        run: python3 tools/phase0/baseline_check.py
+
+  mmr-fixture-replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Replay MMR contract fixtures against Prism mock (real E2E)
+        run: python3 tools/phase0/replay_mmr_fixtures.py
