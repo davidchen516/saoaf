@@ -3,4 +3,3 @@
 # Entries are added only after vetting the upstream license.
 
 # github.com/go-chi/chi/v5 — MIT
-github.com/go-chi/chi/v5
