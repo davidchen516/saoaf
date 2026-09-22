@@ -116,7 +116,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: govulncheck (SCA: module level + shipped binaries)
+      - name: govulncheck (SCA module level + shipped binaries)
         # Two complementary scans:
         # 1. -scan module: any vulnerable module in the dependency graph
         #    fails, regardless of symbol usage (issue red-run semantics:
