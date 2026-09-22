@@ -27,7 +27,7 @@ type goModule struct {
 }
 
 func loadAllowlist(path string) (map[string]bool, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G703 -- path is built from the operator-supplied repo root, validated as an existing directory in main; this is a CI gate binary, not a service handling request input
 	if err != nil {
 		return nil, err
 	}
