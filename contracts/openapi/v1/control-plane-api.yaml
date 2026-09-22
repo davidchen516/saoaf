@@ -1,0 +1,60 @@
+openapi: 3.1.0
+info:
+  title: SAOAF Control Plane API
+  version: 1.0.0
+  summary: 控制面 API 契约（I02 骨架端点 + I03 公共约定）
+  description: |
+    Runtime 与 Admin API 的契约基座。扩展命名空间：`x-saoaf-*`。
+    所有 4xx/5xx 使用统一错误信封（components.responses.Error）。
+    请求体上限 1 MiB，JSON 深度上限 64（headers 约定 + 门禁负向夹具）。
+  x-saoaf-api-surface: control-plane
+paths:
+  /healthz:
+    get:
+      operationId: getLiveness
+      summary: 存活探针（I02 实现已上线）
+      responses:
+        '200':
+          description: 进程存活
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, probe, uptime]
+                properties:
+                  status: { const: alive }
+                  probe: { const: healthz }
+                  uptime: { type: string }
+  /readyz:
+    get:
+      operationId: getReadiness
+      summary: 启动/就绪探针（I02 实现已上线）
+      responses:
+        '200':
+          description: 可服务
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, probe]
+                properties:
+                  status: { const: ready }
+                  probe: { const: readyz }
+        '503':
+          $ref: '#/components/responses/Error'
+components:
+  responses:
+    Error:
+      description: 统一错误信封
+      content:
+        application/json:
+          schema:
+            $ref: 'https://contracts.saoaf.dev/schemas/v1/error-envelope.json'
+  headers:
+    Idempotency-Key:
+      description: 写操作幂等键（语义见 idempotency.json）
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._:-]+$'

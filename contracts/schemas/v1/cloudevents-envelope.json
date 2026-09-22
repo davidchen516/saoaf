@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.saoaf.dev/schemas/v1/cloudevents-envelope.json",
+  "title": "CloudEvents 1.0 事件信封（SAOAF 约束子集）",
+  "description": "所有控制面事件的信封。data 内只允许结构化引用与摘要；禁止 Prompt、模型响应、Tool 参数、Agent 消息与凭证正文。",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "time"],
+  "properties": {
+    "specversion": { "const": "1.0" },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "事件唯一 ID；消费者据此幂等去重。"
+    },
+    "source": {
+      "type": "string",
+      "pattern": "^/saoaf/[a-z0-9./-]+$"
+    },
+    "type": {
+      "type": "string",
+      "pattern": "^dev\\.saoaf\\.[a-z0-9.-]+\\.v[0-9]+$",
+      "description": "事件类型命名空间 dev.saoaf.<module>.<event>.v<版本>"
+    },
+    "time": { "type": "string", "format": "date-time" },
+    "subject": {
+      "type": ["string", "null"],
+      "description": "聚合根标识（如 resource_plan_id）。"
+    },
+    "datacontenttype": { "const": "application/json" },
+    "data": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "结构化载荷：ID、revision、摘要与引用。"
+    },
+    "x-saoaf-tenant-ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "扩展命名空间字段：租户引用（受信身份注入）。"
+    },
+    "x-saoaf-aggregate-revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "扩展命名空间字段：聚合 revision，消费者拒绝乱序回退。"
+    }
+  },
+  "additionalProperties": false
+}

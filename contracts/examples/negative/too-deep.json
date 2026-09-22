@@ -1,0 +1,147 @@
+{
+  "case": "too-deep",
+  "schema": "pagination.json",
+  "input": {
+    "nest": {
+      "nest": {
+        "nest": {
+          "nest": {
+            "nest": {
+              "nest": {
+                "nest": {
+                  "nest": {
+                    "nest": {
+                      "nest": {
+                        "nest": {
+                          "nest": {
+                            "nest": {
+                              "nest": {
+                                "nest": {
+                                  "nest": {
+                                    "nest": {
+                                      "nest": {
+                                        "nest": {
+                                          "nest": {
+                                            "nest": {
+                                              "nest": {
+                                                "nest": {
+                                                  "nest": {
+                                                    "nest": {
+                                                      "nest": {
+                                                        "nest": {
+                                                          "nest": {
+                                                            "nest": {
+                                                              "nest": {
+                                                                "nest": {
+                                                                  "nest": {
+                                                                    "nest": {
+                                                                      "nest": {
+                                                                        "nest": {
+                                                                          "nest": {
+                                                                            "nest": {
+                                                                              "nest": {
+                                                                                "nest": {
+                                                                                  "nest": {
+                                                                                    "nest": {
+                                                                                      "nest": {
+                                                                                        "nest": {
+                                                                                          "nest": {
+                                                                                            "nest": {
+                                                                                              "nest": {
+                                                                                                "nest": {
+                                                                                                  "nest": {
+                                                                                                    "nest": {
+                                                                                                      "nest": {
+                                                                                                        "nest": {
+                                                                                                          "nest": {
+                                                                                                            "nest": {
+                                                                                                              "nest": {
+                                                                                                                "nest": {
+                                                                                                                  "nest": {
+                                                                                                                    "nest": {
+                                                                                                                      "nest": {
+                                                                                                                        "nest": {
+                                                                                                                          "nest": {
+                                                                                                                            "nest": {
+                                                                                                                              "nest": {
+                                                                                                                                "nest": {
+                                                                                                                                  "nest": {
+                                                                                                                                    "nest": {
+                                                                                                                                      "nest": {
+                                                                                                                                        "nest": {
+                                                                                                                                          "nest": {
+                                                                                                                                            "nest": {
+                                                                                                                                              "marker": "leaf"
+                                                                                                                                            }
+                                                                                                                                          }
+                                                                                                                                        }
+                                                                                                                                      }
+                                                                                                                                    }
+                                                                                                                                  }
+                                                                                                                                }
+                                                                                                                              }
+                                                                                                                            }
+                                                                                                                          }
+                                                                                                                        }
+                                                                                                                      }
+                                                                                                                    }
+                                                                                                                  }
+                                                                                                                }
+                                                                                                              }
+                                                                                                            }
+                                                                                                          }
+                                                                                                        }
+                                                                                                      }
+                                                                                                    }
+                                                                                                  }
+                                                                                                }
+                                                                                              }
+                                                                                            }
+                                                                                          }
+                                                                                        }
+                                                                                      }
+                                                                                    }
+                                                                                  }
+                                                                                }
+                                                                              }
+                                                                            }
+                                                                          }
+                                                                        }
+                                                                      }
+                                                                    }
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "expected_error_code": "VALIDATION_PAYLOAD_TOO_DEEP",
+  "note": "input is a REAL 71-level nested object (jsonDepth computed at gate time; >64 rejected); the old self-reported input_depth field was removed so the guard cannot be bypassed by declaration"
+}

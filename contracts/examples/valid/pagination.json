@@ -1,0 +1,12 @@
+{
+  "items": [
+    { "id": "cap-001", "display_name": "模型推理·高" },
+    { "id": "cap-002", "display_name": "向量检索·多语言" }
+  ],
+  "page": {
+    "limit": 50,
+    "offset": 0,
+    "total": 2,
+    "next_offset": null
+  }
+}

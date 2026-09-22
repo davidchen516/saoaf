@@ -6,4 +6,4 @@ services:
     ports:
       - "127.0.0.1:4020:4010"
     volumes:
-      - ./openapi.yaml:/contracts/openapi.yaml:ro
+      - ../../contracts/protocols/model-profile/openapi.yaml:/contracts/openapi.yaml:ro

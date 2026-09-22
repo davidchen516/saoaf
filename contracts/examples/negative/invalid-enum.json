@@ -1,0 +1,10 @@
+{
+  "case": "invalid-enum",
+  "schema": "error-envelope.json",
+  "input": {
+    "error_code": "NOT_A_REAL_CODE",
+    "message": "x",
+    "request_id": "req-neg-0002"
+  },
+  "expected_error_code": "VALIDATION_INVALID_ENUM"
+}

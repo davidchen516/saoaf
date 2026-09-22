@@ -1,0 +1,9 @@
+{
+  "case": "missing-required",
+  "schema": "error-envelope.json",
+  "input": {
+    "error_code": "NOT_FOUND",
+    "message": "missing request_id"
+  },
+  "expected_error_code": "VALIDATION_MISSING_REQUIRED"
+}
