@@ -12,11 +12,21 @@
 - `./scripts/verify.sh` → ALL PASS；`go test -race ./tools/contractlint` 全绿（深度/分类器/映射/禁止扫描/夹具）
 - MMR 契约单源化迁移后 `replay_mmr_fixtures.py` → PASS（mock compose 挂载 ../../contracts/…）
 
-## 红运行①②（CI 级，探针 PR 取证后回填链接）
+## 红运行（CI 级记录）
 
-① breaking change（enum 收窄 / required 删除 / property 删除）→ contract-gate job 红
-② 示例注入禁止字段（prompt）→ validate 禁止扫描红
-③ 超深/超大 → 负向夹具在 contract-gate job 中持续断言（每个 PR 的 CI 日志即记录）
+**① breaking change → contract-gate 红（PR #35，run 35746413642，I03 合并后对含契约 main 取证）**
+```
+- breaking changes detected (1):
+  contracts/schemas/v1/error-envelope.json: enum value "CONFLICT" removed at $.properties.error_code.enum
+```
+探针 PR 已关闭、分支已删。
+
+**② 禁止字段注入 → contract-gate 红（PR #34，run 35729723293）**
+validate 禁止扫描命中 example 中的 prompt 字段。
+
+**③ 超深/超大 → 负向夹具在 contract-gate job 持续断言**（too-deep 为真实 71 层输入，too-large 实膨胀 1MiB+1；每个 PR 的 CI 日志即持续记录，PR #32/#35 的 contract-gate job 输出含 negatives=5）。
+
+本地三形态补充记录（worktree 取证）：见下节。
 
 ## 红运行①的本地三形态记录（修复标量数组 set-diff bug 后）
 
