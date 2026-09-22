@@ -48,3 +48,5 @@ The architecture is currently **proposed / pre-release**. This delivery implemen
 The repository remains publicly visible. Until a repository license is approved and added, the material is source-available for review and no permission to copy, modify, or redistribute is granted beyond applicable law.
 
 Please use [GitHub Issues](https://github.com/davidchen516/saoaf/issues) for scoped architecture proposals, contract questions, and implementation feedback.
+
+<!-- f4 probe: paths-filter deadlock reproduction, will be reverted -->
