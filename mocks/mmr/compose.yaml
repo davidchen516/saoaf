@@ -1,0 +1,9 @@
+services:
+  mmr:
+    image: stoplight/prism:5.15.10
+    platform: linux/amd64
+    command: ["mock", "-h", "0.0.0.0", "--errors", "--multiprocess=false", "/contracts/openapi.yaml"]
+    ports:
+      - "127.0.0.1:4020:4010"
+    volumes:
+      - ./openapi.yaml:/contracts/openapi.yaml:ro

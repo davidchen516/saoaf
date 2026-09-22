@@ -10,7 +10,7 @@ reviewers:
   - TODO-SRE负责人
 created: 2026-09-21
 updated: 2026-09-21
-classification: internal
+classification: public
 related:
   - ../programs/03-sovereign-ai-open-ai-fabric/architecture.md
   - ../programs/03-sovereign-ai-open-ai-fabric/module-contracts.md
@@ -71,9 +71,9 @@ related:
 | 未授权管理变更 | 0 |
 | MMR 内部模型切换引起的 ARR 配置变更 | 0 |
 | 生产回滚时间 | ≤ 15 min |
-| RTO / RPO | 60 min / 15 min；TODO-业务确认 |
+| RTO / RPO | 60 min / 5 min；MVP 单地域三故障域 |
 
-容量基线暂记为 `TODO-峰值解析QPS`、`TODO-能力数量`、`TODO-Provider数量`、`TODO-工厂与区域数量`，在 Phase 0 压测前锁定。
+容量基线为峰值 100 Resolve QPS、100 Capability、50 Provider、500 Binding、最多 10 个逻辑租户、单地域三故障域。达到任一维度 70% 时重新压测并评审扩容。
 
 ## 3. 关键原则
 
@@ -406,7 +406,7 @@ erDiagram
 - 业务唯一约束：`capability_key + major_version + revision`、`provider_key + revision`。
 - ACTIVE Binding 的唯一性按 `capability_id + environment + scope_hash + priority` 约束或发布时校验。
 - JSONB 只承载开放扩展字段；参与过滤和约束的字段必须提升为显式列并建索引。
-- `resource_plan` 和 `decision_record` 按月分区；默认保留 90 天，审计保留期由 `TODO-合规负责人` 确认。
+- `resource_plan` 按月分区并在线保留 90 天；`decision_record` 在线保留 1 年；每日证据摘要按 Evidence/WORM 基线归档。
 - Request 只保存规范化摘要，不保存 Prompt、上下文内容、工具参数正文和模型响应。
 - Outbox 与业务事务同库提交；消费者按 `event_id` 幂等。
 - 数据迁移只能前向兼容：先扩展、双读/双写、迁移、再收缩。
@@ -559,7 +559,7 @@ Trace 属性使用 `resource.plan.id`、`ai.capability.id`、`ai.provider.id`、
 - 数据库连接池有界，超时短于上游超时；限流按 caller/tenant 执行。
 - 数据库不可用时，只可用已验证、未过期的只读发布快照继续解析；不得接受管理写。
 - 过期 Snapshot 默认不生成新计划；紧急例外必须是有时限、有审批、有审计的 break-glass 配置。
-- PostgreSQL 每日全量 + 连续归档/PITR；每季度恢复演练。
+- PostgreSQL 每日 base backup + 连续 WAL 归档/PITR；先每月恢复演练，连续三次达标后改为每季度。
 - 灾备环境预置应用和 schema，配置通过备份恢复或受控复制，不通过手工重建。
 
 ## 8. 资源域契约
@@ -682,11 +682,11 @@ Provider 不得把底层实例目录泄露到 ARR。详细契约见既有 [ai-re
 | ID | 未决项 | Owner | 截止点 |
 |---|---|---|---|
 | TODO-01 | MMR 语言、框架、API、鉴权、profile Snapshot、事件和 OTel 规范 | MMR负责人 | Phase 0 第 1 周 |
-| TODO-02 | 峰值 QPS、能力/Provider 数量、工厂与区域规模 | 产品负责人/SRE | Phase 0 第 1 周 |
-| TODO-03 | 审计和 Plan 保留期、数据驻留要求 | 合规负责人 | Phase 0 结束 |
-| TODO-04 | IAM/PDP 和双人审批接入方式 | 安全负责人 | Phase 0 结束 |
+| CLOSED-02 | 峰值 QPS、能力/Provider 数量、租户与区域规模 | 产品负责人/SRE | 已按 MVP 固定 |
+| CLOSED-03 | 审计和 Plan 保留期、数据驻留要求 | 合规负责人 | 已按 MVP 固定；生产 WORM 产品待准入 |
+| CLOSED-04 | IAM/PDP 和双人审批接入方式 | 安全负责人 | Mock 已固定；生产实现待替换 |
 | TODO-05 | Context Router 与 Tool Gateway 当前成熟度和接口 | 各域负责人 | Phase 1 结束前 |
-| TODO-06 | RTO/RPO 和跨地域灾备等级 | 业务负责人/SRE | 生产设计评审 |
+| CLOSED-06 | RTO/RPO 和跨地域灾备等级 | 业务负责人/SRE | MVP 为 60 min / 5 min、单地域；跨地域延后 |
 
 ## 14. 官方参考
 

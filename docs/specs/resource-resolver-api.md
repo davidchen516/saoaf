@@ -9,7 +9,7 @@ reviewers:
   - TODO-IAM负责人
 created: 2026-09-21
 updated: 2026-09-21
-classification: internal
+classification: public
 related:
   - ../programs/03-sovereign-ai-open-ai-fabric/module-contracts.md
   - ../architecture/ai-routing-platform-4a.md

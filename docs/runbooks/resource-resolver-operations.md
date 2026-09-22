@@ -9,7 +9,7 @@ reviewers:
   - TODO-安全负责人
 created: 2026-09-21
 updated: 2026-09-21
-classification: internal
+classification: public
 related:
   - ../architecture/ai-routing-platform-4a.md
   - ../plans/resource-resolver-implementation-plan.md

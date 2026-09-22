@@ -5,7 +5,7 @@ status: proposed
 owner: TODO-AI平台负责人
 created: 2026-09-21
 updated: 2026-09-21
-classification: internal
+classification: public
 ---
 
 # 03 Sovereign AI & Open AI Fabric 架构交付包
@@ -27,14 +27,15 @@ classification: internal
 13. [ARR 架构一致性审计](./architecture/ai-routing-platform-audit-report.md)
 14. [身份认证、登录与授权 Mock](./specs/authentication-authorization-mock.md)
 15. [当前未决项清单](./plans/open-decisions.md)
+16. [Phase 0 最小 MVP 基线](./architecture/mvp-baseline.md)
 
 当前状态为 `proposed`。完成 Phase 0 的 MMR 盘点、容量基线、IAM 与保留期确认后，主文档可升级为 `approved`，接口文档可进入实现基线。
 
 ## 发布分级
 
-本目录中的架构、契约、计划和运行手册当前按 `internal` 分级维护，作为闭源项目设计资料。文档中的租户、服务、域名、ID、组织和数据均为示例，不代表真实生产环境。
+本目录中的架构、契约、计划和运行手册按 `public` 分级，可在公开仓库中审阅。文档中的租户、服务、域名、ID、组织和数据均为 Mock 示例，不代表真实生产环境。
 
-未经明确授权，不得复制、修改、分发或对外发布这些资料。后续如需公开，必须重新完成凭证、内部地址、人员信息、供应商合同、未公开漏洞和受限业务数据检查，并由项目 Owner 批准发布范围和许可证。
+仓库尚未加入开源许可证，因此公开可见不自动授予复制、修改或分发权。每次发布仍须检查凭证、内部地址、人员信息、供应商合同、未公开漏洞和受限业务数据；后续采用开源许可证需由项目 Owner 单独批准。
 
 ## 对外开源主页
 

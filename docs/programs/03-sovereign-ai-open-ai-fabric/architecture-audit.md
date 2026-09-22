@@ -5,7 +5,7 @@ status: reviewed
 owner: AI 架构交付
 created: 2026-09-21
 updated: 2026-09-21
-classification: internal
+classification: public
 scope:
   - ./architecture.md
   - ./module-contracts.md

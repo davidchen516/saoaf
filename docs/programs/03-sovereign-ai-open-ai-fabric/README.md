@@ -10,7 +10,7 @@ reviewers:
   - TODO-基础设施负责人
 created: 2026-09-21
 updated: 2026-09-21
-classification: internal
+classification: public
 ---
 
 # 03 Sovereign AI & Open AI Fabric

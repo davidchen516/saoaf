@@ -9,7 +9,7 @@ reviewers:
   - TODO-SRE负责人
 created: 2026-09-21
 updated: 2026-09-21
-classification: internal
+classification: public
 related:
   - ../programs/03-sovereign-ai-open-ai-fabric/architecture.md
   - ../programs/03-sovereign-ai-open-ai-fabric/module-contracts.md
@@ -46,7 +46,7 @@ SAOAF 与 vLLM Semantic Router 对象的映射如下：
 | 具体模型或供应商 endpoint | Provider model | MMR 权威，禁止进入 ARR Snapshot |
 | `model_route_decision_id` | 企业证据扩展 | 必须由 MMR 生成并跨响应/事件保持唯一 |
 
-上游版本必须按不可变 tag/digest 锁定。当前架构评审以 v0.3.0 能力和官方文档为参考；生产采用版本、企业 fork 差异、Canonical YAML/Recipe 管理、升级和回滚路径仍由 MMR Phase 0 盘点确认。SAOAF 不 fork 或内嵌 Semantic Router，仅维护面向 MMR 稳定契约的薄 adapter。
+上游版本必须按不可变 tag/digest 锁定。当前架构和 Mock 以 v0.3.0 的公开能力与官方文档为参考；生产采用版本、企业 fork 差异、Canonical YAML/Recipe 管理、升级和回滚路径仍由 MMR Phase 0 盘点确认。SAOAF 不 fork 或内嵌 Semantic Router，仅维护面向 MMR 稳定契约的薄 adapter。`mocks/mmr` 提供 OpenAI-compatible 请求和企业证据扩展的契约替身，不模拟真实语义路由质量。
 
 ## 2. 权威边界
 

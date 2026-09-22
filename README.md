@@ -35,6 +35,8 @@ Start with the [architecture delivery package](docs/README.md). The main documen
 - integration contract with the existing Multi-Model Router;
 - implementation plan, operations runbook, and architecture audits.
 
+Phase 0 contract mocks for identity, authorization, approval, MMR, workload certificates, and NATS JetStream are under [`mocks/`](mocks/).
+
 ## Website / 网站
 
 The bilingual project homepage is published through GitHub Pages from [`gh-pages/`](gh-pages/). The deployment workflow runs automatically when homepage files change on `main`.
@@ -43,6 +45,6 @@ The bilingual project homepage is published through GitHub Pages from [`gh-pages
 
 The architecture is currently **proposed / pre-release**. This delivery implements AI Resource Router and Sovereignty Operations & Exit Assurance, integrates the existing Multi-Model Router, and freezes interfaces for MCP, A2A, and Placement without implementing those three execution fabrics.
 
-The repository is currently maintained as closed-source design material. Public repository visibility does not grant reuse, modification, or redistribution rights; access and publication policy must be approved separately.
+The repository remains publicly visible. Until a repository license is approved and added, the material is source-available for review and no permission to copy, modify, or redistribute is granted beyond applicable law.
 
 Please use [GitHub Issues](https://github.com/davidchen516/saoaf/issues) for scoped architecture proposals, contract questions, and implementation feedback.

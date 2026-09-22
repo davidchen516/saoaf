@@ -6,6 +6,10 @@
   "resetPasswordAllowed": true,
   "rememberMe": false,
   "bruteForceProtected": true,
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA256",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
   "accessTokenLifespan": 300,
   "ssoSessionIdleTimeout": 1800,
   "ssoSessionMaxLifespan": 28800,
@@ -25,9 +29,31 @@
     {"name": "resource.suspend", "protocol": "openid-connect"},
     {"name": "sovereignty.read", "protocol": "openid-connect"},
     {"name": "exitpack.write", "protocol": "openid-connect"},
-    {"name": "drill.approve", "protocol": "openid-connect"}
+    {"name": "drill.approve", "protocol": "openid-connect"},
+    {
+      "name": "saoaf-control-plane-audience",
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "saoaf-control-plane-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "saoaf-control-plane",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    }
   ],
   "clients": [
+    {
+      "clientId": "saoaf-control-plane",
+      "name": "SAOAF control-plane API audience",
+      "enabled": true,
+      "bearerOnly": true
+    },
     {
       "clientId": "saoaf-local-pkce",
       "name": "SAOAF local PKCE client",
@@ -42,7 +68,17 @@
       "attributes": {
         "pkce.code.challenge.method": "S256"
       },
-      "defaultClientScopes": ["profile", "email", "resource.read"]
+      "defaultClientScopes": ["profile", "email", "resource.read", "saoaf-control-plane-audience"]
+    }
+  ],
+  "requiredActions": [
+    {
+      "alias": "CONFIGURE_TOTP",
+      "name": "Configure OTP",
+      "providerId": "CONFIGURE_TOTP",
+      "enabled": true,
+      "defaultAction": true,
+      "priority": 10
     }
   ]
 }

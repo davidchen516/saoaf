@@ -7,7 +7,11 @@ This local-only stack provides a real OIDC provider and an AuthZEN-compatible co
 3. Open `http://127.0.0.1:8080`, select realm `saoaf-dev`, and create temporary test users and role mappings.
 4. Use discovery at `http://127.0.0.1:8080/realms/saoaf-dev/.well-known/openid-configuration`.
 5. Send AuthZEN evaluations to `http://127.0.0.1:4010/access/v1/evaluation` with a UUID `X-Request-ID`. Use `Prefer: example=deny` to select the deny example when supported by the Prism client path.
+6. Create and read approval requests through `http://127.0.0.1:4011/approvals/v1/requests`.
+7. Run `mocks/identity/workload/generate-test-svid.sh` to create an ephemeral test CA and workload certificate outside Git tracking.
 
 The Keycloak client `saoaf-local-pkce` accepts only `http://127.0.0.1:3000/callback`, requires Authorization Code + PKCE `S256`, and disables implicit and password grants. Production browser access uses a BFF and secure session cookie as defined in the design document.
 
 Prism validates and returns contract examples; it does not authenticate the PDP caller. Production must authenticate that channel and fail closed when the PDP is unavailable or returns an invalid response.
+
+The mock issuer is `http://127.0.0.1:8080/realms/saoaf-dev`; access tokens include audience `saoaf-control-plane`. New users must configure TOTP. The generated workload certificate uses URI SAN `spiffe://saoaf.test/ns/default/sa/resource-resolver`; it tests parsing and mTLS wiring, not SPIRE node/workload attestation.

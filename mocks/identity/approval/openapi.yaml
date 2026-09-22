@@ -1,0 +1,115 @@
+openapi: 3.1.0
+info:
+  title: SAOAF Approval Mock
+  version: 1.0.0
+servers:
+  - url: http://127.0.0.1:4011
+paths:
+  /approvals/v1/requests:
+    post:
+      operationId: createApprovalRequest
+      parameters:
+        - {$ref: '#/components/parameters/RequestId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ApprovalRequest'}
+            example:
+              action: resource.publish
+              resource_ref: binding:mmr-default
+              requester_ref: user:alice
+              tenant_ref: tenant:demo
+              object_digest: sha256:mock
+              expires_at: '2026-09-23T00:00:00Z'
+      responses:
+        '202':
+          description: Approval request accepted
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ApprovalDecision'}
+              example: {approval_ref: 'approval:mock-1001', status: PENDING, requester_ref: 'user:alice'}
+        '400': {description: Invalid or self-approval request}
+  /approvals/v1/requests/{approval_ref}:
+    get:
+      operationId: getApprovalRequest
+      parameters:
+        - {$ref: '#/components/parameters/RequestId'}
+        - name: approval_ref
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Current approval status
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ApprovalDecision'}
+              examples:
+                approved:
+                  value: {approval_ref: 'approval:mock-1001', status: APPROVED, requester_ref: 'user:alice', approver_refs: ['user:bob'], decided_at: '2026-09-22T10:00:00Z', object_digest: 'sha256:mock'}
+                denied:
+                  value: {approval_ref: 'approval:mock-1001', status: DENIED, requester_ref: 'user:alice', approver_refs: ['user:bob'], decided_at: '2026-09-22T10:00:00Z', object_digest: 'sha256:mock'}
+        '404': {description: Unknown approval reference}
+  /approvals/v1/requests/{approval_ref}/decisions:
+    post:
+      operationId: decideApprovalRequest
+      description: The real implementation must reject self-approval and stale object digests.
+      parameters:
+        - {$ref: '#/components/parameters/RequestId'}
+        - name: approval_ref
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision, approver_ref, object_digest]
+              properties:
+                decision: {type: string, enum: [APPROVED, DENIED]}
+                approver_ref: {type: string}
+                object_digest: {type: string, pattern: '^sha256:'}
+                reason: {type: string, maxLength: 1000}
+              additionalProperties: false
+            example: {decision: APPROVED, approver_ref: 'user:bob', object_digest: 'sha256:mock'}
+      responses:
+        '200':
+          description: Approval decision recorded
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ApprovalDecision'}
+              example: {approval_ref: 'approval:mock-1001', status: APPROVED, requester_ref: 'user:alice', approver_refs: ['user:bob'], decided_at: '2026-09-22T10:00:00Z', object_digest: 'sha256:mock'}
+        '409': {description: Self-approval, expired request, digest mismatch, or already final}
+components:
+  parameters:
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: true
+      schema: {type: string, format: uuid}
+  schemas:
+    ApprovalRequest:
+      type: object
+      required: [action, resource_ref, requester_ref, tenant_ref, object_digest, expires_at]
+      properties:
+        action: {type: string}
+        resource_ref: {type: string}
+        requester_ref: {type: string}
+        tenant_ref: {type: string}
+        object_digest: {type: string, pattern: '^sha256:'}
+        expires_at: {type: string, format: date-time}
+      additionalProperties: false
+    ApprovalDecision:
+      type: object
+      required: [approval_ref, status, requester_ref]
+      properties:
+        approval_ref: {type: string}
+        status: {type: string, enum: [PENDING, APPROVED, DENIED, EXPIRED, REVOKED]}
+        requester_ref: {type: string}
+        approver_refs: {type: array, items: {type: string}, uniqueItems: true}
+        decided_at: {type: string, format: date-time}
+        object_digest: {type: string}
+      additionalProperties: false

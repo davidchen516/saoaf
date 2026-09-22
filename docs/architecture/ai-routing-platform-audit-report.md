@@ -5,7 +5,7 @@ status: reviewed
 owner: AI 架构交付
 created: 2026-09-21
 updated: 2026-09-21
-classification: internal
+classification: public
 scope:
   - ../programs/03-sovereign-ai-open-ai-fabric/architecture.md
   - ../programs/03-sovereign-ai-open-ai-fabric/module-contracts.md
@@ -59,7 +59,8 @@ scope:
 | 类别 | 结论 | 审计意见 |
 |---|---|---|
 | 主路径 | Go、PostgreSQL、pgx/sqlc、OpenAPI/JSON Schema、CloudEvents、CEL-Go、OpenTelemetry；运行平台复用 MMR | 成熟、可替换，未侵入领域权威边界 |
-| 可选 | Backstage、OPA、Kafka/NATS、Valkey、Temporal、CloudNativePG | 均设置业务/规模准入条件，不作无依据的 Day-1 依赖 |
+| 已选 MVP 基础设施 | CloudNativePG、NATS JetStream、Prism | 版本、职责、Mock 和退出条件已固化 |
+| 可选 | Backstage、OPA、Kafka、Valkey、Temporal、Microcks | 均设置业务/规模准入条件，不作无依据的 Day-1 依赖 |
 | 实验 | xRegistry | 规范和实现仍需稳定性/兼容 PoC，当前不承载生产 SoT |
 | 自研 | Binding、Resolver、Plan、Snapshot adapters | 属于项目特有且代码面小，已通过端口隔离 |
 | 否决 | 新模型网关、Consul Runtime Registry、工作流/规则引擎、搜索/图/向量库 | 有明确边界、许可证、复杂度或能力不匹配理由 |
@@ -70,14 +71,14 @@ scope:
 |---|---|---|
 | A-01 | 确认采用 Go 主路径或触发 Java 覆盖规则 | MMR 代码库、公共 SDK、团队能力与流水线盘点 |
 | A-02 | MMR profile/Snapshot 具体 Schema | MMR 现有别名、版本和变更流程 |
-| A-03 | 生产容量与缓存参数 | QPS、对象规模、工厂/区域数量、压测 |
-| A-04 | 保留期和灾备等级 | 合规政策、业务 RTO/RPO 签字 |
-| A-05 | IAM、审批和 break-glass 集成 | 企业 IAM/PDP/ITSM 当前接口 |
+| CLOSED-03 | MVP 容量与缓存参数 | 已固定 100 QPS、对象规模、租户和单地域基线；仍需压测验收 |
+| CLOSED-04 | MVP 保留期和灾备等级 | 已固定保留期、RTO/RPO 和 WORM 准入门槛 |
+| CLOSED-05 | IAM、审批和 workload identity Mock | 已固定 Keycloak、AuthZEN、审批和短期证书契约；生产实现待替换 |
 | A-06 | Context/Tool 一期可用性 | 两个专业域的 Owner、接口和 SLO |
 
 ## 6. 评审建议
 
 1. 先评审“边界与权威”，再讨论技术组件；边界未通过时不得进入框架选型。
 2. Phase 0 必须用 MMR 真实接口完成最难链路 PoC，不能只用 Mock 得出结论。
-3. xRegistry、OPA、Kafka/NATS、Valkey、Temporal 均按门槛采用；未达门槛不进入生产依赖清单。
+3. xRegistry、OPA、Kafka、Valkey、Temporal、Microcks 均按门槛采用；未达门槛不进入生产依赖清单。
 4. 架构批准后，把 OpenAPI、JSON Schema、数据库 migration 和联合契约测试纳入同一版本库并设置 breaking-change 门禁。

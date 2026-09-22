@@ -11,7 +11,7 @@ reviewers:
   - TODO-Identity-Trust负责人
 created: 2026-09-21
 updated: 2026-09-21
-classification: internal
+classification: public
 related:
   - ./architecture.md
   - ./development-plan.md

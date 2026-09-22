@@ -11,7 +11,7 @@ reviewers:
   - TODO-Decision-Learning负责人
 created: 2026-09-21
 updated: 2026-09-21
-classification: internal
+classification: public
 source_context: 27年技术架构战略规划会话
 related:
   - ./module-contracts.md

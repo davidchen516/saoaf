@@ -5,7 +5,7 @@ status: draft
 created: 2026-09-16
 updated: 2026-09-21
 owner: 企业 AI 架构委员会（建议）
-classification: internal
+classification: public
 related:
   - ../programs/03-sovereign-ai-open-ai-fabric/architecture.md
   - ../programs/03-sovereign-ai-open-ai-fabric/module-contracts.md

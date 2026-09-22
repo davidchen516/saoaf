@@ -9,7 +9,7 @@ reviewers:
   - TODO-SRE负责人
 created: 2026-09-21
 updated: 2026-09-21
-classification: internal
+classification: public
 related:
   - ../architecture/ai-routing-platform-4a.md
   - ./resource-resolver-api.md
@@ -174,21 +174,22 @@ CloudEvents context attributes 不放敏感信息；`tenantref` 如属敏感标�
 
 | 数据 | 默认保留 | 删除方式 | 说明 |
 |---|---:|---|---|
-| Capability/Provider/Binding revision | 全生命周期 + 2 年 | 归档后受控清理 | `TODO-合规确认` |
-| Provider Snapshot | 90 天 | 分区/批次清理 | 保留被审计 Plan 引用的 digest 元数据 |
-| Resource Plan/Item | 90 天 | 按月分区删除 | 不含调用正文 |
-| Decision Record | 1 年 | 按月分区归档/删除 | `TODO-合规确认` |
-| Idempotency Record | 24–48 小时 | TTL worker | key 只保存 hash |
-| Change Record | 2 年 | 合规策略 | 高风险变更可能更长 |
-| Outbox Event | 发布后 7–30 天 | 分区清理 | DLQ 先闭环再清理 |
+| Capability/Provider/Binding revision | 在用全周期 + 2 年 | 到期审批后清理 | 元数据和摘要进入 Evidence Pack |
+| Provider Snapshot | 90 天在线 | 分区清理 | 被审计 Plan 引用的 digest 保留 1 年 |
+| Resource Plan/Item | 90 天在线 | 按月分区删除 | 不含调用正文；证据摘要保留 1 年 |
+| Decision Record | 1 年 | 月分区到期清理 | 每日摘要写 WORM Evidence Pack |
+| Idempotency Record | 48 小时 | TTL worker | key 只保存 hash |
+| Change Record | 2 年 | 到期审批后清理 | 高风险变更支持 legal hold |
+| Outbox Event | 发布后 14 天 | 分区清理 | DLQ 闭环后再清理；NATS 留存 7 天 |
 
 删除任务必须有速率限制、审计和 dry-run。任何法务留置要求由外部合规系统下发，ARR 只按已批准策略执行。
 
 ## 7. 备份与恢复
 
-- PostgreSQL 开启 PITR；RPO 设计值 15 分钟以内。
-- 每日自动备份，至少一份跨故障域保存；加密密钥由企业 KMS 管理。
-- 每季度恢复到隔离环境，验证 schema、行数、关键 revision 和 API smoke test。
+- PostgreSQL 18.6 由 CloudNativePG 1.30.0 管理，单地域三个实例跨三个故障域；MVP 采用异步流复制，自动 failover。
+- 开启 WAL 连续归档和 PITR；RPO 设计值不超过 5 分钟，RTO 不超过 60 分钟。
+- 每日自动 base backup，保留 35 天；WAL 保留覆盖最近 35 天。至少一份备份位于同一主权地域内的独立故障域并使用独立凭据。
+- 每月恢复到隔离环境，验证 schema、行数、关键 revision、checksum 和 API smoke test；连续三次达标后可改为每季度。
 - 恢复后先以只读模式启动，核对 active pointers 和 outbox 水位，再开放管理写。
 - Provider Snapshot 可由专业系统重新发布，但 Capability/Binding/Decision 不得只依赖重建。
 
@@ -201,4 +202,3 @@ CloudEvents context attributes 不放敏感信息；`tenantref` 如属敏感标�
 - [ ] 分区创建和清理可在不中断 Resolve 的情况下完成。
 - [ ] 备份恢复演练达到 RTO/RPO。
 - [ ] 数据扫描确认 Prohibited 字段没有落库或进入事件。
-

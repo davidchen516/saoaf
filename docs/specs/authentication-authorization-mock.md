@@ -1,11 +1,11 @@
 ---
 title: SAOAF 身份认证、登录与授权 Mock 设计
-version: 1.0.0
+version: 1.1.0
 status: proposed
 owner: TODO-安全与IAM负责人
 created: 2026-09-22
 updated: 2026-09-22
-classification: internal
+classification: public
 ---
 
 # SAOAF 身份认证、登录与授权 Mock 设计
@@ -76,8 +76,19 @@ PEP 使用 AuthZEN 的 Subject、Action、Resource、Context 模型。示例：
 | `mocks/identity/compose.yaml` | 启动 Keycloak 和 AuthZEN Prism |
 | `mocks/identity/keycloak/realm-saoaf-dev.json` | 导入 realm、scope、role 和 PKCE client；不含用户和凭据 |
 | `mocks/identity/authzen/openapi.yaml` | 可导入 Prism/Microcks 的 AuthZEN 契约及 allow/deny 示例 |
+| `mocks/identity/approval/openapi.yaml` | 审批请求、查询和批准/拒绝状态契约 |
+| `mocks/identity/workload/generate-test-svid.sh` | 运行时生成带 SPIFFE URI SAN 的短期测试证书；不提交私钥 |
 
 Mock 不预置密码。开发者在 Keycloak 管理界面创建临时用户，或通过 CI 的密钥注入机制在运行时创建；凭据不得提交到仓库。
+
+固定 Mock 参数如下：
+
+- issuer：`http://127.0.0.1:8080/realms/saoaf-dev`；
+- audience：`saoaf-control-plane`；
+- MFA：TOTP，所有新建测试用户首次登录配置；
+- workload principal：`spiffe://saoaf.test/ns/default/sa/resource-resolver`；
+- PDP：`http://127.0.0.1:4010/access/v1/evaluation`；
+- approval：`http://127.0.0.1:4011/approvals/v1/requests`。
 
 ## 5. 最小权限模型
 
@@ -106,14 +117,14 @@ Role 仅用于 Mock 演示，生产授权不能只依赖 Token 中的粗粒度�
 
 ## 7. 生产替换门槛
 
-进入生产前必须用企业事实替换 Mock：OIDC issuer/audience、注册 client、MFA/条件访问、用户与组生命周期、workload trust domain、PDP metadata/endpoint、obligation profile、审批接口、密钥轮转、撤销传播、审计保留期、RTO/RPO 和 break-glass 流程。替换只修改适配器和配置，不改变 SAOAF 的身份/授权边界。
+进入生产前必须用企业事实替换 Mock：OIDC issuer/audience、注册 client、MFA/条件访问、用户与组生命周期、workload trust domain、PDP metadata/endpoint、obligation profile、审批实现、密钥轮转、撤销传播、审计保留期、RTO/RPO 和 break-glass 流程。替换只修改适配器和配置，不改变 SAOAF 的身份/授权边界。
 
 ## 8. 开源选择记录
 
 | 候选 | 结论 | 原因与退出条件 |
 |---|---|---|
 | Keycloak 26.7.4 | 选择作 OIDC Mock | Apache-2.0、标准协议完整、可导入 realm；生产仍由 04 工程选型和运维 |
-| Stoplight Prism 5.16.0 | 选择作轻量 AuthZEN Mock | Apache-2.0、直接读取 OpenAPI、启动成本低；复杂状态/测试治理成熟后可切 Microcks |
+| Stoplight Prism 5.15.10 | 选择作轻量 AuthZEN Mock | Apache-2.0、直接读取 OpenAPI、启动成本低；复杂状态/测试治理成熟后可切 Microcks |
 | Microcks 1.14.x | 保留为契约测试平台 | CNCF、Apache-2.0、能力完整，但单个 Mock 的本地依赖更重 |
 | 自写 JWT/PDP Mock | 否决 | 容易掩盖算法、issuer、audience、轮转和失败关闭问题 |
 

@@ -11,9 +11,19 @@ services:
       - ./keycloak/realm-saoaf-dev.json:/opt/keycloak/data/import/realm-saoaf-dev.json:ro
 
   authzen:
-    image: stoplight/prism:5.16.0
-    command: ["mock", "-h", "0.0.0.0", "--errors", "/contracts/openapi.yaml"]
+    image: stoplight/prism:5.15.10
+    platform: linux/amd64
+    command: ["mock", "-h", "0.0.0.0", "--errors", "--multiprocess=false", "/contracts/openapi.yaml"]
     ports:
       - "127.0.0.1:4010:4010"
     volumes:
       - ./authzen/openapi.yaml:/contracts/openapi.yaml:ro
+
+  approval:
+    image: stoplight/prism:5.15.10
+    platform: linux/amd64
+    command: ["mock", "-h", "0.0.0.0", "--errors", "--multiprocess=false", "/contracts/openapi.yaml"]
+    ports:
+      - "127.0.0.1:4011:4010"
+    volumes:
+      - ./approval/openapi.yaml:/contracts/openapi.yaml:ro

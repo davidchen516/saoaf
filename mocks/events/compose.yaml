@@ -1,0 +1,27 @@
+services:
+  nats:
+    image: nats:2.14.7-alpine
+    command: ["-c", "/etc/nats/nats.conf"]
+    ports:
+      - "127.0.0.1:4222:4222"
+      - "127.0.0.1:8222:8222"
+    volumes:
+      - ./nats.conf:/etc/nats/nats.conf:ro
+      - nats-data:/data
+
+  init-stream:
+    image: natsio/nats-box:0.19.7
+    depends_on:
+      - nats
+    restart: "no"
+    command:
+      - sh
+      - -ec
+      - >-
+        until nats server check connection -s nats://nats:4222; do sleep 1; done;
+        nats stream add -s nats://nats:4222 --config /config/stream.json
+    volumes:
+      - ./stream.json:/config/stream.json:ro
+
+volumes:
+  nats-data: {}

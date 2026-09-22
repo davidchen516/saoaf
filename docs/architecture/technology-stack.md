@@ -10,7 +10,7 @@ reviewers:
   - TODO-SRE负责人
 created: 2026-09-21
 updated: 2026-09-21
-classification: internal
+classification: public
 ---
 
 # 03 Sovereign AI & Open AI Fabric 技术栈设计
@@ -24,19 +24,19 @@ classification: internal
 | 后端语言 | **Go 1.27.x** | 默认主选；若已建成 MMR 的主语言和公共 SDK 是 Java，则按第 4 节覆盖规则切换为 Java |
 | 后端架构 | 模块化单体，API 与 Worker 两个进程形态 | 03.1/03.2 最小能力、03.3、03.8 同仓同版本，模块间禁止跨边界直接写表 |
 | HTTP API | Go `net/http` + `chi` + `oapi-codegen` | OpenAPI 3.1 contract-first；生成 DTO、Server interface 和客户端，领域模型保持自有 |
-| 权威数据库 | **PostgreSQL 18.x** | 保存 Policy、Capability、Provider、Binding、Plan、Evidence Index、Exit Pack、Drill、Outbox |
+| 权威数据库 | **PostgreSQL 18.6 + CloudNativePG 1.30.0** | 三实例单地域 HA；保存 Policy、Capability、Provider、Binding、Plan、Evidence Index、Exit Pack、Drill、Outbox |
 | 数据访问 | `pgx/v5` + `sqlc` | SQL-first、强类型生成；不引入重量 ORM 和隐式查询行为 |
 | 数据库迁移 | `goose` | 单向可审查迁移；扩展/迁移/收缩分阶段执行 |
 | 约束表达 | **CEL-Go** | 只承载类型化、无副作用的 eligibility 表达式；策略语义、版本和审批仍由本项目持有 |
 | 事件可靠性 | PostgreSQL Transactional Outbox | 与领域状态同事务；内部 Worker 负责投递和重试 |
-| 外部事件总线 | 复用企业现有 Kafka/NATS；参考部署用 NATS JetStream | 通过 `EventTransport` 端口隔离；本项目不建设企业消息平台 |
+| 外部事件总线 | **NATS JetStream 2.14.7** | MVP 固定；通过 `EventTransport` 端口隔离，at-least-once + 消费者去重 |
 | 缓存 | 进程内不可变 Published Snapshot | Resolve 热路径不逐次访问数据库；不在一期引入分布式缓存 |
 | 可观测 | OpenTelemetry SDK + Collector | 复用企业观测后端，统一关联 `trace_id/resource_plan_id/model_route_decision_id` |
 | 身份 | 企业 OIDC/OAuth 2.1 + workload mTLS | 复用 04 Identity & Trust；Keycloak 仅作为开源参考环境 |
 | MMR 决策核心 | **vLLM Semantic Router** | 既有 MMR 的主要开源实现；SAOAF 只集成稳定 logical profile 和 decision evidence，不部署第二套模型路由 |
 | 管理前端 | TypeScript + React 19 + Ant Design 6/ProComponents | Resource Hub、Evidence、Exit Pack、Drill 和风险视图 |
-| 接口 Mock/测试 | Microcks + Testcontainers + Schemathesis | 03.5/03.6/03.7 只生成 Mock、Stub 与契约测试，不建设运行时 |
-| 部署 | OCI Image + Kubernetes/Helm | 复用 MMR/企业平台；数据库已有托管能力优先，否则评估 CloudNativePG |
+| 接口 Mock/测试 | Prism 5.15.10 + Testcontainers + Schemathesis | Phase 0 本地 Mock；契约治理扩大后采用 Microcks |
+| 部署 | OCI Image + Kubernetes/Helm | 复用 MMR/企业平台；MVP 数据库使用 CloudNativePG |
 | 供应链 | Trivy + Syft/CycloneDX + Cosign | 漏洞/许可证扫描、SBOM、镜像签名和 digest 准入 |
 
 **不选择“大而全 AI 平台框架”作为本项目基础。** 本项目是主权控制面，不处理模型 Prompt、工具参数、Agent 消息或推理流量。模型路由继续由既有 MMR 负责。
@@ -257,6 +257,8 @@ Microcks 当前支持 OpenAPI、AsyncAPI、gRPC 等 Mock 和一致性测试，�
 | 组件 | 责任 | 许可证 | 二次开发策略 | 替换条件 |
 |---|---|---|---|---|
 | PostgreSQL 18 | 权威状态与 Outbox | PostgreSQL License | Schema、索引、RLS/审计约束 | 企业数据库标准变化或容量 PoC 不通过 |
+| CloudNativePG 1.30.0 | PostgreSQL HA、failover、备份恢复 | Apache-2.0 | 使用标准 CRD 和 Barman Cloud Plugin，不 fork | 切换企业托管 PostgreSQL |
+| NATS JetStream 2.14.7 | MVP EventTransport | Apache-2.0 | CloudEvents、subject 权限、消费者幂等 | 吞吐/长期 replay 或企业 Kafka 标准触发 ADR |
 | pgx | PostgreSQL Driver/Pool | MIT | 仅封装 Repository port | 维护停滞或安全/兼容性问题 |
 | sqlc | SQL 类型生成 | MIT | 自定义 query，不修改生成器 | 生成限制阻碍领域模型或版本不兼容 |
 | chi | HTTP routing | MIT | 组合标准中间件，不 fork | MMR 已有等价 Go 框架 |
@@ -264,17 +266,16 @@ Microcks 当前支持 OpenAPI、AsyncAPI、gRPC 等 Mock 和一致性测试，�
 | CEL-Go | 类型化约束表达 | Apache-2.0 | 注册受控变量/函数，不 fork | 规则无需配置则退回纯 Go；复杂 PDP 交给 04/OPA |
 | OpenTelemetry | Telemetry/OTLP | Apache-2.0 | 只增加 SAOAF semantic attributes | 企业标准变更但保留 OTel export |
 | vLLM Semantic Router | MMR 的 Mixture-of-Models 决策层 | Apache-2.0 | 由既有 MMR 锁定上游版本并维护企业薄 adapter；SAOAF 不 fork | MMR 项目证明上游安全、性能、协议或运维不再满足要求，并完成替代 PoC |
-| Microcks | Mock/Conformance | Apache-2.0 | 加载本项目契约和示例，不 fork | 协议覆盖不足或运维成本过高 |
+| Prism 5.15.10 | 轻量 OpenAPI Mock | Apache-2.0 | 单进程加载本项目契约，不 fork | 契约治理扩大后迁移 Microcks |
 | React/Ant Design | 管理 UI | MIT | 自有页面和领域组件 | 企业门户标准变化 |
 
 ### 10.2 可选组件与采用门槛
 
 | 组件 | 状态 | 采用门槛 |
 |---|---|---|
-| NATS JetStream | 参考 EventTransport | 企业无标准总线，且需要跨进程 durable event、重放和较低运维成本；需持续监控项目治理和许可证 |
 | Apache Kafka | 企业总线适配 | 企业已有 Kafka，或消费者规模、保留期和重放需求证明值得复用 |
 | Valkey | 二期缓存 | Snapshot 内存缓存和 PostgreSQL 保护经压测不满足目标；只缓存可重建数据 |
-| CloudNativePG | PostgreSQL K8s 运维 | 企业没有托管 PostgreSQL，且 SRE 接受 Operator 生命周期和恢复演练责任 |
+| Microcks | 契约治理平台 | 多团队需要集中 Mock、异步契约和持续兼容性测试时采用 |
 | Backstage | Resource Hub 投影 | 企业已有 Backstage；只读，不作 SoT |
 | xRegistry | 实验适配 | 当前为 CNCF Sandbox、规范 v1.0 RC；稳定版发布并通过语义/性能/迁移 PoC 后再进入主路径 |
 | OPA | 外部 PDP | 由 04 工程持有；复杂跨系统策略达到门槛，ARR 只消费决定 |
@@ -378,16 +379,11 @@ saoaf/
 - **限制**：它不替代企业 Gateway、模型 Serving、GPU 调度、IAM/PDP 或 SAOAF 的跨域 Capability/Resource Plan。
 - **退出条件**：上游安全、性能、协议或运维经 PoC 无法满足要求，或 MMR 已验证的替代实现能保持相同 logical profile 与 decision evidence 契约。
 
-## 14. 实现前待确认项
+## 14. Phase 0 技术基线与剩余输入
 
-1. MMR 当前 vLLM Semantic Router 版本/tag/digest、fork 差异、Envoy/ExtProc 拓扑、entrypoint/recipe、API/流式协议、认证、服务发现、OTel 和 CI/CD 基线；
-2. 企业现有消息平台是 Kafka、NATS、Pulsar 还是无统一平台；
-3. 企业 PostgreSQL 当前支持版本、HA、备份和 K8s 运维方式；
-4. 04 Identity & Trust 的生产 OIDC issuer、scope、workload identity、AuthZEN PDP endpoint 和审批接口；本地/CI Mock 基线已由 Keycloak + Prism 固化；
-5. Evidence 与审计数据的保留期、WORM/不可篡改要求及对象存储能力；
-6. Resolve 的 QPS、P99、可用性和单租户/多租户目标。
+已固定：PostgreSQL 18.6 + CloudNativePG 1.30.0、NATS JetStream 2.14.7、Keycloak/Prism 身份与授权 Mock、100 QPS/P99 100 ms/99.9% 的单地域逻辑多租户基线，以及 Evidence/WORM 保留要求。完整参数见 [Phase 0 最小 MVP 基线](./mvp-baseline.md)。
 
-在以上信息确认前，可以按 Go 主路径完成代码骨架和 PoC，但不得冻结生产版本号、连接池、分区、保留期和容量参数。
+仍需外部输入：真实 MMR 镜像 digest/fork/endpoint、生产企业 IdP/PDP/审批实现，以及通过不可删除测试的 S3 Object Lock 产品。这些输入不阻塞 Mock 和应用骨架，但阻塞真实联调或生产准入。
 
 ## 15. 主要参考
 
