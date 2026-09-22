@@ -101,7 +101,6 @@ jobs:
       - name: gosec
         run: |
           go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
-          gosec -no-fail -severity high -confidence high -quiet ./...
           gosec -severity high -confidence high -quiet ./...
 
   sca-secret-sbom:
@@ -117,11 +116,13 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
           govulncheck ./...
       - name: secret scan (gitleaks, full history)
-        uses: gitleaks/gitleaks-action@ff98106e4c144b3433531b4f393f336d4d0af3b5
+        # gitleaks-action@v2 — commit SHA verified via git ref API
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: SBOM (syft, digest-tied)
-        uses: anchore/sbom-action@f8b1f0ad7ded37eb98e7c21dc1d1c9218d1dd4ee
+        # anchore/sbom-action@v0.24.2 — commit SHA verified via git ref API
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
         with:
           format: cyclonedx-json
           artifact-type: directory

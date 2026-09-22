@@ -74,9 +74,16 @@ func main() {
 	if len(os.Args) > 1 {
 		root = os.Args[1]
 	}
+	// The root is an operator-supplied CI argument, not request input; still,
+	// require it to be an existing directory so misuse fails fast instead of
+	// probing arbitrary paths.
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		fmt.Fprintf(os.Stderr, "root %q is not an existing directory\n", root)
+		os.Exit(2)
+	}
 	var problems []string
 
-	goAllow, err := loadAllowlist(filepath.Join(root, "tools", "licensecheck", "allow-go.txt"))
+	goAllow, err := loadAllowlist(filepath.Join(root, "tools", "licensecheck", "allow-go.txt")) // #nosec G703 -- operator-controlled CI argument, validated as directory above; not request input
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load go allowlist: %v\n", err)
 		os.Exit(2)
@@ -97,12 +104,12 @@ func main() {
 		}
 	}
 
-	npmAllow, err := loadAllowlist(filepath.Join(root, "tools", "licensecheck", "allow-npm.txt"))
+	npmAllow, err := loadAllowlist(filepath.Join(root, "tools", "licensecheck", "allow-npm.txt")) // #nosec G703 -- operator-controlled CI argument, validated as directory above
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load npm allowlist: %v\n", err)
 		os.Exit(2)
 	}
-	pjRaw, err := os.ReadFile(filepath.Join(root, "web", "package.json"))
+	pjRaw, err := os.ReadFile(filepath.Join(root, "web", "package.json")) // #nosec G703 -- operator-controlled CI argument, validated as directory above
 	if err == nil {
 		var pj packageJSON
 		if err := json.Unmarshal(pjRaw, &pj); err == nil {
