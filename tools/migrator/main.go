@@ -24,8 +24,9 @@ import (
 const lockKey = 781927001
 
 // goosePathPattern restricts the goose binary path to plain path
-// characters (letters, digits, dot, slash, dash, underscore).
-var goosePathPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9./_-]*$`)
+// characters (letters, digits, dot, slash, dash, underscore); absolute
+// paths are expected (leading slash allowed).
+var goosePathPattern = regexp.MustCompile(`^[A-Za-z0-9/][A-Za-z0-9./_-]*$`)
 
 func main() {
 	dsn := flag.String("dsn", "", "postgres DSN (required)")

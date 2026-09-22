@@ -271,8 +271,12 @@ func TestConcurrentRunnersSingleLock(t *testing.T) {
 	// lock 781927001) twice concurrently against a fresh database; exactly
 	// one must succeed, the other must exit with the lock error, and the
 	// final schema must be fully applied.
+	// Build the migrator binary in the TEST GOROUTINE — t.Fatalf inside a
+	// spawned goroutine is undefined behavior and hangs the suite on hosts
+	// without a prebuilt binary (CI: gitignored build outputs).
+	bin := migratorBin(t)
 	runMigrator := func() (string, int) {
-		cmd := exec.Command(migratorBin(t), "-dsn", db, "-dir", ".", "up")
+		cmd := exec.Command(bin, "-dsn", db, "-dir", ".", "up")
 		out, err := cmd.CombinedOutput()
 		code := 0
 		if err != nil {
@@ -319,11 +323,13 @@ func migratorBin(t *testing.T) string {
 	t.Helper()
 	wd, _ := os.Getwd()
 	p := filepath.Join(wd, "..", "tools", "migrator", "migrator")
-	if _, err := os.Stat(p); err == nil {
-		return p
+	// always rebuild: a stale on-disk binary must not shadow the current
+	// source (cwd = migrations package dir)
+	out, err := exec.Command("go", "build", "-o", p, filepath.Join("..", "tools", "migrator")).CombinedOutput()
+	if err != nil {
+		t.Fatalf("build migrator: %v\n%s", err, out)
 	}
-	t.Fatalf("migrator binary not built at %s (run: go build -o tools/migrator ./tools/migrator)", p)
-	return ""
+	return p
 }
 
 func goRunAsync(t *testing.T, fn func() (string, int)) func() (string, int) {
