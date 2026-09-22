@@ -28,7 +28,7 @@ X Pull request davidchen516/saoaf#29 is not mergeable: the base branch policy pr
 mergeStateStatus: BLOCKED
 ```
 
-## ③ 未白名单依赖 → license 红（PR #30，run 35713150687）
+## 补充：未白名单依赖 → license 红（PR #30，run 35713150687）
 
 注入：从 allow-go.txt 移除 chi v5（实际依赖仍在 go.mod）。结果：verify job **fail**（51s）。
 归因：`LICENSE CHECK: FAIL - go module not on allowlist: github.com/go-chi/chi/v5`。
