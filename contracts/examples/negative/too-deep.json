@@ -1,0 +1,10 @@
+{
+  "case": "too-deep",
+  "schema": "pagination.json",
+  "input": {
+    "items": [],
+    "page": { "limit": 1, "offset": 0, "total": 0, "next_offset": null }
+  },
+  "input_depth": 70,
+  "expected_error_code": "VALIDATION_PAYLOAD_TOO_DEEP"
+}

@@ -1,0 +1,11 @@
+{
+  "case": "unknown-field",
+  "schema": "error-envelope.json",
+  "input": {
+    "error_code": "NOT_FOUND",
+    "message": "x",
+    "request_id": "req-neg-0001",
+    "totally_unknown_field": "should be rejected by additionalProperties:false"
+  },
+  "expected_error_code": "VALIDATION_UNKNOWN_FIELD"
+}

@@ -1,0 +1,17 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0192-0001",
+  "source": "/saoaf/capability-registry",
+  "type": "dev.saoaf.registry.provider-snapshot-published.v1",
+  "time": "2026-09-22T00:00:00Z",
+  "subject": "prv-mmr-001",
+  "datacontenttype": "application/json",
+  "data": {
+    "provider_id": "prv-mmr-001",
+    "snapshot_version": "snap-0042",
+    "aggregate_revision": 42,
+    "summary": { "profiles": 1, "digest": "sha256:2f7d1e0a" }
+  },
+  "x-saoaf-tenant-ref": "tenant-mock-alpha",
+  "x-saoaf-aggregate-revision": 42
+}

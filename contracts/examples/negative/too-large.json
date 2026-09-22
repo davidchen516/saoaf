@@ -1,0 +1,12 @@
+{
+  "case": "too-large",
+  "schema": "error-envelope.json",
+  "input": {
+    "error_code": "NOT_FOUND",
+    "message": "填充至超过 1 MiB 上限的消息",
+    "request_id": "req-neg-0003",
+    "padding": "@pad@"
+  },
+  "pad_to_bytes": 1048577,
+  "expected_error_code": "VALIDATION_PAYLOAD_TOO_LARGE"
+}

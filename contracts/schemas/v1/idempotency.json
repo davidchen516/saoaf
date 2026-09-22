@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.saoaf.dev/schemas/v1/idempotency.json",
+  "title": "幂等语义约定",
+  "description": "幂等键的取值与生命周期约束。重复提交（同 key 同请求体）返回原结果；同 key 不同请求体返回 CONFLICT。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["idempotency_key", "first_seen_at"],
+  "properties": {
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$",
+      "description": "调用方生成的幂等键；相同 key 的重放语义由服务端保证有效一次。"
+    },
+    "first_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}
