@@ -18,3 +18,11 @@ golang.org/x/tools
 github.com/santhosh-tekuri/jsonschema/v6
 # go.yaml.in/yaml/v3 — Apache-2.0 (successor of gopkg.in/yaml.v3)
 go.yaml.in/yaml/v3
+# github.com/jackc/pgx/v5 — MIT (PostgreSQL driver)
+github.com/jackc/pgx/v5
+# github.com/jackc/pgpassfile — MIT (transitive via pgx)
+github.com/jackc/pgpassfile
+# github.com/jackc/pgservicefile — MIT (transitive via pgx)
+github.com/jackc/pgservicefile
+# golang.org/x/sync — BSD-3-Clause
+golang.org/x/sync
