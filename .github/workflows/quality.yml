@@ -28,6 +28,7 @@ jobs:
           cache: true
       - name: gofmt
         run: |
+          command -v gofmt >/dev/null || { echo "gofmt not available"; exit 1; }
           unformatted=$(gofmt -l . | grep -v '^web/' || true)
           [ -z "$unformatted" ] || { echo "gofmt needed: $unformatted"; exit 1; }
       - name: go vet
@@ -133,8 +134,8 @@ jobs:
           # invoked from a directory containing Go files (repo root has none
           # — code lives in cmd/ and internal/).
           ( cd cmd/control-plane-api && govulncheck -scan module )
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o dist/control-plane-api ./cmd/control-plane-api
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o dist/control-plane-worker ./cmd/control-plane-worker
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=0.1.0-i02" -o dist/control-plane-api ./cmd/control-plane-api
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=0.1.0-i02" -o dist/control-plane-worker ./cmd/control-plane-worker
           govulncheck -mode=binary dist/control-plane-api
           govulncheck -mode=binary dist/control-plane-worker
       - name: secret scan (gitleaks, full history)

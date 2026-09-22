@@ -38,3 +38,24 @@ mergeStateStatus: BLOCKED
 baseline-gate / mmr-fixture-replay / build·test·boundary·license / web build+npm audit /
 probes / SAST gosec / SCA·secret·SBOM / digest reproducibility —— 8 context 全部 strict 必检，
 enforce_admins=true。任一红 → BLOCKED（如上实证）。
+
+## 附录：GWT#2 负向构建夹具（错误输入 → 失败可定位）
+
+复审核查员实测（严格可逆探针），两种锁定破坏形态：
+
+```
+# go.mod 的 require 条目被移除：
+internal/platform/httpapi/health.go:11:2: no required module provides package github.com/go-chi/chi/v5; to add it:
+	go get github.com/go-chi/chi/v5
+
+# go.sum 缺失 + -mod=readonly（锁定模式）：
+internal/platform/httpapi/health.go:11:2: cannot find module providing package github.com/go-chi/chi/v5: import lookup disabled by -mod=readonly
+```
+
+两种形态均失败且错误直接定位到 import 位置与修复指引——满足 GWT#2「失败且报错可定位」。
+
+## 编号说明
+
+Issue 原文的四类红运行为 ①密钥 ②高危依赖(SCA) ③反向模块依赖 ④失败单测。
+本文档及 README 中的 license 红运行（PR #30）是**额外语义门禁**的补充取证，不占用 ③ 的编号；
+③ 的 CI 级记录见下节（NF-1 修复后补齐）。

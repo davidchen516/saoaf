@@ -7,6 +7,7 @@ cd "$(dirname "$0")/.."
 GO=${GO:-go}
 
 echo "== 1/7 gofmt =="
+command -v gofmt >/dev/null || { echo "gofmt not available"; exit 1; }
 unformatted=$(gofmt -l . | grep -v '^web/' || true)
 [ -z "$unformatted" ] || { echo "gofmt needed on: $unformatted"; exit 1; }
 echo "gofmt: clean"
