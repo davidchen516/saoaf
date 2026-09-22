@@ -5,7 +5,7 @@ Validates the machine-checkable close conditions of I01:
   1. docs/phase0/answers.md  - every mandatory question is ANSWERED (with
      evidence link, owner, date) or RISK-ACCEPTED (accepter, due date);
      P0 items may never sit in an intermediate state.
-  2. docs/phase0/adr/*.md    - accepted ADRs have valid frontmatter
+  2. docs/adr/*.md    - accepted ADRs have valid frontmatter
      (status, owner, date, supersedes chain intact).
   3. fixtures/mmr/           - profile snapshot fixture passes the schema
      rules from mocks/mmr/openapi.yaml; recorded calls carry both
@@ -20,10 +20,17 @@ Exit code 0 = gate passes; non-zero = gate fails (red run).
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from datetime import date
 from pathlib import Path
+
+# Real system clock. SAOAF_TODAY exists ONLY for test injection of a
+# simulated future date (see tests/phase0/test_baseline_check.py); CI and
+# local runs use the actual date so overdue RISK-ACCEPTED entries fail
+# the gate once their due date passes.
+TODAY = date.fromisoformat(os.environ["SAOAF_TODAY"]) if os.environ.get("SAOAF_TODAY") else date.today()
 
 REPO = Path(__file__).resolve().parents[2]
 ANSWERS = REPO / "docs" / "phase0" / "answers.md"
@@ -33,7 +40,6 @@ LICENSE_DECISION = REPO / "docs" / "phase0" / "license-decision.md"
 SNAPSHOT = FIXTURE_DIR / "profile-snapshot.json"
 CALLS = FIXTURE_DIR / "recorded-calls.json"
 
-TODAY = date.fromisoformat("2026-09-22")
 VALID_STATES = {"ANSWERED", "RISK-ACCEPTED"}
 P0_ALLOWED = {"ANSWERED", "RISK-ACCEPTED"}
 
@@ -47,7 +53,7 @@ def parse_answers(msgs: list[str]) -> int:
     if not ANSWERS.is_file():
         fail(msgs, f"missing ledger: {ANSWERS.relative_to(REPO)}")
         return 0
-    text = ANSWS = ANSWERS.read_text(encoding="utf-8")
+    text = ANSWERS.read_text(encoding="utf-8")
     rows = re.findall(
         r"^\|\s*(Q-[A-Z0-9-]+)\s*\|\s*(P0|P1|P2)\s*\|\s*([^|]+?)\s*\|\s*([A-Z-]+)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|",
         text,
@@ -57,8 +63,15 @@ def parse_answers(msgs: list[str]) -> int:
         fail(msgs, "answers ledger: no table rows parsed")
         return 0
     checked = 0
+    seen_ids: set[str] = set()
     for qid, prio, _topic, state, owner, evidence, due in rows:
         checked += 1
+        if qid in seen_ids:
+            # F6: conflicting/duplicate ledger rows must be escalated, never
+            # silently coexist (issue acceptance-logic scenario 3).
+            fail(msgs, f"{qid}: duplicate ledger row detected — conflicting answers must be escalated, not coexist")
+            continue
+        seen_ids.add(qid)
         if state not in VALID_STATES:
             fail(msgs, f"{qid}: intermediate/invalid state '{state}' (must be ANSWERED or RISK-ACCEPTED)")
             continue
@@ -88,6 +101,7 @@ def check_adrs(msgs: list[str]) -> int:
         fail(msgs, "no accepted ADRs found in docs/adr")
         return 0
     seen: dict[str, str] = {}
+    stems: set[str] = set()
     count = 0
     for f in files:
         count += 1
@@ -97,20 +111,59 @@ def check_adrs(msgs: list[str]) -> int:
             fail(msgs, f"{f.name}: missing frontmatter")
             continue
         fields = dict(
-            re.findall(r"^(\w+):\s*(.+)$", fm.group(1), re.MULTILINE)
+            re.findall(r"^([\w-]+):\s*(.+)$", fm.group(1), re.MULTILINE)
         )
-        if fields.get("status") != "accepted":
-            fail(msgs, f"{f.name}: status '{fields.get('status')}' not accepted")
+        # F2 guard: every relative link in every ADR must resolve on disk.
+        for m in re.finditer(r"\]\(([^)#http][^)]*)\)", text):
+            link = m.group(1).strip()
+            if link.startswith("http") or link.startswith("#"):
+                continue
+            target = (f.parent / link.split("#")[0]).resolve()
+            if not target.exists():
+                fail(msgs, f"{f.name}: broken relative link '{link}'")
+        if fields.get("status") not in {"accepted", "superseded"}:
+            fail(msgs, f"{f.name}: status '{fields.get('status')}' not accepted/superseded")
         if not fields.get("owner") or fields.get("owner") in {"TODO", "TBD"}:
             fail(msgs, f"{f.name}: missing owner")
         if not re.match(r"^\d{4}-\d{2}-\d{2}$", fields.get("decided", "")):
             fail(msgs, f"{f.name}: missing decided date")
+        if fields.get("status") == "superseded":
+            # F3: a superseded ADR must point at an existing successor via
+            # 'superseded-by' (ADR lifecycle ACCEPTED -> SUPERSEDED per the
+            # issue's acceptance logic scenario 6).
+            succ = fields.get("superseded-by", "").strip()
+            if not succ:
+                fail(msgs, f"{f.name}: superseded without 'superseded-by' successor")
+            else:
+                succ_file = f.parent / (succ + ".md")
+                if not succ_file.exists():
+                    fail(msgs, f"{f.name}: superseded-by '{succ}' has no ADR file")
         sup = fields.get("supersedes")
         if sup and sup != "-":
             for target in [s.strip() for s in sup.split(",")]:
-                if target and target not in seen:
+                if target and target not in stems:
                     fail(msgs, f"{f.name}: supersedes unknown/forward ADR '{target}'")
-        seen[f.stem] = fields.get("status", "")
+        stems.add(f.stem)
+    # F3 second pass: every superseded-by must be acknowledged by the
+    # successor's supersedes (bidirectional chain integrity).
+    by_stem = {f.stem: f for f in files}
+    for f in files:
+        text = f.read_text(encoding="utf-8")
+        fm = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
+        if not fm:
+            continue
+        fields = dict(re.findall(r"^([\w-]+):\s*(.+)$", fm.group(1), re.MULTILINE))
+        succ = fields.get("superseded-by", "").strip()
+        if fields.get("status") == "superseded" and succ:
+            succ_fields: dict[str, str] = {}
+            succ_file = f.parent / (succ + ".md")
+            if succ_file.exists():
+                sfm = re.match(r"^---\n(.*?)\n---\n", succ_file.read_text(encoding="utf-8"), re.DOTALL)
+                if sfm:
+                    succ_fields = dict(re.findall(r"^([\w-]+):\s*(.+)$", sfm.group(1), re.MULTILINE))
+            back = succ_fields.get("supersedes", "")
+            if f.stem not in [s.strip() for s in back.split(",") if s.strip()]:
+                fail(msgs, f"{f.name}: successor '{succ}' does not list it in 'supersedes'")
     return count
 
 
@@ -178,7 +231,7 @@ def check_license(msgs: list[str]) -> None:
     if not fm:
         fail(msgs, "license-decision.md: missing frontmatter")
         return
-    fields = dict(re.findall(r"^(\w+):\s*(.+)$", fm.group(1), re.MULTILINE))
+    fields = dict(re.findall(r"^([\w-]+):\s*(.+)$", fm.group(1), re.MULTILINE))
     if fields.get("decision") not in {"granted", "deferred", "rejected"}:
         fail(msgs, "license-decision.md: decision must be granted|deferred|rejected")
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", fields.get("decided", "")):
