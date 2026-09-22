@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -27,7 +26,7 @@ type goModule struct {
 }
 
 func loadAllowlist(path string) (map[string]bool, error) {
-	f, err := os.Open(path) // #nosec G703 -- path is built from the operator-supplied repo root, validated as an existing directory in main; this is a CI gate binary, not a service handling request input
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
@@ -69,21 +68,20 @@ type packageJSON struct {
 	DevDependencies map[string]string `json:"devDependencies"`
 }
 
+// Paths are module-root relative constants: the tool is invoked from the
+// repository root (CI: go run ./tools/licensecheck). No runtime path input
+// exists, so there is no path-traversal surface (gosec G703 stays clean
+// without suppressions).
+const (
+	goAllowlistPath  = "tools/licensecheck/allow-go.txt"
+	npmAllowlistPath = "tools/licensecheck/allow-npm.txt"
+	webPkgPath       = "web/package.json"
+)
+
 func main() {
-	root := "."
-	if len(os.Args) > 1 {
-		root = os.Args[1]
-	}
-	// The root is an operator-supplied CI argument, not request input; still,
-	// require it to be an existing directory so misuse fails fast instead of
-	// probing arbitrary paths.
-	if info, err := os.Stat(root); err != nil || !info.IsDir() {
-		fmt.Fprintf(os.Stderr, "root %q is not an existing directory\n", root)
-		os.Exit(2)
-	}
 	var problems []string
 
-	goAllow, err := loadAllowlist(filepath.Join(root, "tools", "licensecheck", "allow-go.txt")) // #nosec G703 -- operator-controlled CI argument, validated as directory above; not request input
+	goAllow, err := loadAllowlist(goAllowlistPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load go allowlist: %v\n", err)
 		os.Exit(2)
@@ -104,12 +102,12 @@ func main() {
 		}
 	}
 
-	npmAllow, err := loadAllowlist(filepath.Join(root, "tools", "licensecheck", "allow-npm.txt")) // #nosec G703 -- operator-controlled CI argument, validated as directory above
+	npmAllow, err := loadAllowlist(npmAllowlistPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load npm allowlist: %v\n", err)
 		os.Exit(2)
 	}
-	pjRaw, err := os.ReadFile(filepath.Join(root, "web", "package.json")) // #nosec G703 -- operator-controlled CI argument, validated as directory above
+	pjRaw, err := os.ReadFile(webPkgPath)
 	if err == nil {
 		var pj packageJSON
 		if err := json.Unmarshal(pjRaw, &pj); err == nil {
