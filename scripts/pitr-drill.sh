@@ -64,9 +64,11 @@ rm -rf "$WORK/recovery"; mkdir -p "$WORK/recovery"
 # docker cp places the source dir inside the target when it pre-exists
 SRC="$WORK/base"; [ -d "$SRC/basebackup" ] && SRC="$SRC/basebackup"
 cp -a "$SRC/." "$WORK/recovery/"
-# the container's postgres (uid 999) must read the backup: the copied
-# files keep the host owner's 0600; open them up (drill-only dir under /tmp)
-chmod -R 0777 "$WORK/recovery"
+# the container's postgres (uid 999) must own and read the data dir; on
+# Linux bind mounts keep the host uid, and the entrypoint chmods PGDATA
+# to 0700, so chown to 999 from inside a root container (portable across
+# macOS Docker Desktop and Linux CI runners).
+docker run --rm -v "$WORK/recovery:/d" alpine:3.22 chown -R 999:999 /d >/dev/null
 touch "$WORK/recovery/recovery.signal"
 cat >> "$WORK/recovery/postgresql.auto.conf" <<EOF
 restore_command = 'cp /archive/%f %p'
@@ -82,6 +84,12 @@ docker run -d --name saoaf-pitr-recover \
   -p 127.0.0.1:${PORT_RECOVER}:5432 \
   postgres:18.6 >/dev/null
 for i in $(seq 1 60); do docker exec saoaf-pitr-recover pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done
+if ! docker exec saoaf-pitr-recover pg_isready -U postgres >/dev/null 2>&1; then
+  echo "recovery container failed to become ready; logs:"
+  docker logs saoaf-pitr-recover 2>&1 | tail -25
+  echo "PITR DRILL: FAIL"
+  exit 1
+fi
 
 echo "== 7/7 PITR 核对清单 =="
 psql_rec() { docker exec -i saoaf-pitr-recover psql -U postgres -d postgres -qtA; }

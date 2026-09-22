@@ -1,11 +1,11 @@
 == 1/7 start primary with WAL archiving ==
 == 2/7 apply migrations + T0 baseline rows ==
-2026/09/22 23:49:59 OK   00001_foundation.sql (10.33ms)
-2026/09/22 23:49:59 OK   00002_outbox_checkpoint.sql (3.01ms)
-2026/09/22 23:49:59 goose: successfully migrated database to version: 2
+2026/09/22 23:58:59 OK   00001_foundation.sql (10.47ms)
+2026/09/22 23:58:59 OK   00002_outbox_checkpoint.sql (3.13ms)
+2026/09/22 23:58:59 goose: successfully migrated database to version: 2
 == 3/7 pg_basebackup (T0 snapshot) ==
 == 4/7 T1 rows (WAL-only, the PITR target) ==
-recovery target time: 2026-09-22 15:50:00.570899+00
+recovery target time: 2026-09-22 15:59:00.164006+00
 == 5/7 DISASTER: drop the audit tables (cascade) ==
 NOTICE:  drop cascades to constraint outbox_event_change_record_id_fkey on table saoaf.outbox_event
 ERROR:  relation "saoaf.change_record" does not exist

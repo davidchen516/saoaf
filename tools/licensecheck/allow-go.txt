@@ -26,3 +26,19 @@ github.com/jackc/pgpassfile
 github.com/jackc/pgservicefile
 # golang.org/x/sync — BSD-3-Clause
 golang.org/x/sync
+# github.com/jackc/puddle/v2 — MIT (pgx pool, transitive)
+github.com/jackc/puddle/v2
+# github.com/davecgh/go-spew — ISC (goose CLI test dep)
+github.com/davecgh/go-spew
+# github.com/kr/pretty — MIT
+github.com/kr/pretty
+# github.com/pmezard/go-difflib — MIT
+github.com/pmezard/go-difflib
+# github.com/stretchr/testify — MIT
+github.com/stretchr/testify
+# github.com/stretchr/objx — MIT
+github.com/stretchr/objx
+# gopkg.in/check.v1 — BSD-2 (goose CLI test transitive)
+gopkg.in/check.v1
+# gopkg.in/yaml.v3 — Apache-2.0 (goose CLI transitive)
+gopkg.in/yaml.v3
