@@ -151,7 +151,7 @@ func gitOut(args ...string) (string, error) {
 			return "", err
 		}
 	}
-	cmd := exec.Command("git", args...) // #nosec G702 -- every non-flag argument is validated (ref charset; ref:path split validation) above; exec.Command passes argv directly with no shell
+	cmd := exec.Command("git", args...) // #nosec G204 -- every non-flag argument is validated (ref charset; ref:path split validation) above; exec.Command passes argv directly with no shell
 
 	out, err := cmd.Output()
 	if err != nil {

@@ -72,7 +72,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "migrator: invalid GOOSE_BIN %q\n", goose)
 		os.Exit(2)
 	}
-	cmd := exec.Command(goose, "-dir", *dir, "postgres", *dsn, args[0]) // #nosec G702 -- binary path validated against goosePathPattern; exec.Command passes argv with no shell
+	cmd := exec.Command(goose, "-dir", *dir, "postgres", *dsn, args[0]) // #nosec G204 -- binary path validated against goosePathPattern; exec.Command passes argv with no shell
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

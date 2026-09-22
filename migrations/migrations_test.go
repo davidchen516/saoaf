@@ -809,11 +809,6 @@ ALTER TABLE saoaf.outbox_event ADD COLUMN good_col TEXT;
 	if out, err := exec.Command(bin, "-dir", tmpDir, "postgres", db, "up").CombinedOutput(); err != nil {
 		t.Fatalf("retry after fix failed: %v\n%s", err, out)
 	}
-	if v := queryVersion(t, db); v != 2 {
-		// 00004 is version 4? goose versions are file-prefixed: 00003_bad was v3,
-		// 00004_good is v4; after removing bad, goose applies 00004 as version 4.
-		_ = v
-	}
 	var good bool
 	if err := admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns
 		WHERE table_schema='saoaf' AND table_name='outbox_event' AND column_name='good_col')`).Scan(&good); err != nil {
