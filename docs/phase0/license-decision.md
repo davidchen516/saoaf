@@ -20,7 +20,7 @@ classification: public
 
 ## 证据
 
-- [docs/README.md 发布分级](../../README.md)
+- [docs/README.md 发布分级](../README.md)
 - [Issue #1 验收条件："LICENSE 决策有批准记录；公开分类保持可验证"](https://github.com/davidchen516/saoaf/issues/1)
 
 ## 验证

@@ -22,7 +22,7 @@ Registry、Resolver、Ops 的唯一权威状态库为 PostgreSQL 18.6，由 Clou
 
 ## 证据
 
-- [mvp-baseline.md 第 5 节 PostgreSQL、HA 与备份](../../architecture/mvp-baseline.md)
+- [mvp-baseline.md 第 5 节 PostgreSQL、HA 与备份](../architecture/mvp-baseline.md)
 - [Issue #1 已确认基线](https://github.com/davidchen516/saoaf/issues/1)
 - [PostgreSQL 18 backup and recovery](https://www.postgresql.org/docs/18/backup.html)
 - [CloudNativePG high availability](https://cloudnative-pg.io/info/high-availability/)

@@ -21,9 +21,9 @@ Phase 0 全部使用本地 Mock：Keycloak 26.7.4（OIDC issuer `http://127.0.0.
 
 ## 证据
 
-- [mvp-baseline.md 第 4 节身份、MFA、Workload Identity、PDP 和审批](../../architecture/mvp-baseline.md)
-- [authentication-authorization-mock.md](../../specs/authentication-authorization-mock.md)
-- [mocks/identity](../../../mocks/identity)
+- [mvp-baseline.md 第 4 节身份、MFA、Workload Identity、PDP 和审批](../architecture/mvp-baseline.md)
+- [authentication-authorization-mock.md](../specs/authentication-authorization-mock.md)
+- [mocks/identity](../../mocks/identity)
 - [Issue #1 已确认基线](https://github.com/davidchen516/saoaf/issues/1)
 
 ## 影响

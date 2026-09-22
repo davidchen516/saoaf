@@ -25,7 +25,7 @@ classification: public
 | Q-MMR-01 | P0 | MMR 上游契约基线 | ANSWERED | David | [adr-0005](../adr/adr-0005-nfr-mmr-baseline.md) | 2026-09-22 |
 | Q-LIC-01 | P0 | 公开仓库 LICENSE 决策 | ANSWERED | David | [license-decision](license-decision.md) | 2026-09-22 |
 | Q-OWN-01 | P0 | 工程治理 Owner | ANSWERED | David | [open-decisions B 节](../plans/open-decisions.md) | 2026-09-22 |
-| Q-CLS-01 | P0 | 文档 classification | ANSWERED | David | [docs/README.md 发布分级](../../README.md) | 2026-09-22 |
+| Q-CLS-01 | P0 | 文档 classification | ANSWERED | David | [docs/README.md 发布分级](../README.md) | 2026-09-22 |
 | Q-MMR-02 | P0 | 真实 MMR 镜像 digest、fork 差异、endpoint | RISK-ACCEPTED | David | [open-decisions OPEN-02](../plans/open-decisions.md) | 2026-10-31 |
 | Q-MMR-03 | P1 | Envoy/ExtProc 拓扑与 backend pool | RISK-ACCEPTED | David | [open-decisions OPEN-02](../plans/open-decisions.md) | 2026-10-31 |
 | Q-CAP-01 | P1 | 首批 10–20 个 Capability 清单 | RISK-ACCEPTED | David | [open-decisions OPEN-03](../plans/open-decisions.md) | 2026-10-31 |

@@ -25,12 +25,12 @@ MMR 以 vLLM Semantic Router 为决策核心（Apache-2.0）。Phase 0 契约参
 ## 依据
 
 - 项目发起人已按 [open-decisions.md](../plans/open-decisions.md) B 节关闭容量/数据库/消息/Evidence 基线。
-- [mvp-baseline.md](../../architecture/mvp-baseline.md)（approved-for-mock）。
+- [mvp-baseline.md](../architecture/mvp-baseline.md)（approved-for-mock）。
 - vLLM Semantic Router v0.3.0 release 与仓库均为公开可核查。
 
 ## 证据
 
-- [mvp-baseline.md 第 2、7、8 节](../../architecture/mvp-baseline.md)
+- [mvp-baseline.md 第 2、7、8 节](../architecture/mvp-baseline.md)
 - [vLLM Semantic Router releases](https://github.com/vllm-project/semantic-router/releases)
 - [open-decisions.md OPEN-02](../plans/open-decisions.md)
 - [Issue #1 已确认基线](https://github.com/davidchen516/saoaf/issues/1)

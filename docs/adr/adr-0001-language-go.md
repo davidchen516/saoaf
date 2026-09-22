@@ -22,7 +22,7 @@ Phase 0 实现基线采用 Go 1.27.x（每次发布跟进所选 minor 的最新�
 
 ## 证据
 
-- [technology-stack.md 第 4 节开发语言决策](../../architecture/technology-stack.md)
+- [technology-stack.md 第 4 节开发语言决策](../architecture/technology-stack.md)
 - [Issue #1 已确认基线](https://github.com/davidchen516/saoaf/issues/1)
 - [Go release history](https://go.dev/doc/devel/release)
 

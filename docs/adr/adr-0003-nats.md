@@ -21,7 +21,7 @@ MVP 事件平台为 NATS JetStream 2.14.7：本地 Mock 单节点仅绑定 loopb
 
 ## 证据
 
-- [mvp-baseline.md 第 6 节企业消息平台](../../architecture/mvp-baseline.md)
+- [mvp-baseline.md 第 6 节企业消息平台](../architecture/mvp-baseline.md)
 - [Issue #1 已确认基线](https://github.com/davidchen516/saoaf/issues/1)
 - [NATS Server releases](https://github.com/nats-io/nats-server/releases)
 
