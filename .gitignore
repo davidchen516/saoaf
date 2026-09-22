@@ -1,2 +1,17 @@
 __pycache__/
 *.pyc
+
+# goal-mode runtime state (not tracked)
+.goal-state.md
+
+# Go
+/dist/
+/dist2/
+/control-plane-api
+/control-plane-worker
+*.test
+coverage.out
+
+# Web
+web/node_modules/
+web/dist/

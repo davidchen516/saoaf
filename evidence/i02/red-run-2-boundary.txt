@@ -1,0 +1,5 @@
+$ go run ./tools/boundarycheck   (注入 internal/registry → internal/resolver 反向依赖)
+BOUNDARY CHECK: FAIL
+  - github.com/davidchen516/saoaf/internal/registry imports github.com/davidchen516/saoaf/internal/resolver (internal:registry may not import internal:resolver)
+exit status 1
+移除注入后：BOUNDARY CHECK: PASS (13 packages)

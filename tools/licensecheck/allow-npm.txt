@@ -1,0 +1,13 @@
+# npm package allowlist (I02 license policy gate), checked against web/package.json.
+# Entries are added only after vetting the upstream license.
+
+# React runtime — MIT
+react
+react-dom
+# Build toolchain — MIT
+vite
+typescript
+@types/react
+@types/react-dom
+# Vite React plugin — MIT
+@vitejs/plugin-react
