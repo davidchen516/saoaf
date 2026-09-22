@@ -138,7 +138,29 @@ func cmdValidate() error {
 		return err
 	}
 
-	// 5. OpenAPI structural lint.
+	// 5. Migration destructive-DDL lint (I04 review): expand/migrate files
+	// must not contain destructive operations; a contract-phase migration
+	// must be explicitly marked with "-- +goose contract".
+	migrations, _ := filepath.Glob("migrations/*.sql")
+	for _, m := range migrations {
+		rawM, rerr := os.ReadFile(m)
+		if rerr != nil {
+			return rerr
+		}
+		if isContractPhase(rawM) {
+			continue
+		}
+		// Only the Up section is expand/migrate phase; the Down section is
+		// the documented local-dev rollback and may contain DROPs.
+		upSection := splitUpSection(rawM)
+		for _, pat := range []string{"DROP TABLE", "DROP COLUMN", "ALTER TYPE", "RENAME TO"} {
+			if matchesOutsideComments(upSection, pat) {
+				add(m, "destructive DDL '"+pat+"' outside a contract-phase migration (mark with -- +goose contract)")
+			}
+		}
+	}
+
+	// 6. OpenAPI structural lint.
 	apis, _ := filepath.Glob(filepath.Join(contractsDir, "openapi", "v*", "*.yaml"))
 	for _, f := range apis {
 		if err := lintOpenAPI(f, add); err != nil {
@@ -422,4 +444,37 @@ func lintOpenAPI(path string, add func(f, m string)) error {
 		}
 	}
 	return nil
+}
+
+// isContractPhase reports whether a migration file is explicitly marked as
+// a contract-phase migration (the only place destructive DDL is allowed).
+func isContractPhase(raw []byte) bool {
+	return bytes.Contains(raw, []byte("-- +goose contract"))
+}
+
+// splitUpSection returns the bytes from the Up marker up to (excluding)
+// the Down marker; files without markers are treated as fully Up.
+func splitUpSection(raw []byte) []byte {
+	idx := bytes.Index(raw, []byte("-- +goose Down"))
+	if idx < 0 {
+		return raw
+	}
+	return raw[:idx]
+}
+
+// matchesOutsideComments does a naive case-insensitive scan, skipping lines
+// starting with "--" (SQL comments).
+func matchesOutsideComments(raw []byte, needle string) bool {
+	upper := strings.ToUpper(string(raw))
+	n := strings.ToUpper(needle)
+	for _, line := range strings.Split(upper, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "--") {
+			continue
+		}
+		if strings.Contains(trimmed, n) {
+			return true
+		}
+	}
+	return false
 }
