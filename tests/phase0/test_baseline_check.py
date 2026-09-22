@@ -86,19 +86,20 @@ def test_f3_superseded_lifecycle() -> None:
     with tempfile.TemporaryDirectory() as td:
         gate = make_gate(Path(td))
         adr_dir = gate.ADR_DIR
-        # a compliant supersede: adr-0001 -> superseded with superseded-by, adr-0006 accepted
+        baseline_count = len(list(adr_dir.glob("adr-*.md")))
+        # a compliant supersede: adr-0001 -> superseded with superseded-by, successor accepted
         (adr_dir / "adr-0001-language-go.md").write_text(
             (adr_dir / "adr-0001-language-go.md").read_text(encoding="utf-8").replace(
-                "status: accepted", "status: superseded\nsuperseded-by: adr-0006-successor"
+                "status: accepted", "status: superseded\nsuperseded-by: adr-9999-successor"
             ), encoding="utf-8")
-        (adr_dir / "adr-0006-successor.md").write_text(
-            "---\nadr: ADR-PHASE0-0006\ntitle: successor\nstatus: accepted\n"
+        (adr_dir / "adr-9999-successor.md").write_text(
+            "---\nadr: ADR-PHASE0-9999\ntitle: successor\nstatus: accepted\n"
             "owner: David\ndecided: 2026-11-01\nsupersedes: adr-0001-language-go\n---\n# successor\n",
             encoding="utf-8")
         msgs: list[str] = []
         n = gate.check_adrs(msgs)
         check("F3 compliant supersede passes", not msgs, "; ".join(msgs))
-        check("F3 six ADRs counted", n == 6, f"n={n}")
+        check("F3 successor counted", n == baseline_count + 1, f"n={n}, baseline={baseline_count}")
 
     with tempfile.TemporaryDirectory() as td:
         gate = make_gate(Path(td))

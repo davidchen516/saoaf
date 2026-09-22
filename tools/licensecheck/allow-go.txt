@@ -1,0 +1,6 @@
+# Go module allowlist (I02 license policy gate).
+# Format: one module path per line; '#' starts a comment.
+# Entries are added only after vetting the upstream license.
+
+# github.com/go-chi/chi/v5 — MIT
+github.com/go-chi/chi/v5

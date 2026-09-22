@@ -1,0 +1,6 @@
+$ go test -race -count=1 ./internal/platform/worker   (注入 TestInjectedFailure)
+--- FAIL: TestInjectedFailure (0.00s)
+    injected_fail_test.go:6: injected failure: red-run evidence for I02
+FAIL
+→ CI 的 verify job（go test -race）在同类注入下必红，合并被分支保护必检阻断。
+移除注入后：ok github.com/davidchen516/saoaf/internal/platform/worker

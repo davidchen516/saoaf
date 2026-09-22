@@ -1,0 +1,7 @@
+$ go get github.com/google/uuid && go run ./tools/licensecheck   (注入未白名单依赖)
+LICENSE CHECK: go deps: github.com/go-chi/chi/v5, github.com/google/uuid
+LICENSE CHECK: FAIL
+  - go module not on allowlist: github.com/google/uuid
+hint: add the dependency to tools/licensecheck/allow-go.txt ... after vetting its license
+exit status 1
+tidy 移除后：LICENSE CHECK: PASS (all third-party dependencies allowlisted)
