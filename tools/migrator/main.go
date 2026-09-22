@@ -16,11 +16,16 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 
 	"github.com/jackc/pgx/v5"
 )
 
 const lockKey = 781927001
+
+// goosePathPattern restricts the goose binary path to plain path
+// characters (letters, digits, dot, slash, dash, underscore).
+var goosePathPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9./_-]*$`)
 
 func main() {
 	dsn := flag.String("dsn", "", "postgres DSN (required)")
@@ -60,7 +65,13 @@ func main() {
 			os.Exit(2)
 		}
 	}
-	cmd := exec.Command(goose, "-dir", *dir, "postgres", *dsn, args[0])
+	// Operator-supplied binary path: restrict to a plain path charset
+	// (no whitespace/shell metacharacters) before it reaches exec.
+	if !goosePathPattern.MatchString(goose) {
+		fmt.Fprintf(os.Stderr, "migrator: invalid GOOSE_BIN %q\n", goose)
+		os.Exit(2)
+	}
+	cmd := exec.Command(goose, "-dir", *dir, "postgres", *dsn, args[0]) // #nosec G702 -- binary path validated against goosePathPattern; exec.Command passes argv with no shell
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
