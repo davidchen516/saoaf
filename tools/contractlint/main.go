@@ -305,8 +305,8 @@ func classifySchemaError(msg string) string {
 	case strings.Contains(msg, "missing property"):
 		return "VALIDATION_MISSING_REQUIRED"
 	default:
-		// depth violations for structured inputs are detected above via
-		// InputDepth; anything unmapped is a semantic failure
+		// anything unmapped by the schema classifier is a semantic failure;
+		// depth violations are caught before schema validation via jsonDepth
 		return "SEMANTIC_INVALID"
 	}
 }

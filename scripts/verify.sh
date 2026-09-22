@@ -6,13 +6,13 @@ cd "$(dirname "$0")/.."
 
 GO=${GO:-go}
 
-echo "== 1/7 gofmt =="
+echo "== 1/8 gofmt =="
 command -v gofmt >/dev/null || { echo "gofmt not available"; exit 1; }
 unformatted=$(gofmt -l . | grep -v '^web/' || true)
 [ -z "$unformatted" ] || { echo "gofmt needed on: $unformatted"; exit 1; }
 echo "gofmt: clean"
 
-echo "== 2/7 go vet =="
+echo "== 2/8 go vet =="
 $GO vet ./...
 echo "vet: clean"
 
@@ -20,18 +20,22 @@ echo "== 3/7 unit tests (race) =="
 $GO test -race -count=1 ./...
 echo "tests: pass"
 
-echo "== 4/7 dependency boundary =="
+echo "== 4/8 dependency boundary =="
 $GO run ./tools/boundarycheck
 
-echo "== 5/7 license policy =="
+echo "== 5/8 license policy =="
 $GO run ./tools/licensecheck
 
-echo "== 6/7 build + reproducibility =="
+echo "== 6/8 build + reproducibility =="
 ./scripts/build.sh
 
 echo "== 7/8 contract gate =="
 $GO run ./tools/contractlint validate
-$GO run ./tools/contractlint breaking "HEAD~1" >/dev/null 2>&1 || true
+if git rev-parse --verify --quiet "HEAD~1" >/dev/null; then
+  $GO run ./tools/contractlint breaking "HEAD~1"
+else
+  echo "breaking: SKIPPED (no previous commit)"
+fi
 
 echo "== 8/8 web build =="
 if command -v npm >/dev/null; then

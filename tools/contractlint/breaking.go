@@ -124,8 +124,10 @@ func validateGitRef(ref string) error {
 }
 
 // gitPathPattern constrains the path part of a `git show ref:path` argument
-// to a repo-relative charset: no "..", no leading "/", no whitespace or
-// shell metacharacters.
+// to a repo-relative charset: first character is alphanumeric (no leading
+// "/" or "-"), no whitespace, no shell metacharacters. `git show` resolves
+// the path against the object database, not the filesystem, so traversal
+// mid-path cannot escape; the charset still blocks argument-shaped input.
 var gitPathPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+-]*$`)
 
 func gitOut(args ...string) (string, error) {

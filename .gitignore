@@ -16,5 +16,5 @@ coverage.out
 web/node_modules/
 web/dist/
 
-# contractlint build output
-contractlint
+# contractlint build output (repo-root binary only; tools/contractlint/ sources stay tracked)
+/contractlint
