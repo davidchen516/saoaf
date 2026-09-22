@@ -58,4 +58,13 @@ internal/platform/httpapi/health.go:11:2: cannot find module providing package g
 
 Issue 原文的四类红运行为 ①密钥 ②高危依赖(SCA) ③反向模块依赖 ④失败单测。
 本文档及 README 中的 license 红运行（PR #30）是**额外语义门禁**的补充取证，不占用 ③ 的编号；
-③ 的 CI 级记录见下节（NF-1 修复后补齐）。
+③ 的 CI 级记录如下。
+
+## ③ 反向模块依赖 → boundary 红（PR #31，run 35720555397）
+
+注入：生产代码 `internal/registry/probe_dep.go` blank import `internal/resolver`。
+结果：verify job **fail**（52s）。归因（run 日志原文）：
+```
+BOUNDARY CHECK: FAIL
+  - github.com/davidchen516/saoaf/internal/registry imports github.com/davidchen516/saoaf/internal/resolver (internal:registry may not import internal:resolver)
+```
