@@ -25,8 +25,16 @@ classification: internal
 11. [ARR 实施计划](./plans/resource-resolver-implementation-plan.md)
 12. [ARR 部署与运行手册](./runbooks/resource-resolver-operations.md)
 13. [ARR 架构一致性审计](./architecture/ai-routing-platform-audit-report.md)
+14. [身份认证、登录与授权 Mock](./specs/authentication-authorization-mock.md)
+15. [当前未决项清单](./plans/open-decisions.md)
 
 当前状态为 `proposed`。完成 Phase 0 的 MMR 盘点、容量基线、IAM 与保留期确认后，主文档可升级为 `approved`，接口文档可进入实现基线。
+
+## 发布分级
+
+本目录中的架构、契约、计划和运行手册当前按 `internal` 分级维护，作为闭源项目设计资料。文档中的租户、服务、域名、ID、组织和数据均为示例，不代表真实生产环境。
+
+未经明确授权，不得复制、修改、分发或对外发布这些资料。后续如需公开，必须重新完成凭证、内部地址、人员信息、供应商合同、未公开漏洞和受限业务数据检查，并由项目 Owner 批准发布范围和许可证。
 
 ## 对外开源主页
 

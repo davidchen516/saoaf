@@ -1,0 +1,79 @@
+openapi: 3.1.0
+info:
+  title: SAOAF AuthZEN PDP Mock
+  version: 1.0.0
+  description: Local contract mock aligned with OpenID AuthZEN Authorization API 1.0.
+servers:
+  - url: http://127.0.0.1:4010
+paths:
+  /access/v1/evaluation:
+    post:
+      operationId: accessEvaluation
+      parameters:
+        - name: X-Request-ID
+          in: header
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EvaluationRequest'}
+            examples:
+              publish:
+                value:
+                  subject: {type: identity, id: 'user:alice'}
+                  action: {name: resource.publish}
+                  resource: {type: capability-binding, id: 'binding:mmr-default'}
+                  context: {tenant_ref: 'tenant:demo', environment: production, approval_ref: 'approval:chg-1001'}
+      responses:
+        '200':
+          description: Authorization decision
+          headers:
+            X-Request-ID:
+              required: true
+              schema: {type: string, format: uuid}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Decision'}
+              examples:
+                allow:
+                  value: {decision: true, context: {policy_decision_id: 'decision:mock-allow'}}
+                deny:
+                  value: {decision: false, context: {policy_decision_id: 'decision:mock-deny', reason: insufficient_scope}}
+        '400': {description: Invalid evaluation request}
+        '401': {description: PDP client is unauthenticated}
+        '403': {description: PDP client cannot request an evaluation}
+components:
+  schemas:
+    Entity:
+      type: object
+      required: [type, id]
+      properties:
+        type: {type: string, minLength: 1}
+        id: {type: string, minLength: 1}
+        properties: {type: object, additionalProperties: true}
+      additionalProperties: false
+    Action:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1}
+        properties: {type: object, additionalProperties: true}
+      additionalProperties: false
+    EvaluationRequest:
+      type: object
+      required: [subject, action, resource]
+      properties:
+        subject: {$ref: '#/components/schemas/Entity'}
+        action: {$ref: '#/components/schemas/Action'}
+        resource: {$ref: '#/components/schemas/Entity'}
+        context: {type: object, additionalProperties: true}
+      additionalProperties: false
+    Decision:
+      type: object
+      required: [decision]
+      properties:
+        decision: {type: boolean}
+        context: {type: object, additionalProperties: true}
+      additionalProperties: false

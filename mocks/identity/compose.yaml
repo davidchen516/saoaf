@@ -1,0 +1,19 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.4
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:?set KC_BOOTSTRAP_ADMIN_USERNAME}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:?set KC_BOOTSTRAP_ADMIN_PASSWORD}
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./keycloak/realm-saoaf-dev.json:/opt/keycloak/data/import/realm-saoaf-dev.json:ro
+
+  authzen:
+    image: stoplight/prism:5.16.0
+    command: ["mock", "-h", "0.0.0.0", "--errors", "/contracts/openapi.yaml"]
+    ports:
+      - "127.0.0.1:4010:4010"
+    volumes:
+      - ./authzen/openapi.yaml:/contracts/openapi.yaml:ro

@@ -1,0 +1,48 @@
+{
+  "realm": "saoaf-dev",
+  "enabled": true,
+  "displayName": "SAOAF Development",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": true,
+  "rememberMe": false,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 28800,
+  "roles": {
+    "realm": [
+      {"name": "saoaf-viewer"},
+      {"name": "saoaf-editor"},
+      {"name": "saoaf-publisher"},
+      {"name": "saoaf-sre"},
+      {"name": "saoaf-auditor"}
+    ]
+  },
+  "clientScopes": [
+    {"name": "resource.read", "protocol": "openid-connect"},
+    {"name": "resource.write", "protocol": "openid-connect"},
+    {"name": "resource.publish", "protocol": "openid-connect"},
+    {"name": "resource.suspend", "protocol": "openid-connect"},
+    {"name": "sovereignty.read", "protocol": "openid-connect"},
+    {"name": "exitpack.write", "protocol": "openid-connect"},
+    {"name": "drill.approve", "protocol": "openid-connect"}
+  ],
+  "clients": [
+    {
+      "clientId": "saoaf-local-pkce",
+      "name": "SAOAF local PKCE client",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://127.0.0.1:3000/callback"],
+      "webOrigins": ["http://127.0.0.1:3000"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "defaultClientScopes": ["profile", "email", "resource.read"]
+    }
+  ]
+}

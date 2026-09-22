@@ -383,7 +383,7 @@ saoaf/
 1. MMR 当前 vLLM Semantic Router 版本/tag/digest、fork 差异、Envoy/ExtProc 拓扑、entrypoint/recipe、API/流式协议、认证、服务发现、OTel 和 CI/CD 基线；
 2. 企业现有消息平台是 Kafka、NATS、Pulsar 还是无统一平台；
 3. 企业 PostgreSQL 当前支持版本、HA、备份和 K8s 运维方式；
-4. 04 Identity & Trust 的 OIDC issuer、scope、workload identity 和 PDP 接口；
+4. 04 Identity & Trust 的生产 OIDC issuer、scope、workload identity、AuthZEN PDP endpoint 和审批接口；本地/CI Mock 基线已由 Keycloak + Prism 固化；
 5. Evidence 与审计数据的保留期、WORM/不可篡改要求及对象存储能力；
 6. Resolve 的 QPS、P99、可用性和单租户/多租户目标。
 
@@ -396,6 +396,9 @@ saoaf/
 - [oapi-codegen](https://github.com/oapi-codegen/oapi-codegen)
 - [OpenTelemetry](https://opentelemetry.io/docs/)
 - [Open Policy Agent](https://www.openpolicyagent.org/docs)
+- [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html)
+- [OAuth 2.0 Security BCP (RFC 9700)](https://datatracker.ietf.org/doc/html/rfc9700)
+- [OpenID AuthZEN Authorization API 1.0](https://openid.net/specs/authorization-api-1_0.html)
 - [Microcks conformance testing](https://microcks.io/documentation/explanations/conformance-testing/)
 - [xRegistry specification](https://github.com/xregistry/spec)
 - [Temporal](https://github.com/temporalio/temporal)

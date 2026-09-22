@@ -43,4 +43,6 @@ The bilingual project homepage is published through GitHub Pages from [`gh-pages
 
 The architecture is currently **proposed / pre-release**. This delivery implements AI Resource Router and Sovereignty Operations & Exit Assurance, integrates the existing Multi-Model Router, and freezes interfaces for MCP, A2A, and Placement without implementing those three execution fabrics.
 
+The repository is currently maintained as closed-source design material. Public repository visibility does not grant reuse, modification, or redistribution rights; access and publication policy must be approved separately.
+
 Please use [GitHub Issues](https://github.com/davidchen516/saoaf/issues) for scoped architecture proposals, contract questions, and implementation feedback.
