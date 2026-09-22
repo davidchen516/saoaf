@@ -5,6 +5,8 @@ package httpapi
 
 import (
 	"encoding/json"
+
+	_ "golang.org/x/net/html"
 	"net/http"
 	"time"
 
