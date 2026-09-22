@@ -129,7 +129,10 @@ jobs:
         # Go-1.27-compatible x/vuln release ships.
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
-          govulncheck -scan module .
+          # -scan module resolves the module graph from go.mod; it must be
+          # invoked from a directory containing Go files (repo root has none
+          # — code lives in cmd/ and internal/).
+          ( cd cmd/control-plane-api && govulncheck -scan module )
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o dist/control-plane-api ./cmd/control-plane-api
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o dist/control-plane-worker ./cmd/control-plane-worker
           govulncheck -mode=binary dist/control-plane-api
