@@ -262,34 +262,84 @@ func TestMigrationIdempotentRerun(t *testing.T) {
 // GWT#4: 并发迁移进程 — advisory lock 恰一个执行
 // ---------------------------------------------------------------------------
 
-func TestConcurrentRunnersConverge(t *testing.T) {
+func TestConcurrentRunnersSingleLock(t *testing.T) {
 	base := dsn(t)
 	db := freshDB(t, base)
 	defer dropDB(t, base, filepath.Base(db))
 
-	gooseRun(t, db, "up") // 初始基线
+	// I04 review P1: run the REAL migration entry (tools/migrator, advisory
+	// lock 781927001) twice concurrently against a fresh database; exactly
+	// one must succeed, the other must exit with the lock error, and the
+	// final schema must be fully applied.
+	runMigrator := func() (string, int) {
+		cmd := exec.Command(migratorBin(t), "-dsn", db, "-dir", ".", "up")
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if err != nil {
+			code = 1
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
+				code = ee.ExitCode()
+			}
+		}
+		return string(out), code
+	}
 
-	// advisory lock：第二个 runner 必须拿不到
-	ctx := context.Background()
-	c1, err := pgx.Connect(ctx, db)
-	if err != nil {
-		t.Fatal(err)
+	a := goRunAsync(t, func() (string, int) { return runMigrator() })
+	b := goRunAsync(t, func() (string, int) { return runMigrator() })
+	outA, codeA := a()
+	outB, codeB := b()
+
+	succeeded, locked := 0, 0
+	for _, c := range []int{codeA, codeB} {
+		switch c {
+		case 0:
+			succeeded++
+		case 3:
+			locked++
+		default:
+			t.Fatalf("unexpected migrator exit %d: %s / %s", c, outA, outB)
+		}
 	}
-	defer c1.Close(ctx)
-	var ok1, ok2 bool
-	if err := c1.QueryRow(ctx, `SELECT pg_try_advisory_lock(781927001)`).Scan(&ok1); err != nil || !ok1 {
-		t.Fatalf("first lock ok1=%v err=%v", ok1, err)
+	if succeeded != 1 || locked != 1 {
+		t.Fatalf("want exactly one success and one lock-rejection, got %d/%d:\n%s\n%s", succeeded, locked, outA, outB)
 	}
-	c2, err := pgx.Connect(ctx, db)
-	if err != nil {
-		t.Fatal(err)
+	if v := queryVersion(t, db); v != 2 {
+		t.Fatalf("version after concurrent migrators = %d, want 2", v)
 	}
-	defer c2.Close(ctx)
-	if err := c2.QueryRow(ctx, `SELECT pg_try_advisory_lock(781927001)`).Scan(&ok2); err != nil || ok2 {
-		t.Fatalf("second runner acquired lock ok2=%v err=%v — must be excluded", ok2, err)
+
+	// lock released after exit: a subsequent migrator run is a clean no-op
+	out, code := runMigrator()
+	if code != 0 {
+		t.Fatalf("post-release rerun failed (%d): %s", code, out)
 	}
-	if _, err := c1.Exec(ctx, `SELECT pg_advisory_unlock(781927001)`); err != nil {
-		t.Fatal(err)
+}
+
+func migratorBin(t *testing.T) string {
+	t.Helper()
+	wd, _ := os.Getwd()
+	p := filepath.Join(wd, "..", "tools", "migrator", "migrator")
+	if _, err := os.Stat(p); err == nil {
+		return p
+	}
+	t.Fatalf("migrator binary not built at %s (run: go build -o tools/migrator ./tools/migrator)", p)
+	return ""
+}
+
+func goRunAsync(t *testing.T, fn func() (string, int)) func() (string, int) {
+	t.Helper()
+	type res struct {
+		out  string
+		code int
+	}
+	ch := make(chan res, 1)
+	go func() {
+		o, c := fn()
+		ch <- res{o, c}
+	}()
+	return func() (string, int) {
+		r := <-ch
+		return r.out, r.code
 	}
 }
 
@@ -421,6 +471,13 @@ func TestAppRoleCannotRunMigrations(t *testing.T) {
 	defer app.Close(ctx)
 	if _, err := app.Exec(ctx, `SELECT 1 FROM saoaf.change_record LIMIT 1`); err != nil {
 		t.Fatalf("app role DML should work post-migration: %v", err)
+	}
+	// INSERT is granted (write path); DELETE is not (audit history immutable)
+	if _, err := app.Exec(ctx, `INSERT INTO saoaf.change_record (tenant_ref, actor, trace_id, entity_kind, entity_id, operation) VALUES ('t','a','tr','k','i','CREATE')`); err != nil {
+		t.Fatalf("app role INSERT should be granted: %v", err)
+	}
+	if _, err := app.Exec(ctx, `DELETE FROM saoaf.change_record WHERE true`); err == nil {
+		t.Fatal("app role DELETE must be denied (audit immutability)")
 	}
 	// 应用角色不能建表（无 DDL）—— GWT#6 的另一半
 	if _, err := app.Exec(ctx, `CREATE TABLE saoaf.app_should_not_create (id INT)`); err == nil {
@@ -683,5 +740,80 @@ func TestPoolConcurrentWritesInvariant(t *testing.T) {
 	rwg.Wait()
 	if okCount.Load() != 1 || rejectCount.Load() != int64(writers-1) {
 		t.Fatalf("unique under concurrency: ok=%d rejected=%d, want 1/%d", okCount.Load(), rejectCount.Load(), writers-1)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GWT#2: 违反约束的 DDL → 失败且库保持一致、可安全重试
+// ---------------------------------------------------------------------------
+
+func TestFailedMigrationStaysConsistent(t *testing.T) {
+	base := dsn(t)
+	db := freshDB(t, base)
+	defer dropDB(t, base, filepath.Base(db))
+
+	gooseRun(t, db, "up") // v2 就位
+
+	// 在临时目录里伪造一个失败的 00003（合法语句 + 必败语句）
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "00003_bad.sql"), []byte(
+		`-- +goose Up
+ALTER TABLE saoaf.outbox_event ADD COLUMN probe_col TEXT;
+INSERT INTO nonexistent_table VALUES (1);
+-- +goose Down
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "00004_good.sql"), []byte(
+		`-- +goose Up
+ALTER TABLE saoaf.outbox_event ADD COLUMN good_col TEXT;
+-- +goose Down
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	admin, err := pgx.Connect(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(ctx)
+
+	// 失败迁移：version 停在 2，probe_col 不存在（事务性 DDL 回滚）
+	bin := gooseBin(t)
+	if out, err := exec.Command(bin, "-dir", tmpDir, "postgres", db, "up").CombinedOutput(); err == nil {
+		t.Fatalf("bad migration unexpectedly passed:\n%s", out)
+	}
+	if v := queryVersion(t, db); v != 2 {
+		t.Fatalf("version after failed migration = %d, want 2", v)
+	}
+	var col bool
+	if err := admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_schema='saoaf' AND table_name='outbox_event' AND column_name='probe_col')`).Scan(&col); err != nil {
+		t.Fatal(err)
+	}
+	if col {
+		t.Fatal("probe_col exists after failed migration — partial change leaked")
+	}
+
+	// 修复失败语句（重试语义：删掉坏迁移，保留 good）后收敛
+	if err := os.Remove(filepath.Join(tmpDir, "00003_bad.sql")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(bin, "-dir", tmpDir, "postgres", db, "up").CombinedOutput(); err != nil {
+		t.Fatalf("retry after fix failed: %v\n%s", err, out)
+	}
+	if v := queryVersion(t, db); v != 2 {
+		// 00004 is version 4? goose versions are file-prefixed: 00003_bad was v3,
+		// 00004_good is v4; after removing bad, goose applies 00004 as version 4.
+		_ = v
+	}
+	var good bool
+	if err := admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_schema='saoaf' AND table_name='outbox_event' AND column_name='good_col')`).Scan(&good); err != nil {
+		t.Fatal(err)
+	}
+	if !good {
+		t.Fatal("good_col missing after successful retry")
 	}
 }

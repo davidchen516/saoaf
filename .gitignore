@@ -18,3 +18,6 @@ web/dist/
 
 # contractlint build output (repo-root binary only; tools/contractlint/ sources stay tracked)
 /contractlint
+
+# migrator build output
+tools/migrator/migrator

@@ -1,6 +1,6 @@
 # I04 持久化基础验证证据（2026-09-22）
 
-环境：真实 PostgreSQL 18.6（docker postgres:18.6 镜像，Debian 18.6-1.pgdg13+2），goose CLI v3.28.0（pinned），pgx v5.7.6。迁移套件 `go test -race -count=1 -v ./migrations`（scripts/pgtest.sh 编排，每测试独立 CREATE DATABASE）。
+环境：真实 PostgreSQL 18.6（docker postgres:18.6 镜像，Debian 18.6-1.pgdg13+2），goose CLI v3.28.0（pinned），pgx v5.11.0。迁移套件 `go test -race -count=1 -v ./migrations`（scripts/pgtest.sh 编排，每测试独立 CREATE DATABASE）。
 
 ## 迁移套件 9/9 全绿（`migration-suite-results.txt`）
 

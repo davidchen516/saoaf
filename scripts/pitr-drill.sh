@@ -116,10 +116,16 @@ echo "change_record   : $CR rows (want 2 — T0+T1, disaster excluded)"
 echo "outbox_event    : $OB rows (want 2)"
 echo "outbox watermark: $WP (want 1 — evt-t1 published_seq)"
 echo "entities intact : $ENT (want 2)"
-# constraint still enforced post-recovery (negative probe)
+# constraint still enforced post-recovery (negative probe gates the drill)
 NEG=$(echo "INSERT INTO saoaf.outbox_event (status,topic,payload,change_record_id,event_id,aggregate_kind,aggregate_id,aggregate_revision) VALUES ('BAD','x','{}',(SELECT id FROM saoaf.change_record LIMIT 1),'evt-neg','a','x',1);" | psql_rec 2>&1 || true)
-echo "constraint probe: $(echo "$NEG" | grep -o 'violates check constraint" \?"outbox_event_status_check"' || echo "$NEG" | head -c 120)"
-if [ "$V" = "2" ] && [ "$CR" = "2" ] && [ "$OB" = "2" ] && [ "$WP" = "1" ] && [ "$ENT" = "2" ]; then
+if echo "$NEG" | grep -q 'violates check constraint'; then
+  echo "constraint probe: REJECTED (check constraint enforced post-recovery)"
+  CONSTRAINT_OK=1
+else
+  echo "constraint probe: NOT REJECTED — $NEG"
+  CONSTRAINT_OK=0
+fi
+if [ "$V" = "2" ] && [ "$CR" = "2" ] && [ "$OB" = "2" ] && [ "$WP" = "1" ] && [ "$ENT" = "2" ] && [ "$CONSTRAINT_OK" = "1" ]; then
   echo "PITR DRILL: PASS"
   docker rm -f saoaf-pitr-primary saoaf-pitr-recover >/dev/null 2>&1 || true
   exit 0
