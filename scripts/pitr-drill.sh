@@ -19,6 +19,10 @@ DSN="postgres://postgres:postgres@127.0.0.1:${PORT_PRIMARY}/postgres"
 GOOSE_BIN="${GOOSE_BIN:-goose}"
 
 rm -rf "$WORK"; mkdir -p "$WORK/archive" "$WORK/base"
+# Linux runners keep the host uid on bind mounts; the container's postgres
+# (uid 999) must own /archive to run archive_command (Docker Desktop on
+# macOS masks ownership, CI Linux does not).
+docker run --rm -v "$WORK/archive:/a" alpine:3.22 chown -R 999:999 /a >/dev/null
 docker rm -f saoaf-pitr-primary saoaf-pitr-recover >/dev/null 2>&1 || true
 
 echo "== 1/7 start primary with WAL archiving =="
@@ -58,6 +62,14 @@ echo "rows after disaster: $(echo 'SELECT count(*) FROM saoaf.change_record;' | 
 # stop there (before the DROP)
 echo 'SELECT pg_switch_wal();' | psql_primary >/dev/null
 sleep 2
+# fail fast with the primary's logs if the archiver could not write
+ARCHIVED=$(ls "$WORK/archive" 2>/dev/null | wc -l | tr -d ' ')
+if [ "$ARCHIVED" -eq 0 ]; then
+  echo "ARCHIVE IS EMPTY — archive_command failed; primary logs:"
+  docker logs saoaf-pitr-primary 2>&1 | grep -iE "archive|FATAL" | tail -10
+  exit 1
+fi
+echo "archived WAL segments: $ARCHIVED"
 
 echo "== 6/7 recover to T1 from base backup + WAL archive =="
 rm -rf "$WORK/recovery"; mkdir -p "$WORK/recovery"
