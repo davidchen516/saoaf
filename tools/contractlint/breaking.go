@@ -123,16 +123,33 @@ func validateGitRef(ref string) error {
 	return nil
 }
 
+// gitPathPattern constrains the path part of a `git show ref:path` argument
+// to a repo-relative charset: no "..", no leading "/", no whitespace or
+// shell metacharacters.
+var gitPathPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+-]*$`)
+
 func gitOut(args ...string) (string, error) {
 	for _, a := range args {
 		if a == "show" || a == "ls-tree" || a == "-r" || a == "--name-only" || a == "--" {
 			continue // fixed subcommands/flags
 		}
+		// `git show` takes a single `ref:path` argument: validate the ref
+		// before the colon and constrain the path to a repo-relative
+		// charset (no "..", no leading "/", no metacharacters).
+		if ref, path, isShow := strings.Cut(a, ":"); isShow {
+			if err := validateGitRef(ref); err != nil {
+				return "", err
+			}
+			if !gitPathPattern.MatchString(path) {
+				return "", fmt.Errorf("invalid git object path %q", path)
+			}
+			continue
+		}
 		if err := validateGitRef(a); err != nil {
 			return "", err
 		}
 	}
-	cmd := exec.Command("git", args...) // #nosec G702 -- every non-flag argument is validated against the git ref charset above; exec.Command passes argv directly with no shell
+	cmd := exec.Command("git", args...) // #nosec G702 -- every non-flag argument is validated (ref charset; ref:path split validation) above; exec.Command passes argv directly with no shell
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -222,6 +239,14 @@ func findBreaking(path string, base, cur any, at string, out *[]string) {
 			for k := range b {
 				if _, still := c[k]; !still {
 					*out = append(*out, fmt.Sprintf("%s: %q removed at %s (operation/response/field)", path, k, at))
+				}
+			}
+		}
+		// whole-path removal deletes every operation under it — breaking
+		if strings.HasSuffix(at, ".paths") {
+			for k := range b {
+				if _, still := c[k]; !still {
+					*out = append(*out, fmt.Sprintf("%s: path %q removed at %s (all its operations gone)", path, k, at))
 				}
 			}
 		}

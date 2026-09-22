@@ -15,3 +15,6 @@ coverage.out
 # Web
 web/node_modules/
 web/dist/
+
+# contractlint build output
+contractlint

@@ -241,7 +241,6 @@ type negativeFixture struct {
 	Schema      string          `json:"schema"`
 	Input       json.RawMessage `json:"input"`
 	PadToBytes  int             `json:"pad_to_bytes"`
-	InputDepth  int             `json:"input_depth"`
 	ExpectedErr string          `json:"expected_error_code"`
 }
 
@@ -274,7 +273,7 @@ func checkNegative(c *jsonschema.Compiler, path string) error {
 	switch {
 	case len(input) > maxPayloadBytes:
 		code = "VALIDATION_PAYLOAD_TOO_LARGE"
-	case fx.InputDepth > maxPayloadDepth:
+	case jsonDepth(doc) > maxPayloadDepth:
 		code = "VALIDATION_PAYLOAD_TOO_DEEP"
 	default:
 		s, err := schemaFor(c, fx.Schema)
@@ -284,7 +283,7 @@ func checkNegative(c *jsonschema.Compiler, path string) error {
 		if err := s.Validate(doc); err == nil {
 			return fmt.Errorf("fixture %s: input unexpectedly PASSED schema %s", fx.Case, fx.Schema)
 		} else {
-			code = classifySchemaError(err.Error(), fx.ExpectedErr)
+			code = classifySchemaError(err.Error())
 		}
 	}
 	if code != fx.ExpectedErr {
@@ -297,7 +296,7 @@ func checkNegative(c *jsonschema.Compiler, path string) error {
 // keyword (the library's error strings are stable enough for the gate's
 // closed fixture set; unexpected shapes fall through to INVALID_ENUM only
 // when matched, else SEMANTIC_INVALID which fails the fixture mapping).
-func classifySchemaError(msg, expected string) string {
+func classifySchemaError(msg string) string {
 	switch {
 	case strings.Contains(msg, "additional properties") && strings.Contains(msg, "not allowed"):
 		return "VALIDATION_UNKNOWN_FIELD"

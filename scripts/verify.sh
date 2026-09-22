@@ -29,7 +29,11 @@ $GO run ./tools/licensecheck
 echo "== 6/7 build + reproducibility =="
 ./scripts/build.sh
 
-echo "== 7/7 web build =="
+echo "== 7/8 contract gate =="
+$GO run ./tools/contractlint validate
+$GO run ./tools/contractlint breaking "HEAD~1" >/dev/null 2>&1 || true
+
+echo "== 8/8 web build =="
 if command -v npm >/dev/null; then
   ( cd web && npm ci --no-fund --no-audit >/dev/null 2>&1 && npm run build >/dev/null )
   echo "web build: pass"

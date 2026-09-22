@@ -40,7 +40,7 @@ func TestClassifySchemaError(t *testing.T) {
 		{"- at '/x': got string, want number", "SEMANTIC_INVALID"},
 	}
 	for _, tc := range cases {
-		if got := classifySchemaError(tc.msg, ""); got != tc.want {
+		if got := classifySchemaError(tc.msg); got != tc.want {
 			t.Errorf("classify(%q) = %s, want %s", tc.msg, got, tc.want)
 		}
 	}
