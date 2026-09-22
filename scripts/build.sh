@@ -26,8 +26,13 @@ build_into() {
   for target in $TARGETS; do
     os=${target%%-*}; arch=${target##*-}
     for bin in control-plane-api control-plane-worker; do
+      # -buildvcs=false: VCS stamping would embed the build's git state,
+      # breaking digest reproducibility across environments (local checkout
+      # vs PR merge ref vs main checkout). The version is injected via
+      # ldflags instead. -trimpath removes local path leakage.
       CGO_ENABLED=0 GOOS=$os GOARCH=$arch $GO build \
         -trimpath \
+        -buildvcs=false \
         -ldflags="-s -w -X main.version=$VERSION" \
         -o "$out/$bin-$os-$arch" \
         "./cmd/$bin"

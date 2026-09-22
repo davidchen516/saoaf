@@ -1,7 +1,7 @@
 // Command boundarycheck enforces SAOAF module dependency direction (I02).
 //
-// Rules (see docs/programs/03-sovereign-ai-open-ai-fabric/development-plan.md §3,
-// "模块间禁止跨边界直接写表"):
+// Rules (see docs/architecture/technology-stack.md §1 — "模块间禁止跨边界
+// 直接写表" — and docs/programs/03-sovereign-ai-open-ai-fabric/development-plan.md §3):
 //
 //   - cmd/*            may import any internal package.
 //   - internal/platform/* may import internal/platform/* only (shared leaf).
@@ -16,6 +16,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,8 +24,10 @@ import (
 )
 
 type pkg struct {
-	ImportPath string   `json:"ImportPath"`
-	Imports    []string `json:"Imports"`
+	ImportPath   string   `json:"ImportPath"`
+	Imports      []string `json:"Imports"`
+	TestImports  []string `json:"TestImports"`
+	XTestImports []string `json:"XTestImports"`
 }
 
 // moduleOf maps an import path inside this repository to its module bucket:
@@ -78,7 +81,9 @@ type violation struct {
 }
 
 // check validates a package graph. It returns one violation per disallowed
-// internal import edge.
+// internal import edge. Test files (_test.go in-package and external test
+// packages) are included: a reverse dependency smuggled through a test file
+// is still a boundary violation.
 func check(packages []pkg, modulePath string) []violation {
 	var out []violation
 	seen := map[string]bool{}
@@ -87,7 +92,8 @@ func check(packages []pkg, modulePath string) []violation {
 		if src == "" {
 			continue
 		}
-		for _, imp := range p.Imports {
+		allImports := append(append(append([]string{}, p.Imports...), p.TestImports...), p.XTestImports...)
+		for _, imp := range allImports {
 			dst := moduleOf(imp, modulePath)
 			if dst == "" {
 				continue // external or stdlib: allowed
@@ -113,10 +119,43 @@ func main() {
 		os.Exit(2)
 	}
 	modulePath := strings.TrimSpace(string(out))
+	// Test-file imports are surfaced explicitly: go 1.27's `go list -json`
+	// does not include _test.go imports (the historical -tests flag was
+	// removed), so a second list pass with a template extracts
+	// TestImports/XTestImports for every package. Imports smuggled through
+	// test files are boundary-checked like production imports (review P2-1).
 	raw, err := exec.Command("go", "list", "-json", "./...").Output()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "go list ./...: %v\n%s\n", err, err.(*exec.ExitError).Stderr)
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			fmt.Fprintf(os.Stderr, "go list ./...: %v\n%s\n", err, ee.Stderr)
+		} else {
+			fmt.Fprintf(os.Stderr, "go list ./...: %v\n", err)
+		}
 		os.Exit(2)
+	}
+	testRaw, err := exec.Command("go", "list",
+		"-f", `{{if .TestImports}}{{range .TestImports}}{{$.ImportPath}} {{.}}{{"\n"}}{{end}}{{end}}{{if .XTestImports}}{{range .XTestImports}}{{$.ImportPath}} {{.}}{{"\n"}}{{end}}{{end}}`,
+		"./...").Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			fmt.Fprintf(os.Stderr, "go list (tests): %v\n%s\n", err, ee.Stderr)
+		} else {
+			fmt.Fprintf(os.Stderr, "go list (tests): %v\n", err)
+		}
+		os.Exit(2)
+	}
+	// Merge test-import edges into the package list so check() sees them.
+	testImports := map[string][]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(testRaw)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) == 2 {
+			testImports[parts[0]] = append(testImports[parts[0]], parts[1])
+		}
 	}
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
 	var packages []pkg
@@ -125,6 +164,9 @@ func main() {
 		if err := dec.Decode(&p); err != nil {
 			fmt.Fprintf(os.Stderr, "decode go list output: %v\n", err)
 			os.Exit(2)
+		}
+		if ti, ok := testImports[p.ImportPath]; ok {
+			p.TestImports = append(p.TestImports, ti...)
 		}
 		packages = append(packages, p)
 	}

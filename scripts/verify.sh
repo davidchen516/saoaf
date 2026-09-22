@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 GO=${GO:-go}
 
 echo "== 1/7 gofmt =="
-unformatted=$($GO fmt ./... )
+unformatted=$(gofmt -l . | grep -v '^web/' || true)
 [ -z "$unformatted" ] || { echo "gofmt needed on: $unformatted"; exit 1; }
 echo "gofmt: clean"
 

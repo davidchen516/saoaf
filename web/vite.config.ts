@@ -6,7 +6,12 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://127.0.0.1:8080',
+      // Strip the /api prefix: the control plane exposes probes at the root
+      // (/healthz, /readyz), so /api/healthz must reach :8080/healthz.
+      '/api': {
+        target: 'http://127.0.0.1:8080',
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
     },
   },
 })

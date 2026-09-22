@@ -22,7 +22,15 @@ type Loop struct {
 }
 
 // NewLoop builds a Loop. interval must be positive; fn must be non-nil.
+// Both are constructor contracts — violations panic with an explicit message
+// instead of the cryptic time.NewTicker panic later.
 func NewLoop(interval time.Duration, fn func(ctx context.Context) error, opts ...Option) *Loop {
+	if interval <= 0 {
+		panic(fmt.Sprintf("worker: NewLoop interval must be positive, got %v", interval))
+	}
+	if fn == nil {
+		panic("worker: NewLoop fn must be non-nil")
+	}
 	l := &Loop{interval: interval, fn: fn, logger: slog.Default()}
 	for _, opt := range opts {
 		opt(l)
