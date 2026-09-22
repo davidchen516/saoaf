@@ -2,13 +2,11 @@
 title: AI Resource Resolver 数据与事件设计
 version: 1.0.0
 status: proposed
-owner: TODO-ARR技术负责人
+owner: David
 reviewers:
-  - TODO-数据架构负责人
-  - TODO-安全与合规负责人
-  - TODO-SRE负责人
+  - David
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-22
 classification: public
 related:
   - ../architecture/ai-routing-platform-4a.md

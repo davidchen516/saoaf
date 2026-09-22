@@ -2,7 +2,7 @@
 title: SAOAF 身份认证、登录与授权 Mock 设计
 version: 1.1.0
 status: proposed
-owner: TODO-安全与IAM负责人
+owner: David
 created: 2026-09-22
 updated: 2026-09-22
 classification: public

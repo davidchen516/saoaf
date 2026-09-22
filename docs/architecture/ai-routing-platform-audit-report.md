@@ -2,9 +2,9 @@
 title: AI Resource Router 子项目架构一致性审计报告
 version: 1.2.0
 status: reviewed
-owner: AI 架构交付
+owner: David
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-22
 classification: public
 scope:
   - ../programs/03-sovereign-ai-open-ai-fabric/architecture.md

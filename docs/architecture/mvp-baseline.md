@@ -2,7 +2,7 @@
 title: SAOAF Phase 0 最小 MVP 基线
 version: 1.0.0
 status: approved-for-mock
-owner: TODO-03工程负责人
+owner: David
 created: 2026-09-22
 updated: 2026-09-22
 classification: public

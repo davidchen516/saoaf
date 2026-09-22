@@ -2,13 +2,11 @@
 title: AI Resource Resolver 部署与运行手册
 version: 1.0.0
 status: proposed
-owner: TODO-ARR-SRE负责人
+owner: David
 reviewers:
-  - TODO-ARR技术负责人
-  - TODO-数据库负责人
-  - TODO-安全负责人
+  - David
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-22
 classification: public
 related:
   - ../architecture/ai-routing-platform-4a.md

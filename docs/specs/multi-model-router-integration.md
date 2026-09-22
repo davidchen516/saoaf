@@ -2,13 +2,11 @@
 title: AI Resource Resolver 与 Multi-Model Router 集成设计
 version: 1.0.0
 status: proposed
-owner: TODO-ARR与MMR联合负责人
+owner: David
 reviewers:
-  - TODO-MMR架构负责人
-  - TODO-Agent-Harness负责人
-  - TODO-SRE负责人
+  - David
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-22
 classification: public
 related:
   - ../programs/03-sovereign-ai-open-ai-fabric/architecture.md

@@ -2,15 +2,11 @@
 title: 03 Sovereign AI & Open AI Fabric 模块交互与契约设计
 version: 1.0.0
 status: proposed
-owner: TODO-03工程技术负责人
+owner: David
 reviewers:
-  - TODO-ARR负责人
-  - TODO-MMR负责人
-  - TODO-MCP负责人
-  - TODO-A2A负责人
-  - TODO-Identity-Trust负责人
+  - David
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-22
 classification: public
 related:
   - ./architecture.md

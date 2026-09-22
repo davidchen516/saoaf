@@ -2,9 +2,9 @@
 title: 03 Sovereign AI & Open AI Fabric 架构交付包索引
 version: 1.2.0
 status: proposed
-owner: TODO-AI平台负责人
+owner: David
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-22
 classification: public
 ---
 

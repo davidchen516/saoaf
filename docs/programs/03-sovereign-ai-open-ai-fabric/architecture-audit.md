@@ -2,9 +2,9 @@
 title: 03 Sovereign AI & Open AI Fabric 架构一致性审计
 version: 1.1.0
 status: reviewed
-owner: AI 架构交付
+owner: David
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-22
 classification: public
 scope:
   - ./architecture.md

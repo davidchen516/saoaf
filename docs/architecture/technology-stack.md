@@ -2,14 +2,11 @@
 title: 03 Sovereign AI & Open AI Fabric 技术栈设计
 version: 1.0.0
 status: proposed
-owner: TODO-03工程技术负责人
+owner: David
 reviewers:
-  - TODO-Multi-Model Router技术负责人
-  - TODO-企业基础平台负责人
-  - TODO-安全与IAM负责人
-  - TODO-SRE负责人
+  - David
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-22
 classification: public
 ---
 

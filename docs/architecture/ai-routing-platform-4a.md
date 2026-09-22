@@ -2,14 +2,11 @@
 title: 03 Sovereign AI & Open AI Fabric — AI Resource Router 子项目 4A 架构
 version: 1.2.0
 status: proposed
-owner: TODO-AI平台负责人
+owner: David
 reviewers:
-  - TODO-Multi-Model-Router负责人
-  - TODO-企业架构负责人
-  - TODO-安全与IAM负责人
-  - TODO-SRE负责人
+  - David
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-22
 classification: public
 related:
   - ../programs/03-sovereign-ai-open-ai-fabric/architecture.md
@@ -681,12 +678,12 @@ Provider 不得把底层实例目录泄露到 ARR。详细契约见既有 [ai-re
 
 | ID | 未决项 | Owner | 截止点 |
 |---|---|---|---|
-| TODO-01 | MMR 语言、框架、API、鉴权、profile Snapshot、事件和 OTel 规范 | MMR负责人 | Phase 0 第 1 周 |
-| CLOSED-02 | 峰值 QPS、能力/Provider 数量、租户与区域规模 | 产品负责人/SRE | 已按 MVP 固定 |
-| CLOSED-03 | 审计和 Plan 保留期、数据驻留要求 | 合规负责人 | 已按 MVP 固定；生产 WORM 产品待准入 |
-| CLOSED-04 | IAM/PDP 和双人审批接入方式 | 安全负责人 | Mock 已固定；生产实现待替换 |
-| TODO-05 | Context Router 与 Tool Gateway 当前成熟度和接口 | 各域负责人 | Phase 1 结束前 |
-| CLOSED-06 | RTO/RPO 和跨地域灾备等级 | 业务负责人/SRE | MVP 为 60 min / 5 min、单地域；跨地域延后 |
+| TODO-01 | MMR 语言、框架、API、鉴权、profile Snapshot、事件和 OTel 规范 | David | Phase 0 第 1 周 |
+| CLOSED-02 | 峰值 QPS、能力/Provider 数量、租户与区域规模 | David | 已按 MVP 固定 |
+| CLOSED-03 | 审计和 Plan 保留期、数据驻留要求 | David | 已按 MVP 固定；生产 WORM 产品待准入 |
+| CLOSED-04 | IAM/PDP 和双人审批接入方式 | David | Mock 已固定；生产实现待替换 |
+| TODO-05 | Context Router 与 Tool Gateway 当前成熟度和接口 | David | Phase 1 结束前 |
+| CLOSED-06 | RTO/RPO 和跨地域灾备等级 | David | MVP 为 60 min / 5 min、单地域；跨地域延后 |
 
 ## 14. 官方参考
 

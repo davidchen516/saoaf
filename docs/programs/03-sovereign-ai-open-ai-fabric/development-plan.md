@@ -2,14 +2,11 @@
 title: 03 Sovereign AI & Open AI Fabric 2027 开发实施计划
 version: 1.0.0
 status: proposed
-owner: TODO-03工程交付负责人
+owner: David
 reviewers:
-  - TODO-03工程架构负责人
-  - TODO-各子项目负责人
-  - TODO-安全负责人
-  - TODO-SRE负责人
+  - David
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-22
 classification: public
 related:
   - ./architecture.md

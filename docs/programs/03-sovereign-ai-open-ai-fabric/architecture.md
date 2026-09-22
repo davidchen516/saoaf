@@ -1,16 +1,12 @@
 ---
 title: 03 Sovereign AI & Open AI Fabric 总体架构与模块边界
-version: 1.1.0
+version: 1.2.0
 status: proposed
-owner: TODO-03工程负责人
+owner: David
 reviewers:
-  - TODO-Agentic-Enterprise负责人
-  - TODO-Context-Memory负责人
-  - TODO-Identity-Trust负责人
-  - TODO-Enterprise-AI-Factory负责人
-  - TODO-Decision-Learning负责人
+  - David
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-22
 classification: public
 source_context: 27年技术架构战略规划会话
 related:
@@ -499,13 +495,13 @@ MMR 使用 vLLM Semantic Router 作为主要开源决策核心，并通过薄 ad
 
 | ID | 问题 | Owner | 关闭时间 |
 |---|---|---|---|
-| 03-TODO-01 | 八大战略工程正式编号、Owner 和治理委员会 | CTO/CIO | 2027 立项前 |
-| 03-TODO-02 | MMR 当前 vLLM Semantic Router 版本、fork 差异、entrypoint/recipe、API、鉴权、decision ID、事件和 OTel 现状 | MMR负责人 | Phase 0 第 1 周 |
-| 03-TODO-03 | 企业现有 MCP Registry/Gateway 和 API Gateway 能力 | 集成平台负责人 | Phase 0 |
-| 03-TODO-04 | A2A 首批跨 Agent 场景和信任域 | Agentic/Identity负责人 | Q1 |
-| 03-TODO-05 | AI Factory 的多云/边缘编排现状 | 基础设施负责人 | Q1 |
-| 03-TODO-06 | 关键供应商清单、退出周期和数据导出条款 | 采购/法务/架构 | Q1 |
-| 03-TODO-07 | 主权指标目标值与关键 Capability 分级 | 03工程负责人 | Q1 |
+| 03-CLOSED-01 | 八大战略工程正式编号、Owner 和治理委员会 | David | 已确认：工程总负责人、架构委员会和各模块负责人均为 David |
+| 03-TODO-02 | MMR 当前 vLLM Semantic Router 版本、fork 差异、entrypoint/recipe、API、鉴权、decision ID、事件和 OTel 现状 | David | Phase 0 第 1 周 |
+| 03-TODO-03 | 企业现有 MCP Registry/Gateway 和 API Gateway 能力 | David | Phase 0 |
+| 03-TODO-04 | A2A 首批跨 Agent 场景和信任域 | David | Q1 |
+| 03-TODO-05 | AI Factory 的多云/边缘编排现状 | David | Q1 |
+| 03-TODO-06 | 关键供应商清单、退出周期和数据导出条款 | David（架构），采购/法务协同 | Q1 |
+| 03-TODO-07 | 主权指标目标值与关键 Capability 分级 | David | Q1 |
 
 ## 14. 官方参考
 

@@ -2,14 +2,11 @@
 title: AI Resource Resolver 落地实施计划
 version: 1.0.0
 status: proposed
-owner: TODO-AI平台项目负责人
+owner: David
 reviewers:
-  - TODO-ARR技术负责人
-  - TODO-MMR负责人
-  - TODO-安全负责人
-  - TODO-SRE负责人
+  - David
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-22
 classification: public
 related:
   - ../programs/03-sovereign-ai-open-ai-fabric/development-plan.md

@@ -2,13 +2,11 @@
 title: AI Resource Resolver API 契约
 version: 1.0.0
 status: proposed
-owner: TODO-ARR技术负责人
+owner: David
 reviewers:
-  - TODO-Agent-Harness负责人
-  - TODO-MMR负责人
-  - TODO-IAM负责人
+  - David
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-22
 classification: public
 related:
   - ../programs/03-sovereign-ai-open-ai-fabric/module-contracts.md

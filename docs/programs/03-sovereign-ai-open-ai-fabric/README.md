@@ -1,21 +1,37 @@
 ---
 title: 03 Sovereign AI & Open AI Fabric 工程索引
-version: 1.1.0
+version: 1.2.0
 status: proposed
-owner: TODO-03工程负责人
+owner: David
 reviewers:
-  - TODO-企业AI架构委员会
-  - TODO-AI平台负责人
-  - TODO-安全与IAM负责人
-  - TODO-基础设施负责人
+  - David
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-22
 classification: public
 ---
 
 # 03 Sovereign AI & Open AI Fabric
 
 本工程是制造企业 2027 AI 技术架构八大战略工程中的第 03 工程，目标是让企业在模型、工具、Agent、Context、算力和供应商变化时，持续拥有选择权、控制权、迁移能力和运营连续性。
+
+## 项目治理责任
+
+Phase 0/MVP 阶段的工程治理责任统一归属 **David**：
+
+| 治理范围 | 负责人 |
+|---|---|
+| 工程总负责人 | David |
+| 架构委员会 | David |
+| 03.1 Sovereignty Governance & Policy Plane | David |
+| 03.2 Capability Registry & AI Resource Hub | David |
+| 03.3 AI Resource Router | David |
+| 03.4 Model Fabric / Multi-Model Router | David |
+| 03.5 Tool & Data Access Fabric / MCP | David |
+| 03.6 Agent Federation Fabric / A2A | David |
+| 03.7 Placement & Portability Fabric | David |
+| 03.8 Sovereignty Operations & Exit Assurance | David |
+
+该归属用于范围、架构和模块交付问责。生产环境中的高风险变更仍执行职责分离：申请、批准、执行和审计必须由不同身份主体完成，不能因为治理角色由同一负责人承担而允许同一身份自批、自发或自审。
 
 交付文档：
 
