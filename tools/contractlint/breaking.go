@@ -219,6 +219,34 @@ func findBreaking(path string, base, cur any, at string, out *[]string) {
 			*out = append(*out, fmt.Sprintf("%s: %s changed type from array", path, at))
 			return
 		}
+		// Arrays of scalars (enum values, required lists, type lists):
+		// compare as SETS — a value present in base but missing in cur is
+		// a narrowing (breaking). Order changes are harmless.
+		if allScalars(b) && allScalars(c) {
+			if strings.HasSuffix(at, ".enum") || strings.HasSuffix(at, ".required") ||
+				strings.HasSuffix(at, ".type") {
+				curSet := map[string]bool{}
+				for _, v := range c {
+					curSet[fmt.Sprintf("%v", v)] = true
+				}
+				for _, v := range b {
+					if !curSet[fmt.Sprintf("%v", v)] {
+						kind := "value"
+						if strings.HasSuffix(at, ".enum") {
+							kind = "enum value"
+						} else if strings.HasSuffix(at, ".required") {
+							kind = "required entry"
+						} else {
+							kind = "type"
+						}
+						*out = append(*out, fmt.Sprintf("%s: %s %q removed at %s", path, kind, v, at))
+					}
+				}
+			}
+			return
+		}
+		// Arrays of objects: compare positionally by key identity where
+		// possible (best effort — property paths are maps below).
 		n := len(b)
 		if len(c) < n {
 			n = len(c)
@@ -237,4 +265,16 @@ func findBreaking(path string, base, cur any, at string, out *[]string) {
 			}
 		}
 	}
+}
+
+// allScalars reports whether every element is a JSON scalar (string/number/
+// bool/null) — used to switch arrays into set-comparison mode.
+func allScalars(a []any) bool {
+	for _, v := range a {
+		switch v.(type) {
+		case map[string]any, []any:
+			return false
+		}
+	}
+	return true
 }
