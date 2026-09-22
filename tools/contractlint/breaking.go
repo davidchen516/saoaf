@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -109,8 +110,30 @@ func cmdBreaking(base string) error {
 	return nil
 }
 
+// gitRefPattern restricts ref arguments to the git ref charset: digits,
+// letters, and ._/-~ (SHAs, branch names, HEAD~1, refs/...). Rejects any
+// shell metacharacter, whitespace, or NUL before the value reaches git.
+var gitRefPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/~-]*$`)
+
+// validateGitRef rejects values outside the git ref charset.
+func validateGitRef(ref string) error {
+	if !gitRefPattern.MatchString(ref) {
+		return fmt.Errorf("invalid git ref %q", ref)
+	}
+	return nil
+}
+
 func gitOut(args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	for _, a := range args {
+		if a == "show" || a == "ls-tree" || a == "-r" || a == "--name-only" || a == "--" {
+			continue // fixed subcommands/flags
+		}
+		if err := validateGitRef(a); err != nil {
+			return "", err
+		}
+	}
+	cmd := exec.Command("git", args...) // #nosec G702 -- every non-flag argument is validated against the git ref charset above; exec.Command passes argv directly with no shell
+
 	out, err := cmd.Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
