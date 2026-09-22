@@ -1,0 +1,36 @@
+# 场景 5 权限拒绝证据：直接 push main 被分支保护拒绝
+
+- **日期**：2026-09-22
+- **背景**：Issue #1 核心验收逻辑场景 5——非 CODEOWNERS 成员（乃至管理员本人）尝试修改已批准基线或 ADR 时，必须被分支保护拒绝并留下拒绝记录。
+- **测试方法**：以仓库管理员（davidchen516，即 Owner 本人）身份，从 main 顶端创建一个空提交（无内容变更），尝试直接 `git push origin HEAD:main`。若保护生效，即使是管理员也应被拒绝——这是比"非成员尝试"更强的证明。
+- **当时的保护配置**（GitHub API GET 确认）：
+  - `require_pull_request_reviews`：要求 PR 才能合并，`required_approving_review_count=0`（单人维护，作者可合并自己的 PR）
+  - `require_code_owner_reviews=false`：GitHub 不允许 PR 作者自批，单人仓库开启会死锁；CODEOWNERS 文件已就位（`.github/CODEOWNERS`），团队扩充后再开启强制审查
+  - `required_status_checks`：`baseline-gate`、`mmr-fixture-replay`，strict 模式
+  - `enforce_admins=true`：管理员不得绕过
+  - `allow_force_pushes=false`、`allow_deletions=false`
+- **命令**：
+
+```bash
+git worktree add --detach /tmp/saoaf-probe main
+cd /tmp/saoaf-probe
+git commit --allow-empty -m "probe: branch protection rejection test (no content, expected to be rejected)"
+git push origin HEAD:main
+```
+
+- **结果（原样输出，exit code 1）**：
+
+```
+remote: error: GH006: Protected branch update failed for refs/heads/main.
+remote:
+remote: - Changes must be made through a pull request.
+remote:
+remote: - 2 of 2 required status checks are expected.
+To github.com:davidchen516/saoaf.git
+ ! [remote rejected] HEAD -> main (protected branch hook declined)
+error: failed to push some refs to 'github.com:davidchen516/saoaf.git'
+```
+
+- **事后核验**：`origin/main` 仍为 `6b4bb3ccfb2fa2023291609fd287e72d01afe767`（未被修改）；探针 worktree 已删除，无残留分支。
+
+- **结论**：直接修改 main（包括管理员）被分支保护拒绝，修改只能经 PR + 双 status check 进入。场景 5 闭环。

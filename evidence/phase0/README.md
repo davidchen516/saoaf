@@ -11,6 +11,12 @@
 | `red-run-unit-fixture-validation.txt` | 调用记录缺 model_route_decision_id、缺 4 种结局 | FAIL（fixture 校验单元级捕获） |
 | `red-run-gate-rejects-missing-decision-id.txt` | 全量门禁在无效夹具下的完整红运行 | FAIL，exit=1 |
 
+## 权限拒绝证据（验收逻辑场景 5）
+
+| 文件 | 场景 | 结果 |
+|---|---|---|
+| `scenario5-branch-protection-rejects-direct-push.txt` | 管理员直接 push main（空提交探针）被 GH006 拒绝：必须走 PR + 2/2 status checks | 拒绝成功，main 未变 |
+
 ## 绿运行（正式基线通过）
 
 | 文件 | 场景 | 结果 |

@@ -1,6 +1,6 @@
 ---
 title: Phase 0 必答问题台账
-version: 1.0.0
+version: 1.1.0
 status: answered
 owner: David
 created: 2026-09-22
@@ -36,6 +36,10 @@ classification: public
 
 - **Q-MMR-02 / Q-MMR-03（OPEN-02）**：真实 MMR 的镜像 digest、fork 差异、endpoint、Envoy/ExtProc 拓扑尚未核验。接受理由：Phase 0 契约已按 v0.3.0 公开能力冻结，Mock 与 ARR 开发不受阻；仅真实联调（I11/I21 相关部分）被阻塞。到期日 2026-10-31，逾期未关闭须升级工程委员会（Owner: David）重新裁决。
 - **Q-CAP-01（OPEN-03）**：首批 Capability 业务清单待领域 Owner 确认，阻塞 I07 首批数据与业务验收，不阻塞骨架与契约。到期日 2026-10-31。
+
+### 风险接受确认记录
+
+- 2026-09-22：David（工程总负责人 / Owner）在 Issue #1 实现证据评审中**确认上述三条风险接受生效**（Q-MMR-02、Q-MMR-03、Q-CAP-01），到期日维持 2026-10-31。真实 MMR 调用 / Trace / SLO 证据并入 I11 联调范围。决策同步记录于 Issue #1 评论与 PR #24。
 
 ## 冲突升级路径
 

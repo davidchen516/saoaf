@@ -1,0 +1,6 @@
+# SAOAF code owners.
+# Phase 0 baseline artifacts (docs/adr, docs/phase0, fixtures, tools/phase0,
+# evidence) are all covered by the default rule. Review enforcement via
+# require_code_owner_reviews stays OFF until a second maintainer exists
+# (GitHub does not allow PR authors to approve their own PRs).
+* @davidchen516
