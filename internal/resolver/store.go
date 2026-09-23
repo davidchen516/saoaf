@@ -123,6 +123,31 @@ func (s Store) CreatePlan(ctx context.Context, plan *Plan) (bool, *Plan, error) 
 		}
 	}
 
+	// audit row for the resolve decision + the outbox event in the SAME
+	// tx (I10: plan events propagate; the change_record FK is the audit
+	// linkage — also closes the I09 disclosure "resolve does not write a
+	// change_record"). ResourcePlanResolved 采样策略「待定」——当前不采样
+	//（evidence 已披露）。
+	var auditID int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO saoaf.change_record
+			(tenant_ref, actor, trace_id, entity_kind, entity_id, operation, decision_ref, summary)
+		VALUES ($1, $2, $3, 'plan', $4, 'RESOLVE', '', $5)
+		RETURNING id`,
+		plan.TenantRef, plan.CallerRef, plan.TraceID, plan.ID,
+		map[string]any{"fingerprint": plan.Fingerprint, "expires_at": plan.ExpiresAt}).Scan(&auditID); err != nil {
+		return false, nil, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO saoaf.outbox_event
+			(topic, payload, change_record_id, event_id, aggregate_kind, aggregate_id, aggregate_revision)
+		VALUES ('plan.resolved', $1::jsonb, $2, $3, 'plan', $4, 1)`,
+		[]byte(fmt.Sprintf(`{"plan_id":%q,"fingerprint":%q,"expires_at":%q}`,
+			plan.ID, plan.Fingerprint, plan.ExpiresAt)),
+		auditID, "plan:"+plan.ID, plan.ID); err != nil {
+		return false, nil, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return false, nil, err
 	}

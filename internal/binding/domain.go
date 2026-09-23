@@ -54,6 +54,7 @@ const (
 	ReasonNotFound          = "BINDING_NOT_FOUND"
 	ReasonAlreadyActive     = "BINDING_ALREADY_ACTIVE"
 	ReasonIdemKeyReuse      = "BINDING_IDEMPOTENCY_KEY_REUSE"
+	ReasonBacklogBlocked    = "BINDING_BACKLOG_BLOCKED"
 )
 
 // ValidationError carries a reason code.

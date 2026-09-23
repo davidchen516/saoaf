@@ -27,6 +27,7 @@ var (
 	ErrDuplicateActive   = errors.New("binding: already an active revision")
 	ErrIdemKeyReuse      = errors.New("binding: idempotency key reuse")
 	ErrInvalidTransition = errors.New("binding: invalid transition")
+	ErrBacklogBlocked    = errors.New("binding: backlog blocks management publish")
 )
 
 // StoreError pairs a sentinel (errors.Is / HTTP mapping) with a domain
@@ -45,7 +46,14 @@ func errS(sent error, reason, msg string) error {
 }
 
 // Store persists bindings.
-type Store struct{ DSN string }
+type Store struct {
+	DSN string
+	// MaxBacklog optionally enforces the I10 backpressure gate on
+	// management publishes (GWT#8): when the outbox backlog exceeds the
+	// approved threshold, large management publishes are rejected while
+	// existing plans keep working (resolve never consults this gate).
+	MaxBacklog int64
+}
 
 // PublishReq carries the publish inputs.
 type PublishReq struct {
@@ -162,6 +170,28 @@ func (s Store) Publish(ctx context.Context, req PublishReq, b *Binding) error {
 	// than the issue's production-only floor, disclosed in evidence/i08)
 	if err := PublishGate(req.ApprovalRef, req.ChangeReason, req.Actor); err != nil {
 		return err
+	}
+
+	// I10 backpressure gate (GWT#8): a management publish is a 大批量
+	// class write; an over-threshold event backlog blocks it fail-closed.
+	// The saoaf schema is shared infrastructure — SQL access, no module
+	// import (ADR-0006).
+	if s.MaxBacklog > 0 {
+		conn, err := pgx.Connect(ctx, s.DSN)
+		if err != nil {
+			return err
+		}
+		var backlog int64
+		if err := conn.QueryRow(ctx,
+			`SELECT count(*) FROM saoaf.outbox_event WHERE status IN ('PENDING','PUBLISHING')`).Scan(&backlog); err != nil {
+			_ = conn.Close(ctx)
+			return err
+		}
+		_ = conn.Close(ctx)
+		if backlog > s.MaxBacklog {
+			return errS(ErrBacklogBlocked, ReasonBacklogBlocked,
+				fmt.Sprintf("event backlog %d exceeds the approved threshold %d; management publish blocked", backlog, s.MaxBacklog))
+		}
 	}
 
 	conn, err := pgx.Connect(ctx, s.DSN)

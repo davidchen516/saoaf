@@ -74,3 +74,15 @@ google.golang.org/protobuf
 gopkg.in/yaml.v2
 # golang.org/x/text — BSD-3 (binding NFC normalization)
 golang.org/x/text
+# github.com/nats-io/nats.go — Apache-2.0 (I10 event transport, NATS JetStream 2.14.7 approved baseline)
+github.com/nats-io/nats.go
+# github.com/nats-io/nkeys — Apache-2.0 (nats.go transitive)
+github.com/nats-io/nkeys
+# github.com/nats-io/nuid — Apache-2.0 (nats.go transitive)
+github.com/nats-io/nuid
+# golang.org/x/term — BSD-3-Clause (nats.go transitive, I10)
+golang.org/x/term
+# golang.org/x/crypto — BSD-3-Clause (nats.go→nkeys transitive, I10)
+golang.org/x/crypto
+# github.com/klauspost/compress — BSD-3-Clause (nats.go transitive, I10)
+github.com/klauspost/compress

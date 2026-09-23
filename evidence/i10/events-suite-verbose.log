@@ -1,0 +1,45 @@
+=== RUN   TestDeduper
+--- PASS: TestDeduper (0.00s)
+=== RUN   TestRevisionTracker
+--- PASS: TestRevisionTracker (0.00s)
+=== RUN   TestOrdered
+--- PASS: TestOrdered (0.00s)
+=== RUN   TestCloudEventMapping
+--- PASS: TestCloudEventMapping (0.00s)
+=== RUN   TestNoopTransport
+--- PASS: TestNoopTransport (0.00s)
+=== RUN   TestCrashMatrix
+=== RUN   TestCrashMatrix/window_A
+    crash_test.go:59: child (A) exit: signal: killed
+=== RUN   TestCrashMatrix/window_B
+    crash_test.go:59: child (B) exit: signal: killed
+=== RUN   TestCrashMatrix/window_C
+    crash_test.go:59: child (C) exit: signal: killed
+=== RUN   TestCrashMatrix/window_D
+    crash_test.go:59: child (D) exit: signal: killed
+--- PASS: TestCrashMatrix (9.74s)
+    --- PASS: TestCrashMatrix/window_A (3.41s)
+    --- PASS: TestCrashMatrix/window_B (3.41s)
+    --- PASS: TestCrashMatrix/window_C (1.54s)
+    --- PASS: TestCrashMatrix/window_D (1.38s)
+=== RUN   TestCrashChild
+    crash_test.go:114: crash child runs only under TestCrashMatrix
+--- SKIP: TestCrashChild (0.00s)
+=== RUN   TestNATSPublishAndServerDedup
+--- PASS: TestNATSPublishAndServerDedup (1.16s)
+=== RUN   TestNATSOutageDrill
+--- PASS: TestNATSOutageDrill (1.67s)
+=== RUN   TestWorkerHappyPath
+--- PASS: TestWorkerHappyPath (0.12s)
+=== RUN   TestWorkerConcurrentClaimNoDoublePublish
+--- PASS: TestWorkerConcurrentClaimNoDoublePublish (0.29s)
+=== RUN   TestWorkerOutageThenRecoveryNoLoss
+--- PASS: TestWorkerOutageThenRecoveryNoLoss (0.11s)
+=== RUN   TestWorkerDeadLetter
+--- PASS: TestWorkerDeadLetter (0.11s)
+=== RUN   TestWorkerLeaseExpiryReclaim
+--- PASS: TestWorkerLeaseExpiryReclaim (0.10s)
+=== RUN   TestWorkerPauseResume
+--- PASS: TestWorkerPauseResume (0.22s)
+PASS
+ok  	github.com/davidchen516/saoaf/internal/events	13.744s
