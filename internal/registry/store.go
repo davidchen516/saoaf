@@ -170,7 +170,127 @@ func (s Store) ActivateSnapshot(ctx context.Context, snap *Snapshot, profiles ma
 		snap.ProviderID, snapID); err != nil {
 		return err
 	}
+	// I10/I11: provider.snapshot-changed outbox event + audit row in the
+	// SAME tx (半提交=0；事件目录 specs §5.2). Minimal payload: provider
+	// key + snapshot version + digest — never the full profile content.
+	var providerKey string
+	if err := tx.QueryRow(ctx, `
+		SELECT provider_key FROM registry.resource_provider WHERE id = $1`,
+		snap.ProviderID).Scan(&providerKey); err != nil {
+		return err
+	}
+	// audit actor: the verified workload identity (empty for legacy
+	// callers → sentinel; the change_record CHECK requires non-empty)
+	auditActor := expectedWorkload
+	if auditActor == "" {
+		auditActor = "platform:snapshot-activation"
+	}
+	var auditID int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO saoaf.change_record
+			(tenant_ref, actor, trace_id, entity_kind, entity_id, operation, decision_ref, summary)
+		VALUES ($1, $2, '', 'provider-snapshot', $3, 'ACTIVATE', $4, $5)
+		RETURNING id`,
+		"_platform", auditActor, providerKey, snap.Signature,
+		map[string]any{"snapshot_version": snap.SnapshotVersion, "digest": snap.Digest}).Scan(&auditID); err != nil {
+		return err
+	}
+	// the event fires ONCE per (provider, snapshot_version) — a pointer
+	// ROLLBACK back to an already-announced snapshot re-announces nothing
+	// (the outbox schema's unique keys carry that semantics); the audit
+	// row above still records the rollback action itself.
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO saoaf.outbox_event
+			(topic, payload, change_record_id, event_id, aggregate_kind, aggregate_id, aggregate_revision)
+		VALUES ('provider.snapshot-changed', $1::jsonb, $2, $3, 'provider', $4, $5)
+		ON CONFLICT DO NOTHING`,
+		[]byte(fmt.Sprintf(`{"provider_id":%q,"snapshot_version":%d,"digest":%q,"valid_until":%q}`,
+			providerKey, snap.SnapshotVersion, snap.Digest, snap.ValidUntil.UTC().Format(time.RFC3339Nano))),
+		auditID, fmt.Sprintf("provider-snapshot:%s:%d", providerKey, snap.SnapshotVersion),
+		providerKey, snap.SnapshotVersion); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
+}
+
+// IngestVerdict classifies a snapshot ingest against existing state
+// (spec §3.2).
+type IngestVerdict int
+
+const (
+	IngestNew               IngestVerdict = iota // higher version than any existing
+	IngestIdempotent                             // same version AND digest AND PUBLISHED — true no-op
+	IngestResumable                              // same version AND digest but NOT PUBLISHED — activation retry
+	IngestDigestConflict                         // same version, different digest — reject + alarm
+	IngestVersionRegression                      // version <= an existing higher version (non-monotonic)
+)
+
+// CheckSnapshotIngest classifies the incoming (version, digest) for the
+// provider against existing rows. Idempotency (review R1 P1) requires the
+// snapshot to be PUBLISHED — a half-committed DRAFT row (submit succeeded,
+// activate failed or crashed) must NOT be reported as idempotent: the
+// replay resumes activation instead (IngestResumable), so a failed window
+// can never leave a version stuck behind a fake success.
+func (s Store) CheckSnapshotIngest(ctx context.Context, providerKey string, version int, digest string) (IngestVerdict, error) {
+	conn, err := s.connect(ctx)
+	if err != nil {
+		return IngestNew, err
+	}
+	defer conn.Close(ctx)
+	var atDigest, atState string
+	err = conn.QueryRow(ctx, `
+		SELECT ps.digest, ps.state FROM registry.provider_snapshot ps
+		JOIN registry.resource_provider rp ON rp.id = ps.provider_id
+		WHERE rp.provider_key = $1 AND ps.snapshot_version = $2`,
+		providerKey, version).Scan(&atDigest, &atState)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// not found at this version — monotonicity check below
+	} else if err != nil {
+		return IngestNew, err
+	} else {
+		if atDigest != digest {
+			return IngestDigestConflict, nil
+		}
+		if atState == "PUBLISHED" {
+			return IngestIdempotent, nil
+		}
+		return IngestResumable, nil
+	}
+	var maxVersion int
+	if err := conn.QueryRow(ctx, `
+		SELECT COALESCE(MAX(ps.snapshot_version), 0)
+		FROM registry.provider_snapshot ps
+		JOIN registry.resource_provider rp ON rp.id = ps.provider_id
+		WHERE rp.provider_key = $1`, providerKey).Scan(&maxVersion); err != nil {
+		return IngestNew, err
+	}
+	if maxVersion > 0 && version < maxVersion {
+		return IngestVersionRegression, nil
+	}
+	return IngestNew, nil
+}
+
+// ProviderByKey returns the provider row for a logical key.
+func (s Store) ProviderByKey(ctx context.Context, providerKey string) (*Provider, error) {
+	conn, err := s.connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close(ctx)
+	var p Provider
+	var st string
+	err = conn.QueryRow(ctx, `
+		SELECT id, provider_key, provider_type, endpoint_ref, owner_ref, workload_identity, state
+		FROM registry.resource_provider WHERE provider_key = $1`, providerKey).
+		Scan(&p.ID, &p.ProviderKey, &p.ProviderType, &p.EndpointRef, &p.OwnerRef, &p.WorkloadIdentity, &st)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	p.State = State(st)
+	return &p, nil
 }
 
 // PublishableProviders returns providers eligible for new binding/plan

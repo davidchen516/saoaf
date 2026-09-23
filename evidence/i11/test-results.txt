@@ -1,0 +1,9 @@
+# I11 mmr 全套（12 项 PASS，真实 PG + 真实 Prism 5.15.10 mock + mTLS，-race）
+# TestInvocationHeaders / TestValidateResponse / TestDecisionFromError / TestRoutingModeTransitions
+# TestCorrelationFiveOutcomes / TestModeStoreScopingAndCAS / TestForbidFieldScan
+# TestMockSucceededCorrelation / TestMockErrorPassthrough / TestMockProfileNotFoundNoAutoSwitch
+# TestMockTimeoutOutcome / TestStreamingDoesNotBlockControlPlane
+
+# registry ingest 3 项（TestSnapshotIngestFlow/Validation/WorkloadIdentity）+ 全包既有套件回归绿
+
+# 全仓 -race：18/18 包 ok（新增 internal/mmr）
