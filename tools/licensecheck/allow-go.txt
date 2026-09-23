@@ -44,3 +44,7 @@ gopkg.in/check.v1
 gopkg.in/yaml.v3
 # github.com/golang-jwt/jwt/v5 — MIT (I05 authn)
 github.com/golang-jwt/jwt/v5
+# github.com/google/cel-go — Apache-2.0 (I06 policy expressions)
+github.com/google/cel-go
+# github.com/antlr4-go/antlr/v4 — BSD-3 (cel-go transitive)
+github.com/antlr4-go/antlr/v4
