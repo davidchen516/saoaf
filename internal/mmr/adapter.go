@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -217,7 +218,7 @@ func (s ModeStore) Mode(ctx context.Context, tenant, agent string) (*RoutingMode
 		if err == nil {
 			return &m, nil
 		}
-		if err.Error() == "no rows in result set" {
+		if errors.Is(err, pgx.ErrNoRows) {
 			continue
 		}
 		return nil, err
@@ -225,13 +226,20 @@ func (s ModeStore) Mode(ctx context.Context, tenant, agent string) (*RoutingMode
 	return nil, nil // no configured mode: the harness uses its current default
 }
 
-// SetMode transitions the scope's mode with CAS on the previous value and
-// a change_record audit row (状态变更审计；历史经 change_record 保留).
+// SetMode transitions the scope's mode with CAS on the previous value;
+// the mode row and its change_record audit row are written in ONE
+// transaction (review R1 P2-1: a crash between the two statements either
+// changed the mode without audit or audited a change that never landed).
 func (s ModeStore) SetMode(ctx context.Context, m RoutingMode, expectedFrom string) error {
 	if !ValidateModeTransition(expectedFrom, m.Mode) {
 		return fmt.Errorf("mmr: illegal routing-mode transition %q → %q (灰度状态机)", expectedFrom, m.Mode)
 	}
-	tag, err := s.Pool.Exec(ctx, `
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after Commit
+	tag, err := tx.Exec(ctx, `
 		INSERT INTO saoaf.mmr_routing_mode
 			(scope_tenant, scope_agent, mode, static_profile_ref, updated_by, updated_at)
 		VALUES ($1, $2, $3, $4, $5, now())
@@ -251,11 +259,16 @@ func (s ModeStore) SetMode(ctx context.Context, m RoutingMode, expectedFrom stri
 	if auditTenant == "" {
 		auditTenant = "_global"
 	}
-	_, err = s.Pool.Exec(ctx, `
+	// audit actor: the verified workload identity (empty for legacy
+	// callers → sentinel; the change_record CHECK requires non-empty)
+	_, err = tx.Exec(ctx, `
 		INSERT INTO saoaf.change_record
 			(tenant_ref, actor, trace_id, entity_kind, entity_id, operation, decision_ref, summary)
 		VALUES ($1, $2, '', 'mmr-routing-mode', $3, 'TRANSITION', '',
 		        jsonb_build_object('from', $4::text, 'to', $5::text, 'static_profile_ref', $6::text))`,
 		auditTenant, m.UpdatedBy, m.ScopeTenant+"/"+m.ScopeAgent, expectedFrom, m.Mode, m.StaticProfileRef)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

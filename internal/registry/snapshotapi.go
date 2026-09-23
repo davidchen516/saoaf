@@ -33,7 +33,12 @@ type SnapshotAPIConfig struct {
 	Store            *Store
 	WorkloadVerifier *workload.Verifier
 	ExpectedIdentity string // e.g. spiffe://saoaf.test/ns/mmr/sa/publisher
-	Now              func() time.Time
+	// ExpectedContractMajor is the ARR-side accepted contract major for MMR
+	// snapshots (spec §3.2) — configured, never derived from the request
+	// itself (review R1 P3-3: the previous self-referential check passed
+	// majorOf(req.ContractVersion) as its own expectation and was vacuous).
+	ExpectedContractMajor string
+	Now                   func() time.Time
 }
 
 // profileStateSet (spec §3.2): profile 状态只允许四态.
@@ -160,7 +165,13 @@ func (cfg SnapshotAPIConfig) handleIngest(w http.ResponseWriter, r *http.Request
 	}
 
 	// 5. store path: submit + activate (the registry store performs its own
-	// snapshot validations: workload identity, contract major, window)
+	// snapshot validations: workload identity, contract major, window).
+	// IngestResumable skips the submit (row exists, same digest) and
+	// retries activation only — the P1 half-commit recovery path.
+	nowFn := cfg.Now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
 	ctx := r.Context()
 	provider, err := cfg.Store.ProviderByKey(ctx, providerKey)
 	if err != nil {
@@ -211,15 +222,48 @@ func (cfg SnapshotAPIConfig) handleIngest(w http.ResponseWriter, r *http.Request
 			"status":                     p.Status,
 		}
 	}
-	if err := cfg.Store.SubmitSnapshot(ctx, snap, profiles); err != nil {
+	if verdict != IngestResumable {
+		if err := cfg.Store.SubmitSnapshot(ctx, snap, profiles); err != nil {
+			// concurrent same-version submit won the race (review R1
+			// P2-2): re-classify against the committed row instead of
+			// surfacing a raw unique-violation as an opaque 400
+			reclass, rerr := cfg.Store.CheckSnapshotIngest(ctx, providerKey, req.SnapshotVersion, req.Digest)
+			if rerr != nil {
+				httpapi.WriteJSON(w, http.StatusBadRequest, map[string]any{
+					"error_code": "SNAPSHOT_REJECTED", "message": err.Error(),
+				})
+				return
+			}
+			switch reclass {
+			case IngestIdempotent:
+				httpapi.WriteJSON(w, http.StatusOK, map[string]any{
+					"status": "idempotent", "snapshot_version": req.SnapshotVersion,
+				})
+				return
+			case IngestDigestConflict:
+				httpapi.WriteJSON(w, http.StatusConflict, map[string]any{
+					"error_code": "SNAPSHOT_DIGEST_CONFLICT",
+					"message":    "same snapshot_version ingested with a different digest (contract drift)",
+				})
+				return
+			case IngestResumable:
+				// fall through: retry activation below
+			default:
+				httpapi.WriteJSON(w, http.StatusBadRequest, map[string]any{
+					"error_code": "SNAPSHOT_REJECTED", "message": err.Error(),
+				})
+				return
+			}
+		}
+	}
+	// contract major is a CONFIGURED expectation (spec §3.2)
+	if cfg.ExpectedContractMajor != "" &&
+		majorOf(req.ContractVersion) != cfg.ExpectedContractMajor {
 		httpapi.WriteJSON(w, http.StatusBadRequest, map[string]any{
-			"error_code": "SNAPSHOT_REJECTED", "message": err.Error(),
+			"error_code": "CONTRACT_MAJOR_REJECTED",
+			"message":    "snapshot contract major not accepted by ARR (configured expectation)",
 		})
 		return
-	}
-	nowFn := cfg.Now
-	if nowFn == nil {
-		nowFn = time.Now
 	}
 	if err := cfg.Store.ActivateSnapshot(ctx, snap, profiles,
 		cfg.ExpectedIdentity, majorOf(req.ContractVersion), nowFn); err != nil {

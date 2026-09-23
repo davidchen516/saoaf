@@ -30,11 +30,6 @@ func TestForbidFieldScan(t *testing.T) {
 				return err
 			}
 			if info.IsDir() {
-				base := info.Name()
-				if base == "mmr" && strings.HasSuffix(path, "internal"+string(filepath.Separator)+"mmr") {
-					// this package legitimately NAMES the boundary it enforces
-					// in comments/doc — the scan still checks code lines below
-				}
 				return nil
 			}
 			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {

@@ -219,40 +219,42 @@ type IngestVerdict int
 
 const (
 	IngestNew               IngestVerdict = iota // higher version than any existing
-	IngestIdempotent                             // same version AND digest — no-op
+	IngestIdempotent                             // same version AND digest AND PUBLISHED — true no-op
+	IngestResumable                              // same version AND digest but NOT PUBLISHED — activation retry
 	IngestDigestConflict                         // same version, different digest — reject + alarm
 	IngestVersionRegression                      // version <= an existing higher version (non-monotonic)
 )
 
 // CheckSnapshotIngest classifies the incoming (version, digest) for the
-// provider against existing rows: idempotent replays and digest conflicts
-// at the same version, plus monotonicity against the latest version.
+// provider against existing rows. Idempotency (review R1 P1) requires the
+// snapshot to be PUBLISHED — a half-committed DRAFT row (submit succeeded,
+// activate failed or crashed) must NOT be reported as idempotent: the
+// replay resumes activation instead (IngestResumable), so a failed window
+// can never leave a version stuck behind a fake success.
 func (s Store) CheckSnapshotIngest(ctx context.Context, providerKey string, version int, digest string) (IngestVerdict, error) {
 	conn, err := s.connect(ctx)
 	if err != nil {
 		return IngestNew, err
 	}
 	defer conn.Close(ctx)
-	var atVersion int
-	var atDigest string
-	found := false
+	var atDigest, atState string
 	err = conn.QueryRow(ctx, `
-		SELECT snapshot_version, digest FROM registry.provider_snapshot ps
+		SELECT ps.digest, ps.state FROM registry.provider_snapshot ps
 		JOIN registry.resource_provider rp ON rp.id = ps.provider_id
 		WHERE rp.provider_key = $1 AND ps.snapshot_version = $2`,
-		providerKey, version).Scan(&atVersion, &atDigest)
+		providerKey, version).Scan(&atDigest, &atState)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// not found at this version — continue with monotonicity checks
+		// not found at this version — monotonicity check below
 	} else if err != nil {
 		return IngestNew, err
 	} else {
-		found = true
-	}
-	if found {
-		if atDigest == digest {
+		if atDigest != digest {
+			return IngestDigestConflict, nil
+		}
+		if atState == "PUBLISHED" {
 			return IngestIdempotent, nil
 		}
-		return IngestDigestConflict, nil
+		return IngestResumable, nil
 	}
 	var maxVersion int
 	if err := conn.QueryRow(ctx, `

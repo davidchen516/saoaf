@@ -28,11 +28,28 @@
 - `internal/registry/snapshotapi.go`：`POST /providers/{key}/snapshots`（mTLS SPIFFE 身份 + §3.2 校验 + I07 存储路径 + 幂等/漂移/单调语义）；`ActivateSnapshot` 补 `provider.snapshot-changed` 事件 + 审计行（同事务，事件对同 (provider,version) 幂等——回滚重指不重复通告）。
 - 契约微调：200 响应头补 example（Prism 兜底字面量问题），400 例保留 decision id（specs §5 五结局关联性）。
 
+## 审查 R1 整改（Findings → 修复 → 回归映射）
+
+| Finding | 修复 | 回归 |
+|---|---|---|
+| P1 幂等判定基于「行存在」而非「已激活」——半提交后重放假报 idempotent，version 永久卡死 | CheckSnapshotIngest 幂等要求 state=PUBLISHED；同 digest 未发布 → IngestResumable（跳过 submit、重试 activate）；过期窗口重放诚实 400 | `TestSnapshotIngestHalfCommitReplayResumes`（审查探针 E 正名：DRAFT 重放 → 激活收敛 + 过期重放 400 不假成功） |
+| P2-1 SetMode 模式行与审计行不同事务 | SetMode 单事务（CAS upsert + change_record 同 tx 提交） | `TestModeStoreScopingAndCAS` |
+| P2-2 竞态 loser 裸 400（丢失幂等 200/漂移 409 分类） | submit 唯一冲突后重跑 CheckSnapshotIngest 重新分类（同 digest→200 / 异 digest→409 / 可恢复→续激活） | `TestSnapshotIngestConcurrentSameKeyConverges`（双并发均 200、恰一次 activate） |
+| P3-3 契约 major 校验自引用恒真 | ExpectedContractMajor 入配置（空=未配置跳过；配置后错配 400 CONTRACT_MAJOR_REJECTED） | `TestSnapshotIngestContractMajorConfig` |
+| P3-5 仓内测试缺口 | 真版本回退 409（无行 v2 < max v3）与异 SAN 403 分支补测（审查探针 F/G 正名） | `TestSnapshotIngestVersionRegression409` / `TestSnapshotIngestWrongSAN403` |
+| P3-7 Mode() 字符串判 no-rows + forbid_test 死代码 | errors.Is(pgx.ErrNoRows) + 死代码清除 | 既有套件 |
+
 ## 已知限制 / Ledger（Issue #11 保持 OPEN 的原因）
 
 **真实 MMR 端到端证据链（非 mock）——外部依赖不可用**：
 - 生产 Agent → ARR → 真实 MMR 调用记录 + Trace 导出；shadow 与灰度监控对比；真实 kill switch 联动（GWT#8 联动演示）；真实内部模型变更的 Plan 不变性端到端实验；回退演练计时（GWT#7）。
 - 这些依赖「既有 Multi-Model Router 与 Agent Harness」（issue 自述 External closure dependency）——与 #5（I05）ledger 同口径：本 PR 把 Mock 可判定的全部范围交付并入 main，真实联调证据待外部环境就绪后补齐关闭。
+
+审查 R1 裁决追加挂账（原 ledger 遗漏）：
+- **digest 内容重算未接线**：ingest 幂等/漂移检测建立在发布方自报 digest 上；`registry.VerifyDigest` 存在但未在 ingest 路径调用（mTLS 单一可信发布方下 Phase 0 可接受；真实签名验证与 digest 篡改检测一并挂真实联调批次）。
+- **签名仅验非空**：真实签名验证（spec §3.2 签名校验）未实现——同上挂真实联调（依赖企业签名规范确定）。
+- **snapshot_version 类型冲突**：spec §3.1 与 mock 契约为 string（"mock-1"），registry 链（00004/I07）为 int——真实联调须解决（涉及 00004 schema 与 I07 接口，不在本 PR 范围内静默改类型）。
+- forbid 扫描的引号豁免有理论盲区（string-key 形式）——多层防御（CheckForbiddenFieldsRecursive + DisallowUnknownFields + 表无对应列）为主证据，扫描为辅（README 原文已如此声明）。
 
 其他挂账：
 - FALLBACK 结局在 Mock 无对应示例——台账五结局经 Correlator 直接覆盖，Mock 覆盖 SUCCEEDED/QUOTA/FAILED/TIMEOUT 四路径。
