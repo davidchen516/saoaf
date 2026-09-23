@@ -44,3 +44,31 @@ gopkg.in/check.v1
 gopkg.in/yaml.v3
 # github.com/golang-jwt/jwt/v5 — MIT (I05 authn)
 github.com/golang-jwt/jwt/v5
+# github.com/google/cel-go — Apache-2.0 (I06 policy expressions)
+github.com/google/cel-go
+# github.com/antlr4-go/antlr/v4 — BSD-3 (cel-go transitive)
+github.com/antlr4-go/antlr/v4
+# cel.dev/expr — Apache-2.0 (cel-go transitive: CEL AST protos)
+cel.dev/expr
+# github.com/golang/protobuf — BSD-3 (cel-go transitive)
+github.com/golang/protobuf
+# github.com/google/go-cmp — BSD-3 (cel-go test transitive)
+github.com/google/go-cmp
+# github.com/stoewer/go-strcase — MIT (cel-go transitive)
+github.com/stoewer/go-strcase
+# golang.org/x/exp — BSD-3 (cel-go transitive)
+golang.org/x/exp
+# golang.org/x/net — BSD-3 (cel-go transitive)
+golang.org/x/net
+# golang.org/x/xerrors — BSD-3 (cel-go transitive)
+golang.org/x/xerrors
+# google.golang.org/genproto/googleapis/api — Apache-2.0 (cel-go transitive)
+google.golang.org/genproto/googleapis/api
+# google.golang.org/genproto/googleapis/rpc — Apache-2.0 (cel-go transitive)
+google.golang.org/genproto/googleapis/rpc
+# google.golang.org/grpc — Apache-2.0 (cel-go transitive)
+google.golang.org/grpc
+# google.golang.org/protobuf — BSD-3 (cel-go transitive)
+google.golang.org/protobuf
+# gopkg.in/yaml.v2 — Apache-2.0 (cel-go transitive)
+gopkg.in/yaml.v2
