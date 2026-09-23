@@ -79,9 +79,9 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA policy
   GRANT SELECT, INSERT, UPDATE ON TABLES TO saoaf_app;
 
 -- +goose Down
-DROP TRIGGER IF EXISTS policy.plan_policy_ref_immutable ON policy.plan_policy_ref;
+DROP TRIGGER IF EXISTS plan_policy_ref_immutable ON policy.plan_policy_ref;
 DROP FUNCTION IF EXISTS policy.freeze_plan_ref();
-DROP TRIGGER IF EXISTS policy.policy_revision_immutable ON policy.policy_revision;
+DROP TRIGGER IF EXISTS policy_revision_immutable ON policy.policy_revision;
 DROP FUNCTION IF EXISTS policy.freeze_revision_content();
 DROP TABLE IF EXISTS policy.plan_policy_ref;
 DROP INDEX IF EXISTS policy.policy_by_set_version;

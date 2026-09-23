@@ -818,3 +818,26 @@ ALTER TABLE saoaf.outbox_event ADD COLUMN good_col TEXT;
 		t.Fatal("good_col missing after successful retry")
 	}
 }
+
+// Up→Down→Up round-trip: every migration's Down section must be executable
+// (review R2 finding: DROP TRIGGER with schema qualifier broke goose down).
+func TestMigrationUpDownUpRoundTrip(t *testing.T) {
+	base := dsn(t)
+	db := freshDB(t, base)
+	defer dropDB(t, base, filepath.Base(db))
+
+	// up → down → up
+	gooseRun(t, db, "up")
+	// goose down rolls back the most recent migration (v3 → v2), exercising
+	// 00003's Down section (trigger/function/table drops)
+	if out, err := tryGooseRun(db, "down"); err != nil {
+		t.Fatalf("goose down failed (Down section broken): %v\n%s", err, out)
+	}
+	if v := queryVersion(t, db); v != 2 {
+		t.Fatalf("version after down = %d, want 2", v)
+	}
+	gooseRun(t, db, "up")
+	if v := queryVersion(t, db); v != 3 {
+		t.Fatalf("version after up-down-up = %d, want 3", v)
+	}
+}
