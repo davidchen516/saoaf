@@ -54,22 +54,23 @@ CREATE TABLE IF NOT EXISTS registry.publish_idempotency (
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- scope 列不可变 trigger（scope_hash 由应用计算，同时冻结避免不一致）
+-- 内容不可变 trigger：内容字段（capability/provider/snapshot/profile/
+-- scope/scope_hash/priority/environment）在**任何行**上都不可改——active 行
+-- 和历史行一样是审计证据（review R1 P2-4：旧行只护 active 会留 DB 层改写
+-- 后门）。仅生命周期字段（state/revision/is_active/发布元数据）可变。
 -- +goose StatementBegin
 CREATE OR REPLACE FUNCTION registry.freeze_binding_content()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF OLD.is_active THEN
-    IF NEW.capability_id IS DISTINCT FROM OLD.capability_id
-       OR NEW.provider_id IS DISTINCT FROM OLD.provider_id
-       OR NEW.snapshot_id IS DISTINCT FROM OLD.snapshot_id
-       OR NEW.profile_or_action IS DISTINCT FROM OLD.profile_or_action
-       OR NEW.scope IS DISTINCT FROM OLD.scope
-       OR NEW.scope_hash IS DISTINCT FROM OLD.scope_hash
-       OR NEW.priority IS DISTINCT FROM OLD.priority
-       OR NEW.environment IS DISTINCT FROM OLD.environment THEN
-      RAISE EXCEPTION 'active binding revision content immutable' USING ERRCODE = '23514';
-    END IF;
+  IF NEW.capability_id IS DISTINCT FROM OLD.capability_id
+     OR NEW.provider_id IS DISTINCT FROM OLD.provider_id
+     OR NEW.snapshot_id IS DISTINCT FROM OLD.snapshot_id
+     OR NEW.profile_or_action IS DISTINCT FROM OLD.profile_or_action
+     OR NEW.scope IS DISTINCT FROM OLD.scope
+     OR NEW.scope_hash IS DISTINCT FROM OLD.scope_hash
+     OR NEW.priority IS DISTINCT FROM OLD.priority
+     OR NEW.environment IS DISTINCT FROM OLD.environment THEN
+    RAISE EXCEPTION 'binding revision content immutable (active and historical)' USING ERRCODE = '23514';
   END IF;
   RETURN NEW;
 END;

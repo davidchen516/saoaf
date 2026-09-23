@@ -53,6 +53,34 @@ func TestScopeOverlap(t *testing.T) {
 	if narrow.Overlaps(other) {
 		t.Fatal("different tenant + different region should not overlap")
 	}
+
+	// R1 P1-1 通配符语义：空 = unrestricted（specs §1.2），通配维与任何具体
+	// 集合同维重叠——审查探针实证过旧实现放行 {tenant-a} vs {tenant-a,tenant-b}。
+	wildcardTenant := Scope{TenantRefs: []string{}, Regions: []string{"cn-east"}}
+	specificTenant := Scope{TenantRefs: []string{"tenant-a"}, Regions: []string{"cn-east"}}
+	if !wildcardTenant.Overlaps(specificTenant) || !specificTenant.Overlaps(wildcardTenant) {
+		t.Fatal("empty (unrestricted) tenant_refs must overlap any specific tenant set")
+	}
+
+	// 部分重叠（非完全相等）：tenant 维交集非空即重叠
+	sup := Scope{TenantRefs: []string{"tenant-a", "tenant-b"}, Regions: []string{"cn-east"}}
+	sub := Scope{TenantRefs: []string{"tenant-a"}, Regions: []string{"cn-east"}}
+	if !sup.Overlaps(sub) {
+		t.Fatal("partially intersecting scopes must overlap")
+	}
+
+	// AND 跨维度：一个维度不相交（且双方都非通配）→ 不重叠，即使另一维重叠
+	left := Scope{TenantRefs: []string{}, Regions: []string{"cn-east"}}
+	right := Scope{TenantRefs: []string{"tenant-a"}, Regions: []string{"cn-west"}}
+	if left.Overlaps(right) {
+		t.Fatal("disjoint regions must prevent overlap even with wildcard tenants")
+	}
+
+	// 全通配 scope 与一切重叠
+	all := Scope{}
+	if !all.Overlaps(other) {
+		t.Fatal("fully unrestricted scope overlaps everything")
+	}
 }
 
 // 生命周期矩阵全测试。
@@ -86,18 +114,19 @@ func TestTransitionMatrix(t *testing.T) {
 // 发布门控。
 func TestPublishGate(t *testing.T) {
 	cases := []struct {
-		approval, reason string
-		wantErr          bool
+		approval, reason, actor string
+		wantErr                 bool
 	}{
-		{"approval:1", "fix", false},
-		{"", "fix", true},
-		{"approval:1", "", true},
-		{"", "", true},
+		{"approval:1", "fix", "user:alice", false},
+		{"", "fix", "user:alice", true},
+		{"approval:1", "", "user:alice", true},
+		{"approval:1", "fix", "", true}, // R1 P2-2：审计必须能归因操作主体
+		{"", "", "", true},
 	}
 	for _, tc := range cases {
-		err := PublishGate(tc.approval, tc.reason, "")
+		err := PublishGate(tc.approval, tc.reason, tc.actor)
 		if (err != nil) != tc.wantErr {
-			t.Fatalf("PublishGate(%q,%q) = %v, wantErr %v", tc.approval, tc.reason, err, tc.wantErr)
+			t.Fatalf("PublishGate(%q,%q,%q) = %v, wantErr %v", tc.approval, tc.reason, tc.actor, err, tc.wantErr)
 		}
 	}
 }

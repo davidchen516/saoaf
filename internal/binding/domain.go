@@ -115,17 +115,26 @@ func (s Scope) ScopeHash() string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// Overlaps reports whether two canonical scopes share any binding dimension.
-// Two scopes overlap when they share at least one value in a dimension
-// AND neither is empty in that dimension (empty = unrestricted).
+// Overlaps reports whether two canonical scopes can match the same request
+// (issue 冲突不变量：同优先级重叠 scope 不可同时 PUBLISHED).
+//
+// A binding matches a request when EVERY dimension matches, where a
+// dimension matches if the request value is in the set OR the set is empty
+// (specs §1.2: empty = unrestricted, deny is not expressible). Therefore two
+// scopes overlap iff EVERY dimension co-matches, where a dimension
+// co-matches when either side is empty (wildcard) or the sets intersect.
 func (a Scope) Overlaps(b Scope) bool {
-	return overlapDim(a.TenantRefs, b.TenantRefs) ||
-		overlapDim(a.FactoryRefs, b.FactoryRefs) ||
-		overlapDim(a.Regions, b.Regions) ||
+	return overlapDim(a.TenantRefs, b.TenantRefs) &&
+		overlapDim(a.FactoryRefs, b.FactoryRefs) &&
+		overlapDim(a.Regions, b.Regions) &&
 		overlapDim(a.AgentRefs, b.AgentRefs)
 }
 
 func overlapDim(a, b []string) bool {
+	// empty = unrestricted（通配）: covers any value the other side may carry
+	if len(a) == 0 || len(b) == 0 {
+		return true
+	}
 	am := setOf(a)
 	for _, v := range b {
 		if am[v] {
@@ -143,7 +152,10 @@ func setOf(s []string) map[string]bool {
 	return m
 }
 
-// CheckScopeFields validates no forbidden keys ride on the scope JSON.
+// CheckScopeFields validates no forbidden keys ride on RAW scope JSON. It is
+// meaningful only at untrusted-JSON boundaries (HTTP layer, I16) — the store
+// layer's Scope is a closed struct, so Publish does not re-run it (review R1
+// P3-2: value-substring false positives, e.g. a legit "tenant-prompt-team").
 func CheckScopeFields(raw []byte) error {
 	if scopeFieldPattern.Match(raw) {
 		return errV(ReasonScopeNotCanonical, "scope carries forbidden keys (credentials/prompt)")
@@ -152,13 +164,19 @@ func CheckScopeFields(raw []byte) error {
 }
 
 // PublishGate checks the production publish prerequisites (issue: 审批引用
-// + change record 存在，否则拒绝).
-func PublishGate(approvalRef, changeReason, ticketRef string) error {
+// + change record 存在，否则拒绝). Approval is enforced for ALL environments
+// (stricter than the issue's production-only floor — disclosed in
+// evidence/i08); actor is always required so audit rows can attribute the
+// change (review R1 P2-2).
+func PublishGate(approvalRef, changeReason, actor string) error {
 	if approvalRef == "" {
-		return errV(ReasonMissingApproval, "production publish requires approval_ref")
+		return errV(ReasonMissingApproval, "publish requires approval_ref")
 	}
 	if changeReason == "" {
-		return errV(ReasonMissingApproval, "production publish requires change_reason")
+		return errV(ReasonMissingApproval, "publish requires change_reason")
+	}
+	if actor == "" {
+		return errV(ReasonMissingApproval, "publish requires actor for audit attribution")
 	}
 	return nil
 }

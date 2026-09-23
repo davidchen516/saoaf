@@ -4,6 +4,7 @@ package binding
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func mustConnB(t *testing.T, dsn string) *pgx.Conn {
@@ -137,6 +139,7 @@ func TestDB50ConcurrentPublishSingleActive(t *testing.T) {
 			BindingKey: "bind-conc", Revision: 1, Scope: scope, Priority: 100,
 			Environment: "production", ApprovalRef: "approval:1",
 			ChangeReason: "test", TenantRef: "tenant-a",
+			Actor: "user:admin", TraceID: "trace-test",
 		}
 		_ = scope
 		b := &Binding{CapabilityID: 1, ProviderID: 1, SnapshotID: 1, Profile: "p1"}
@@ -187,6 +190,7 @@ func TestDBScopeConflictBlocked(t *testing.T) {
 			BindingKey: "bind-a", Revision: 1, Scope: scopeA, Priority: 100,
 			Environment: "production", ApprovalRef: "appr:1",
 			ChangeReason: "test", TenantRef: "t",
+			Actor: "user:admin", TraceID: "trace-test",
 		}
 		_ = scopeA
 		b := &Binding{CapabilityID: 1, ProviderID: 1, SnapshotID: 1, Profile: "p1"}
@@ -202,6 +206,7 @@ func TestDBScopeConflictBlocked(t *testing.T) {
 			BindingKey: "bind-b", Revision: 1, Scope: scopeB, Priority: 100,
 			Environment: "production", ApprovalRef: "appr:2",
 			ChangeReason: "test", TenantRef: "t",
+			Actor: "user:admin", TraceID: "trace-test",
 		}
 		if err := store.Publish(ctx, reqB, b); err == nil {
 			t.Fatal("scope conflict accepted")
@@ -214,6 +219,7 @@ func TestDBScopeConflictBlocked(t *testing.T) {
 			BindingKey: "bind-b", Revision: 1, Scope: scopeB, Priority: 200,
 			Environment: "production", ApprovalRef: "appr:3",
 			ChangeReason: "test", TenantRef: "t",
+			Actor: "user:admin", TraceID: "trace-test",
 		}
 		if err := store.Publish(ctx, reqC, b); err != nil {
 			t.Fatalf("different priority should succeed: %v", err)
@@ -235,6 +241,7 @@ func TestDBSuspendResumeRetire(t *testing.T) {
 			BindingKey: "bind-lc", Revision: 1, Scope: scope, Priority: 50,
 			Environment: "production", ApprovalRef: "appr:lc",
 			ChangeReason: "lifecycle test", TenantRef: "t",
+			Actor: "user:admin", TraceID: "trace-test",
 		}
 		b := &Binding{CapabilityID: 1, ProviderID: 1, SnapshotID: 1, Profile: "p1"}
 		if err := store.Publish(ctx, req, b); err != nil {
@@ -247,22 +254,26 @@ func TestDBSuspendResumeRetire(t *testing.T) {
 		}
 
 		// PUBLISHED → SUSPENDED
-		if err := store.Suspend(ctx, "bind-lc", rev); err != nil {
+		if err := store.Suspend(ctx, TransitionReq{BindingKey: "bind-lc", ExpectedRev: rev,
+			Actor: "user:admin", TraceID: "trace-test", ChangeReason: "lc suspend"}); err != nil {
 			t.Fatalf("suspend: %v", err)
 		}
 		rev++
 		// SUSPENDED → PUBLISHED (resume)
-		if err := store.Resume(ctx, "bind-lc", rev); err != nil {
+		if err := store.Resume(ctx, TransitionReq{BindingKey: "bind-lc", ExpectedRev: rev,
+			Actor: "user:admin", TraceID: "trace-test"}); err != nil {
 			t.Fatalf("resume: %v", err)
 		}
 		rev++
 		// PUBLISHED → SUSPENDED again
-		if err := store.Suspend(ctx, "bind-lc", rev); err != nil {
+		if err := store.Suspend(ctx, TransitionReq{BindingKey: "bind-lc", ExpectedRev: rev,
+			Actor: "user:admin", TraceID: "trace-test"}); err != nil {
 			t.Fatalf("suspend again: %v", err)
 		}
 		rev++
 		// SUSPENDED → RETIRED
-		if err := store.Retire(ctx, "bind-lc", rev, StateSuspended); err != nil {
+		if err := store.Retire(ctx, TransitionReq{BindingKey: "bind-lc", ExpectedRev: rev,
+			Actor: "user:admin", TraceID: "trace-test"}, StateSuspended); err != nil {
 			t.Fatalf("retire: %v", err)
 		}
 		// verify final state
@@ -300,13 +311,15 @@ func TestDBCASRevisionConflict(t *testing.T) {
 			BindingKey: "bind-cas", Revision: 1, Scope: scope, Priority: 60,
 			Environment: "production", ApprovalRef: "appr:cas",
 			ChangeReason: "CAS test", TenantRef: "t",
+			Actor: "user:admin", TraceID: "trace-test",
 		}
 		b := &Binding{CapabilityID: 1, ProviderID: 1, SnapshotID: 1, Profile: "p1"}
 		if err := store.Publish(ctx, req, b); err != nil {
 			t.Fatalf("publish: %v", err)
 		}
 		// try to suspend with WRONG revision (seed is at 2 after publish, use 99)
-		err := store.Suspend(ctx, "bind-cas", 99)
+		err := store.Suspend(ctx, TransitionReq{BindingKey: "bind-cas", ExpectedRev: 99,
+			Actor: "user:admin", TraceID: "trace-test"})
 		if err == nil {
 			t.Fatal("CAS with wrong revision succeeded")
 		}
@@ -340,6 +353,7 @@ func TestDBRollbackCreatesNewRevision(t *testing.T) {
 			BindingKey: "bind-rb", Revision: 1, Scope: scopeV1, Priority: 70,
 			Environment: "production", ApprovalRef: "appr:1",
 			ChangeReason: "v1", TenantRef: "t",
+			Actor: "user:admin", TraceID: "trace-test",
 		}, b); err != nil {
 			t.Fatalf("publish v1: %v", err)
 		}
@@ -355,6 +369,7 @@ func TestDBRollbackCreatesNewRevision(t *testing.T) {
 			BindingKey: "bind-rb", Revision: rev1, Scope: scopeV2, Priority: 100,
 			Environment: "production", ApprovalRef: "appr:2",
 			ChangeReason: "v2", TenantRef: "t",
+			Actor: "user:admin", TraceID: "trace-test",
 		}, b); err != nil {
 			t.Fatalf("publish v2: %v", err)
 		}
@@ -374,6 +389,7 @@ func TestDBRollbackCreatesNewRevision(t *testing.T) {
 			BindingKey: "bind-rb", Revision: rev2, Scope: scopeV1, Priority: 70,
 			Environment: "production", ApprovalRef: "appr:3",
 			ChangeReason: "rollback to v1", TenantRef: "t",
+			Actor: "user:admin", TraceID: "trace-test",
 		}, b); err != nil {
 			t.Fatalf("rollback publish: %v", err)
 		}
@@ -428,6 +444,7 @@ func TestDBPublishIdempotentReplay(t *testing.T) {
 			Scope:    Scope{TenantRefs: []string{"tenant-idem"}, Regions: []string{"cn-east"}},
 			Priority: 100, Environment: "production",
 			ApprovalRef: "appr:idem", ChangeReason: "idem test", TenantRef: "t",
+			Actor: "user:admin", TraceID: "trace-test",
 			IdempotencyKey: "idem-0001",
 		}
 		if err := store.Publish(ctx, req, b); err != nil {
@@ -481,6 +498,7 @@ func TestDBPublishIdempotentReplay(t *testing.T) {
 			Scope:    Scope{TenantRefs: []string{"tenant-idem2"}, Regions: []string{"cn-east"}},
 			Priority: 150, Environment: "production",
 			ApprovalRef: "appr:idem2", ChangeReason: "v2", TenantRef: "t",
+			Actor: "user:admin", TraceID: "trace-test",
 			IdempotencyKey: "idem-0003",
 		}, b); err != nil {
 			t.Fatalf("publish v2: %v", err)
@@ -489,6 +507,525 @@ func TestDBPublishIdempotentReplay(t *testing.T) {
 			t.Fatalf("want ErrRevisionConflict for superseded replay, got %v", err)
 		}
 	})
+}
+
+// —— R1 P1-1 回归：部分重叠（非全等 hash）+ 同优先级必须在发布时阻断 ——
+func TestDBPartialOverlapBlocked(t *testing.T) {
+	withDBB(t, func(db string) {
+		conn := mustConnB(t, db)
+		ctx := context.Background()
+		seedBinding(t, conn, "bind-ov-a")
+		seedBinding(t, conn, "bind-ov-b")
+		seedBinding(t, conn, "bind-ov-c")
+		store := Store{DSN: db}
+		b := &Binding{CapabilityID: 1, ProviderID: 1, SnapshotID: 1, Profile: "p1"}
+
+		pub := func(key string, scope Scope, prio int) error {
+			return store.Publish(ctx, PublishReq{
+				BindingKey: key, Revision: 1, Scope: scope, Priority: prio,
+				Environment: "production", ApprovalRef: "appr:ov",
+				ChangeReason: "overlap test", TenantRef: "t",
+				Actor: "user:admin", TraceID: "trace-test",
+			}, b)
+		}
+
+		// A 覆盖 tenants {a,b}
+		broad := Scope{TenantRefs: []string{"tenant-a", "tenant-b"}, Regions: []string{"cn-east"}}
+		if err := pub("bind-ov-a", broad, 100); err != nil {
+			t.Fatalf("publish A: %v", err)
+		}
+
+		// 部分重叠 + 同优先级 → 拒绝（审查探针实证旧实现放行双活）
+		partial := Scope{TenantRefs: []string{"tenant-a"}, Regions: []string{"cn-east"}}
+		if err := pub("bind-ov-b", partial, 100); !isErr(err, ErrScopeConflict) {
+			t.Fatalf("partial overlap at same priority must be rejected, got %v", err)
+		}
+		// 通配（空 = unrestricted）tenant 维同样重叠
+		wild := Scope{TenantRefs: []string{}, Regions: []string{"cn-east"}}
+		if err := pub("bind-ov-c", wild, 100); !isErr(err, ErrScopeConflict) {
+			t.Fatalf("wildcard overlap at same priority must be rejected, got %v", err)
+		}
+		// 不同优先级 → 允许（优先级是消解重叠的合法手段）
+		if err := pub("bind-ov-b", partial, 200); err != nil {
+			t.Fatalf("overlapping scope at a different priority must be allowed: %v", err)
+		}
+		// AND 跨维度：region 不相交且双方非通配 → 不重叠 → 允许
+		far := Scope{TenantRefs: []string{"tenant-a"}, Regions: []string{"cn-west"}}
+		if err := pub("bind-ov-c", far, 100); err != nil {
+			t.Fatalf("disjoint-region scope at same priority must be allowed: %v", err)
+		}
+	})
+}
+
+// —— R1 P1-1 并发闭包：两个部分重叠 scope 并发发布，恰一胜出 ——
+// 审查探针曾以并发路径穿透冲突检测；(env, priority) advisory lock 让
+// 重叠预检必能看到所有已提交的同槽位兄弟。
+func TestDBConcurrentOverlapSingleWinner(t *testing.T) {
+	withDBB(t, func(db string) {
+		conn := mustConnB(t, db)
+		ctx := context.Background()
+		seedBinding(t, conn, "bind-race-a")
+		seedBinding(t, conn, "bind-race-b")
+		store := Store{DSN: db}
+		b := &Binding{CapabilityID: 1, ProviderID: 1, SnapshotID: 1, Profile: "p1"}
+
+		scopes := map[string]Scope{
+			"bind-race-a": {TenantRefs: []string{"tenant-a", "tenant-b"}, Regions: []string{"cn-east"}},
+			"bind-race-b": {TenantRefs: []string{"tenant-b"}, Regions: []string{"cn-east"}},
+		}
+		var successes, conflicts atomic.Int64
+		var wg sync.WaitGroup
+		const N = 50
+		for i := 0; i < N; i++ {
+			key := "bind-race-a"
+			if i%2 == 1 {
+				key = "bind-race-b"
+			}
+			wg.Add(1)
+			go func(key string) {
+				defer wg.Done()
+				err := store.Publish(ctx, PublishReq{
+					BindingKey: key, Revision: 1, Scope: scopes[key], Priority: 100,
+					Environment: "production", ApprovalRef: "appr:race",
+					ChangeReason: "race test", TenantRef: "t",
+					Actor: "user:admin", TraceID: "trace-test",
+				}, b)
+				switch {
+				case err == nil:
+					successes.Add(1)
+				case isErr(err, ErrScopeConflict), isErr(err, ErrRevisionConflict):
+					// 跨 binding 重叠拒绝 + 同 binding CAS 拒绝都属合法分类
+					conflicts.Add(1)
+				}
+			}(key)
+		}
+		wg.Wait()
+		if successes.Load() != 1 {
+			t.Fatalf("successes = %d, want exactly 1 (overlapping scopes, same priority)", successes.Load())
+		}
+		if successes.Load()+conflicts.Load() != N {
+			t.Fatalf("unclassified failures: successes=%d conflicts=%d want total %d", successes.Load(), conflicts.Load(), N)
+		}
+		var live int
+		if err := conn.QueryRow(ctx, `
+			SELECT count(*) FROM registry.capability_binding
+			WHERE environment = 'production' AND priority = 100
+			  AND state = 'PUBLISHED' AND is_active`).Scan(&live); err != nil {
+			t.Fatal(err)
+		}
+		if live != 1 {
+			t.Fatalf("live bindings at (production, 100) = %d, want 1", live)
+		}
+	})
+}
+
+// —— R1 P1-2 回归：RETIRED/SUSPENDED/DEPRECATED 不可被 Publish 复活 ——
+func TestDBTerminalStatesBlockPublish(t *testing.T) {
+	withDBB(t, func(db string) {
+		conn := mustConnB(t, db)
+		ctx := context.Background()
+		for _, key := range []string{"bind-term-r", "bind-term-s", "bind-term-d"} {
+			seedBinding(t, conn, key)
+		}
+		store := Store{DSN: db}
+		b := &Binding{CapabilityID: 1, ProviderID: 1, SnapshotID: 1, Profile: "p1"}
+		prio := 0
+
+		publish := func(key string, rev int) error {
+			prio++
+			return store.Publish(ctx, PublishReq{
+				BindingKey: key, Revision: rev,
+				Scope:    Scope{TenantRefs: []string{"tenant-" + key}, Regions: []string{"cn-east"}},
+				Priority: prio, Environment: "production",
+				ApprovalRef: "appr:term", ChangeReason: "terminal test", TenantRef: "t",
+				Actor: "user:admin", TraceID: "trace-test",
+			}, b)
+		}
+		activeRev := func(key string) (int, string) {
+			var rev int
+			var state string
+			if err := conn.QueryRow(ctx, `
+				SELECT revision, state FROM registry.capability_binding
+				WHERE binding_key = $1 AND is_active`, key).Scan(&rev, &state); err != nil {
+				t.Fatal(err)
+			}
+			return rev, state
+		}
+		tr := func(key string, rev int) TransitionReq {
+			return TransitionReq{BindingKey: key, ExpectedRev: rev,
+				Actor: "user:admin", TraceID: "trace-test"}
+		}
+
+		// RETIRED: publish → suspend → retire → revival attempt
+		if err := publish("bind-term-r", 1); err != nil {
+			t.Fatalf("publish r: %v", err)
+		}
+		rev, _ := activeRev("bind-term-r")
+		if err := store.Suspend(ctx, tr("bind-term-r", rev)); err != nil {
+			t.Fatalf("suspend r: %v", err)
+		}
+		rev, _ = activeRev("bind-term-r")
+		if err := store.Retire(ctx, tr("bind-term-r", rev), StateSuspended); err != nil {
+			t.Fatalf("retire r: %v", err)
+		}
+		rev, _ = activeRev("bind-term-r")
+		if err := publish("bind-term-r", rev); !isErr(err, ErrInvalidTransition) {
+			t.Fatalf("publish over RETIRED must be rejected, got %v", err)
+		}
+		if s := mustState(t, conn, "bind-term-r"); s != "RETIRED" {
+			t.Fatalf("state drifted after rejected revival: %s", s)
+		}
+
+		// SUSPENDED: publish 需先 Resume（不得借 publish 绕过状态机）
+		if err := publish("bind-term-s", 1); err != nil {
+			t.Fatalf("publish s: %v", err)
+		}
+		rev, _ = activeRev("bind-term-s")
+		if err := store.Suspend(ctx, tr("bind-term-s", rev)); err != nil {
+			t.Fatalf("suspend s: %v", err)
+		}
+		rev, _ = activeRev("bind-term-s")
+		if err := publish("bind-term-s", rev); !isErr(err, ErrInvalidTransition) {
+			t.Fatalf("publish over SUSPENDED must be rejected (Resume first), got %v", err)
+		}
+		if s := mustState(t, conn, "bind-term-s"); s != "SUSPENDED" {
+			t.Fatalf("state drifted: %s", s)
+		}
+
+		// DEPRECATED: 同样不可被 publish 覆盖
+		if err := publish("bind-term-d", 1); err != nil {
+			t.Fatalf("publish d: %v", err)
+		}
+		rev, _ = activeRev("bind-term-d")
+		if err := store.Deprecate(ctx, TransitionReq{BindingKey: "bind-term-d", ExpectedRev: rev,
+			Actor: "user:admin", TraceID: "trace-test", ChangeReason: "deprecated"}); err != nil {
+			t.Fatalf("deprecate d: %v", err)
+		}
+		rev, _ = activeRev("bind-term-d")
+		if err := publish("bind-term-d", rev); !isErr(err, ErrInvalidTransition) {
+			t.Fatalf("publish over DEPRECATED must be rejected, got %v", err)
+		}
+		// DEPRECATED → RETIRED 走状态机可行
+		if err := store.Retire(ctx, tr("bind-term-d", rev), StateDeprecated); err != nil {
+			t.Fatalf("retire from DEPRECATED: %v", err)
+		}
+	})
+}
+
+// mustState returns the CURRENT (active) row's state for a binding.
+func mustState(t *testing.T, conn *pgx.Conn, key string) string {
+	t.Helper()
+	var state string
+	if err := conn.QueryRow(context.Background(), `
+		SELECT state FROM registry.capability_binding
+		WHERE binding_key = $1 AND is_active`, key).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+// —— R1 P2-1/2-2 回归：transition 审计 + 事件；publish 审计字段归因 ——
+func TestDBTransitionAuditsAndEvents(t *testing.T) {
+	withDBB(t, func(db string) {
+		conn := mustConnB(t, db)
+		ctx := context.Background()
+		seedBinding(t, conn, "bind-aud")
+		store := Store{DSN: db}
+		b := &Binding{CapabilityID: 1, ProviderID: 1, SnapshotID: 1, Profile: "p1"}
+
+		if err := store.Publish(ctx, PublishReq{
+			BindingKey: "bind-aud", Revision: 1,
+			Scope:    Scope{TenantRefs: []string{"tenant-aud"}, Regions: []string{"cn-east"}},
+			Priority: 90, Environment: "production",
+			ApprovalRef: "appr:aud", ChangeReason: "audit test", TenantRef: "t",
+			Actor: "user:auditor", TraceID: "trace-aud",
+		}, b); err != nil {
+			t.Fatalf("publish: %v", err)
+		}
+		var rev int
+		if err := conn.QueryRow(ctx, `
+			SELECT revision FROM registry.capability_binding
+			WHERE binding_key = 'bind-aud' AND is_active`).Scan(&rev); err != nil {
+			t.Fatal(err)
+		}
+
+		// P2-2 回归：PUBLISH 审计行的 actor/trace 归因操作者，而非 change reason
+		var pubActor, pubTrace string
+		if err := conn.QueryRow(ctx, `
+			SELECT actor, trace_id FROM saoaf.change_record
+			WHERE entity_kind = 'binding' AND entity_id = 'bind-aud' AND operation = 'PUBLISH'`).Scan(&pubActor, &pubTrace); err != nil {
+			t.Fatal(err)
+		}
+		if pubActor != "user:auditor" || pubTrace != "trace-aud" {
+			t.Fatalf("PUBLISH audit attribution = (%q, %q), want (user:auditor, trace-aud)", pubActor, pubTrace)
+		}
+
+		// transition 落审计 + 事件（P2-1：暂停是生产影响性变更）
+		if err := store.Suspend(ctx, TransitionReq{BindingKey: "bind-aud", ExpectedRev: rev,
+			Actor: "user:ops", TraceID: "trace-susp", ChangeReason: "maintenance"}); err != nil {
+			t.Fatalf("suspend: %v", err)
+		}
+		var crCount int
+		if err := conn.QueryRow(ctx, `
+			SELECT count(*) FROM saoaf.change_record
+			WHERE entity_kind = 'binding' AND entity_id = 'bind-aud'
+			  AND operation = 'SUSPEND' AND actor = 'user:ops' AND trace_id = 'trace-susp'`).Scan(&crCount); err != nil {
+			t.Fatal(err)
+		}
+		if crCount != 1 {
+			t.Fatalf("SUSPEND audit rows = %d, want 1 (actor/trace attributed)", crCount)
+		}
+		var evCount int
+		if err := conn.QueryRow(ctx, `
+			SELECT count(*) FROM saoaf.outbox_event
+			WHERE aggregate_kind = 'binding' AND aggregate_id = 'bind-aud'
+			  AND topic = 'binding.suspended'`).Scan(&evCount); err != nil {
+			t.Fatal(err)
+		}
+		if evCount != 1 {
+			t.Fatalf("binding.suspended outbox events = %d, want 1", evCount)
+		}
+
+		if err := conn.QueryRow(ctx, `
+			SELECT revision FROM registry.capability_binding
+			WHERE binding_key = 'bind-aud' AND is_active`).Scan(&rev); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Resume(ctx, TransitionReq{BindingKey: "bind-aud", ExpectedRev: rev,
+			Actor: "user:ops", TraceID: "trace-res"}); err != nil {
+			t.Fatalf("resume: %v", err)
+		}
+		if err := conn.QueryRow(ctx, `
+			SELECT count(*) FROM saoaf.outbox_event
+			WHERE aggregate_id = 'bind-aud' AND topic = 'binding.resumed'`).Scan(&evCount); err != nil {
+			t.Fatal(err)
+		}
+		if evCount != 1 {
+			t.Fatalf("binding.resumed outbox events = %d, want 1", evCount)
+		}
+	})
+}
+
+// —— R1 P2-3 回归：Resume 撞他人槽位 → ErrScopeConflict（非裸 23505）——
+func TestDBResumeSlotConflictClassified(t *testing.T) {
+	withDBB(t, func(db string) {
+		conn := mustConnB(t, db)
+		ctx := context.Background()
+		seedBinding(t, conn, "bind-rs1")
+		seedBinding(t, conn, "bind-rs2")
+		store := Store{DSN: db}
+		b := &Binding{CapabilityID: 1, ProviderID: 1, SnapshotID: 1, Profile: "p1"}
+		scope := Scope{TenantRefs: []string{"tenant-rs"}, Regions: []string{"cn-east"}}
+
+		pub := func(key string) error {
+			return store.Publish(ctx, PublishReq{
+				BindingKey: key, Revision: 1, Scope: scope, Priority: 100,
+				Environment: "production", ApprovalRef: "appr:rs",
+				ChangeReason: "slot test", TenantRef: "t",
+				Actor: "user:admin", TraceID: "trace-test",
+			}, b)
+		}
+		if err := pub("bind-rs1"); err != nil {
+			t.Fatalf("publish rs1: %v", err)
+		}
+		if err := store.Suspend(ctx, TransitionReq{BindingKey: "bind-rs1", ExpectedRev: 2,
+			Actor: "user:admin", TraceID: "trace-test"}); err != nil {
+			t.Fatalf("suspend rs1: %v", err)
+		}
+		// 槽位释放后 rs2 可发布同 scope 同优先级
+		if err := pub("bind-rs2"); err != nil {
+			t.Fatalf("publish rs2 into released slot: %v", err)
+		}
+		// rs1 Resume → 撞 rs2 槽位：fail-closed 且错误已分类
+		err := store.Resume(ctx, TransitionReq{BindingKey: "bind-rs1", ExpectedRev: 3,
+			Actor: "user:admin", TraceID: "trace-test"})
+		if !isErr(err, ErrScopeConflict) {
+			t.Fatalf("resume into taken slot must be ErrScopeConflict, got %v", err)
+		}
+		// 无漂移：rs1 仍 SUSPENDED，rs2 仍唯一 live
+		if s := mustState(t, conn, "bind-rs1"); s != "SUSPENDED" {
+			t.Fatalf("rs1 drifted after rejected resume: %s", s)
+		}
+		var live int
+		if err := conn.QueryRow(ctx, `
+			SELECT count(*) FROM registry.capability_binding
+			WHERE scope_hash = $1 AND environment = 'production' AND priority = 100
+			  AND state = 'PUBLISHED' AND is_active`, scope.ScopeHash()).Scan(&live); err != nil {
+			t.Fatal(err)
+		}
+		if live != 1 {
+			t.Fatalf("live bindings in slot = %d, want exactly 1", live)
+		}
+	})
+}
+
+// —— R1 P2-4 回归：历史行内容 DB 层不可变 ——
+func TestDBHistoricalContentImmutable(t *testing.T) {
+	withDBB(t, func(db string) {
+		conn := mustConnB(t, db)
+		ctx := context.Background()
+		seedBinding(t, conn, "bind-im")
+		store := Store{DSN: db}
+		b := &Binding{CapabilityID: 1, ProviderID: 1, SnapshotID: 1, Profile: "p1"}
+
+		pub := func(rev int, tenants string) error {
+			return store.Publish(ctx, PublishReq{
+				BindingKey: "bind-im", Revision: rev,
+				Scope:    Scope{TenantRefs: []string{tenants}, Regions: []string{"cn-east"}},
+				Priority: 80, Environment: "production",
+				ApprovalRef: "appr:im", ChangeReason: "immutability test", TenantRef: "t",
+				Actor: "user:admin", TraceID: "trace-test",
+			}, b)
+		}
+		if err := pub(1, "tenant-v1"); err != nil {
+			t.Fatalf("publish v1: %v", err)
+		}
+		if err := pub(2, "tenant-v2"); err != nil {
+			t.Fatalf("publish v2: %v", err)
+		}
+
+		// 历史行（非 active）内容改写 → trigger 拒绝
+		_, err := conn.Exec(ctx, `
+			UPDATE registry.capability_binding SET scope_hash = 'sha256:evil'
+			WHERE binding_key = 'bind-im' AND NOT is_active`)
+		if !isCheckViolation(err) {
+			t.Fatalf("historical row content rewrite must be rejected, got %v", err)
+		}
+		// active 行同样拒绝
+		_, err = conn.Exec(ctx, `
+			UPDATE registry.capability_binding SET priority = 999
+			WHERE binding_key = 'bind-im' AND is_active`)
+		if !isCheckViolation(err) {
+			t.Fatalf("active row content rewrite must be rejected, got %v", err)
+		}
+		// 生命周期字段（state）仍可按状态机改（由 API 走）
+		var rows int
+		if err := conn.QueryRow(ctx, `
+			SELECT count(*) FROM registry.capability_binding WHERE binding_key = 'bind-im'`).Scan(&rows); err != nil {
+			t.Fatal(err)
+		}
+		if rows != 3 { // seed + v1 + v2
+			t.Fatalf("rows = %d, want 3", rows)
+		}
+	})
+}
+
+// —— R1 P2-5：Create / Deprecate / FindOverlapping（影响查询）——
+func TestDBCreateDeprecateImpactQuery(t *testing.T) {
+	withDBB(t, func(db string) {
+		conn := mustConnB(t, db)
+		ctx := context.Background()
+		seedBinding(t, conn, "cap-seeded") // 仅为了 FK 链：capability/provider/snapshot
+		store := Store{DSN: db}
+
+		// Create：DRAFT 行 + 审计
+		if err := store.Create(ctx, CreateReq{
+			BindingKey: "bind-cr", Environment: "production",
+			CapabilityID: 1, ProviderID: 1, SnapshotID: 1, Profile: "reasoning-high-v1",
+			Scope:    Scope{TenantRefs: []string{"tenant-cr"}, Regions: []string{"cn-east"}},
+			Priority: 100, TenantRef: "t",
+			Actor: "user:creator", TraceID: "trace-cr",
+		}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		var state string
+		var active bool
+		if err := conn.QueryRow(ctx, `
+			SELECT state, is_active FROM registry.capability_binding
+			WHERE binding_key = 'bind-cr'`).Scan(&state, &active); err != nil {
+			t.Fatal(err)
+		}
+		if state != "DRAFT" || active {
+			t.Fatalf("created row = (%s, active=%v), want (DRAFT, false)", state, active)
+		}
+		var cr int
+		if err := conn.QueryRow(ctx, `
+			SELECT count(*) FROM saoaf.change_record
+			WHERE entity_kind = 'binding' AND entity_id = 'bind-cr' AND operation = 'CREATE'
+			  AND actor = 'user:creator'`).Scan(&cr); err != nil {
+			t.Fatal(err)
+		}
+		if cr != 1 {
+			t.Fatalf("CREATE audit rows = %d, want 1", cr)
+		}
+		// 重复 create → 拒绝（键唯一；其余列合法以命中唯一约束而非 CHECK）
+		if err := store.Create(ctx, CreateReq{BindingKey: "bind-cr", Environment: "production",
+			CapabilityID: 1, ProviderID: 1, SnapshotID: 1, Profile: "p",
+			Scope:    Scope{TenantRefs: []string{"tenant-cr"}, Regions: []string{"cn-east"}},
+			Priority: 100, TenantRef: "t",
+			Actor: "user:creator"}); !isErr(err, ErrDuplicateActive) {
+			t.Fatalf("duplicate create must be rejected, got %v", err)
+		}
+
+		// 发布后做影响查询
+		b := &Binding{CapabilityID: 1, ProviderID: 1, SnapshotID: 1, Profile: "reasoning-high-v1"}
+		if err := store.Publish(ctx, PublishReq{
+			BindingKey: "bind-cr", Revision: 1,
+			Scope:    Scope{TenantRefs: []string{"tenant-cr"}, Regions: []string{"cn-east"}},
+			Priority: 100, Environment: "production",
+			ApprovalRef: "appr:cr", ChangeReason: "impact test", TenantRef: "t",
+			Actor: "user:admin", TraceID: "trace-test",
+		}, b); err != nil {
+			t.Fatalf("publish bind-cr: %v", err)
+		}
+		// 通配 binding（不同优先级允许共存）
+		seedBinding(t, conn, "bind-wild")
+		if err := store.Publish(ctx, PublishReq{
+			BindingKey: "bind-wild", Revision: 1,
+			Scope:    Scope{TenantRefs: []string{}, Regions: []string{"cn-east"}},
+			Priority: 200, Environment: "production",
+			ApprovalRef: "appr:w", ChangeReason: "wildcard", TenantRef: "t",
+			Actor: "user:admin", TraceID: "trace-test",
+		}, b); err != nil {
+			t.Fatalf("publish bind-wild: %v", err)
+		}
+		// 不相交 binding（同优先级、region 不同 → 不重叠 → 允许）
+		seedBinding(t, conn, "bind-far")
+		if err := store.Publish(ctx, PublishReq{
+			BindingKey: "bind-far", Revision: 1,
+			Scope:    Scope{TenantRefs: []string{"tenant-z"}, Regions: []string{"cn-west"}},
+			Priority: 100, Environment: "production",
+			ApprovalRef: "appr:f", ChangeReason: "far", TenantRef: "t",
+			Actor: "user:admin", TraceID: "trace-test",
+		}, b); err != nil {
+			t.Fatalf("publish bind-far: %v", err)
+		}
+
+		got, err := store.FindOverlapping(ctx, "production",
+			Scope{TenantRefs: []string{"tenant-cr"}, Regions: []string{"cn-east"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 2 || got[0].BindingKey != "bind-cr" || got[0].Priority != 100 ||
+			got[1].BindingKey != "bind-wild" || got[1].Priority != 200 {
+			t.Fatalf("FindOverlapping = %+v, want [bind-cr(100) bind-wild(200)] ordered by priority", got)
+		}
+
+		// Deprecate：PUBLISHED → DEPRECATED（审计 + 事件）
+		if err := store.Deprecate(ctx, TransitionReq{BindingKey: "bind-wild", ExpectedRev: 2,
+			Actor: "user:admin", TraceID: "trace-test", ChangeReason: "sunset"}); err != nil {
+			t.Fatalf("deprecate: %v", err)
+		}
+		if s := mustState(t, conn, "bind-wild"); s != "DEPRECATED" {
+			t.Fatalf("bind-wild state = %s, want DEPRECATED", s)
+		}
+		// DEPRECATED 不再在役：影响查询不再返回它
+		got, err = store.FindOverlapping(ctx, "production",
+			Scope{TenantRefs: []string{"tenant-cr"}, Regions: []string{"cn-east"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].BindingKey != "bind-cr" {
+			t.Fatalf("FindOverlapping after deprecate = %+v, want [bind-cr]", got)
+		}
+	})
+}
+
+// isCheckViolation reports a CHECK (23514) failure — the immutability
+// trigger's rejection code.
+func isCheckViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23514"
 }
 
 func isErr(err, target error) bool {

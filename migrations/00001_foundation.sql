@@ -12,12 +12,21 @@
 -- +goose StatementBegin
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'saoaf_owner') THEN
-    CREATE ROLE saoaf_owner LOGIN;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'saoaf_app') THEN
-    CREATE ROLE saoaf_app LOGIN;
-  END IF;
+  -- 角色是 cluster 级全局对象：NOT EXISTS + CREATE 在两个会话（如并行测试包
+  -- 同时 goose up 不同 database）之间存在竞态窗口，败者撞 pg_authid 唯一索引。
+  -- 用异常捕获使 DO 块可安全并发重放（review R1 P3-3；语义不变）。
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'saoaf_owner') THEN
+      CREATE ROLE saoaf_owner LOGIN;
+    END IF;
+  EXCEPTION WHEN unique_violation THEN NULL;
+  END;
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'saoaf_app') THEN
+      CREATE ROLE saoaf_app LOGIN;
+    END IF;
+  EXCEPTION WHEN unique_violation THEN NULL;
+  END;
 END
 $$;
 -- +goose StatementEnd

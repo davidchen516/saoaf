@@ -1,4 +1,4 @@
-# Binding package (verbose, real PG postgres:18.6)
+# I08 R1（审查整改后）binding 全套 verbose，真实 PG postgres:18.6
 === RUN   TestScopeCanonicalGolden
 --- PASS: TestScopeCanonicalGolden (0.00s)
 === RUN   TestScopeOverlap
@@ -12,36 +12,50 @@
 === RUN   TestBindingString
 --- PASS: TestBindingString (0.00s)
 === RUN   TestDB50ConcurrentPublishSingleActive
---- PASS: TestDB50ConcurrentPublishSingleActive (0.19s)
+--- PASS: TestDB50ConcurrentPublishSingleActive (0.36s)
 === RUN   TestDBScopeConflictBlocked
---- PASS: TestDBScopeConflictBlocked (0.25s)
+--- PASS: TestDBScopeConflictBlocked (0.24s)
 === RUN   TestDBSuspendResumeRetire
---- PASS: TestDBSuspendResumeRetire (0.23s)
+--- PASS: TestDBSuspendResumeRetire (0.15s)
 === RUN   TestDBCASRevisionConflict
---- PASS: TestDBCASRevisionConflict (0.21s)
+--- PASS: TestDBCASRevisionConflict (0.12s)
 === RUN   TestDBRollbackCreatesNewRevision
---- PASS: TestDBRollbackCreatesNewRevision (0.23s)
+--- PASS: TestDBRollbackCreatesNewRevision (0.24s)
 === RUN   TestDBPublishIdempotentReplay
---- PASS: TestDBPublishIdempotentReplay (0.15s)
-ok  	github.com/davidchen516/saoaf/internal/binding	1.502s
+--- PASS: TestDBPublishIdempotentReplay (0.27s)
+=== RUN   TestDBPartialOverlapBlocked
+--- PASS: TestDBPartialOverlapBlocked (0.26s)
+=== RUN   TestDBConcurrentOverlapSingleWinner
+--- PASS: TestDBConcurrentOverlapSingleWinner (0.26s)
+=== RUN   TestDBTerminalStatesBlockPublish
+--- PASS: TestDBTerminalStatesBlockPublish (0.32s)
+=== RUN   TestDBTransitionAuditsAndEvents
+--- PASS: TestDBTransitionAuditsAndEvents (0.31s)
+=== RUN   TestDBResumeSlotConflictClassified
+--- PASS: TestDBResumeSlotConflictClassified (0.14s)
+=== RUN   TestDBHistoricalContentImmutable
+--- PASS: TestDBHistoricalContentImmutable (0.12s)
+=== RUN   TestDBCreateDeprecateImpactQuery
+--- PASS: TestDBCreateDeprecateImpactQuery (0.17s)
+ok  	github.com/davidchen516/saoaf/internal/binding	3.172s
 
-# Red run: 审批缺失 → 发布拒绝（GWT#2 负向）
-=== RUN   TestPublishGate
---- PASS: TestPublishGate (0.00s)
-ok  	github.com/davidchen516/saoaf/internal/binding	0.198s
+# 并行 CREATE ROLE 竞态路径 ×3（migrations + binding 同集群并行 goose up）
+run 1: ok  	github.com/davidchen516/saoaf/migrations	3.879s / ok  	github.com/davidchen516/saoaf/internal/binding	3.397s
+run 2: ok  	github.com/davidchen516/saoaf/migrations	3.725s / ok  	github.com/davidchen516/saoaf/internal/binding	3.418s
+run 3: ok  	github.com/davidchen516/saoaf/migrations	6.536s / ok  	github.com/davidchen516/saoaf/internal/binding	6.220s
 
 # Full repo -race
-ok  	github.com/davidchen516/saoaf/internal/binding	2.966s
-ok  	github.com/davidchen516/saoaf/internal/platform/approval	1.425s
-ok  	github.com/davidchen516/saoaf/internal/platform/authn	2.121s
-ok  	github.com/davidchen516/saoaf/internal/platform/authz	1.770s
-ok  	github.com/davidchen516/saoaf/internal/platform/httpapi	1.936s
-ok  	github.com/davidchen516/saoaf/internal/platform/middleware	2.801s
-ok  	github.com/davidchen516/saoaf/internal/platform/worker	2.528s
-ok  	github.com/davidchen516/saoaf/internal/platform/workload	2.828s
-ok  	github.com/davidchen516/saoaf/internal/policy	4.681s
-ok  	github.com/davidchen516/saoaf/internal/registry	4.558s
-ok  	github.com/davidchen516/saoaf/migrations	6.772s
-ok  	github.com/davidchen516/saoaf/tools/boundarycheck	3.011s
-ok  	github.com/davidchen516/saoaf/tools/contractlint	2.373s
-ok  	github.com/davidchen516/saoaf/tools/licensecheck	1.756s
+ok  	github.com/davidchen516/saoaf/internal/binding	5.680s
+ok  	github.com/davidchen516/saoaf/internal/platform/approval	1.948s
+ok  	github.com/davidchen516/saoaf/internal/platform/authn	2.926s
+ok  	github.com/davidchen516/saoaf/internal/platform/authz	1.619s
+ok  	github.com/davidchen516/saoaf/internal/platform/httpapi	1.480s
+ok  	github.com/davidchen516/saoaf/internal/platform/middleware	3.104s
+ok  	github.com/davidchen516/saoaf/internal/platform/worker	2.727s
+ok  	github.com/davidchen516/saoaf/internal/platform/workload	2.787s
+ok  	github.com/davidchen516/saoaf/internal/policy	4.763s
+ok  	github.com/davidchen516/saoaf/internal/registry	5.131s
+ok  	github.com/davidchen516/saoaf/migrations	7.175s
+ok  	github.com/davidchen516/saoaf/tools/boundarycheck	2.679s
+ok  	github.com/davidchen516/saoaf/tools/contractlint	2.745s
+ok  	github.com/davidchen516/saoaf/tools/licensecheck	2.304s
