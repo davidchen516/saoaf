@@ -27,53 +27,54 @@ type AdminConfig struct {
 
 // MountAdmin wires /admin/v1 under the fixed auth chain.
 func MountAdmin(r chi.Router, cfg AdminConfig) {
-	admin := r.Route("/admin/v1", nil)
-	admin.Use(
-		middleware.RateLimit(cfg.RatePerSec, cfg.RateBurst),
-		middleware.RequireIdentity(cfg.Authn),
-	)
+	r.Route("/admin/v1", func(admin chi.Router) {
+		admin.Use(
+			middleware.RateLimit(cfg.RatePerSec, cfg.RateBurst),
+			middleware.RequireIdentity(cfg.Authn),
+		)
 
-	// whoami: any authenticated identity (diagnostic + smoke test)
-	admin.Get("/whoami", func(w http.ResponseWriter, req *http.Request) {
-		id := middleware.IdentityFrom(req.Context())
-		writeJSON(w, http.StatusOK, map[string]any{
-			"subject":    id.Subject,
-			"tenant_ref": id.TenantRef,
-			"scopes":     id.Scopes,
-		})
-	})
-
-	// bindings publish: high-risk write demo — scope → PDP → approval → audit
-	admin.With(
-		middleware.RequireScope("resource.publish"),
-		middleware.ApprovalGate(cfg.PDP, cfg.Approvals, "resource.publish"),
-	).Post("/bindings/{id}/publish", func(w http.ResponseWriter, req *http.Request) {
-		id := middleware.IdentityFrom(req.Context())
-		approvalRef := req.Header.Get("X-Saoaf-Approval-Ref")
-		bindingID := chi.URLParam(req, "id")
-		traceID := req.Header.Get("X-Request-ID")
-
-		if err := cfg.Audit.Write(req.Context(), audit.Entry{
-			TenantRef:   id.TenantRef,
-			Actor:       id.Subject,
-			TraceID:     traceID,
-			EntityKind:  "binding",
-			EntityID:    bindingID,
-			Operation:   "PUBLISH",
-			DecisionRef: approvalRef,
-		}); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{
-				"error_code": "INTERNAL",
-				"message":    "audit write failed",
-				"request_id": traceID,
+		// whoami: any authenticated identity (diagnostic + smoke test)
+		admin.Get("/whoami", func(w http.ResponseWriter, req *http.Request) {
+			id := middleware.IdentityFrom(req.Context())
+			writeJSON(w, http.StatusOK, map[string]any{
+				"subject":    id.Subject,
+				"tenant_ref": id.TenantRef,
+				"scopes":     id.Scopes,
 			})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status":       "published",
-			"binding_id":   bindingID,
-			"decision_ref": approvalRef,
-			"request_id":   traceID,
+		})
+
+		// bindings publish: high-risk write demo — scope → PDP → approval → audit
+		admin.With(
+			middleware.RequireScope("resource.publish"),
+			middleware.ApprovalGate(cfg.PDP, cfg.Approvals, "resource.publish"),
+		).Post("/bindings/{id}/publish", func(w http.ResponseWriter, req *http.Request) {
+			id := middleware.IdentityFrom(req.Context())
+			approvalRef := req.Header.Get("X-Saoaf-Approval-Ref")
+			bindingID := chi.URLParam(req, "id")
+			traceID := req.Header.Get("X-Request-ID")
+
+			if err := cfg.Audit.Write(req.Context(), audit.Entry{
+				TenantRef:   id.TenantRef,
+				Actor:       id.Subject,
+				TraceID:     traceID,
+				EntityKind:  "binding",
+				EntityID:    bindingID,
+				Operation:   "PUBLISH",
+				DecisionRef: approvalRef,
+			}); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{
+					"error_code": "INTERNAL",
+					"message":    "audit write failed",
+					"request_id": traceID,
+				})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"status":       "published",
+				"binding_id":   bindingID,
+				"decision_ref": approvalRef,
+				"request_id":   traceID,
+			})
 		})
 	})
 }

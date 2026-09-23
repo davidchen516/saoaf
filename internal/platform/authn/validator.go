@@ -11,6 +11,7 @@ package authn
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
@@ -21,7 +22,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -173,6 +173,9 @@ var ErrUnauthenticated = errors.New("unauthenticated")
 // Errors are deliberately coarse (ErrUnauthenticated with no token
 // internals) so error responses cannot leak token details.
 func (v *Validator) Validate(ctx context.Context, rawToken string) (*Identity, error) {
+	// transport artifacts (trailing newline/whitespace) must not poison the
+	// Authorization header downstream
+	rawToken = strings.TrimSpace(rawToken)
 	if rawToken == "" {
 		return nil, ErrUnauthenticated
 	}
@@ -214,8 +217,17 @@ func (v *Validator) Validate(ctx context.Context, rawToken string) (*Identity, e
 		return nil, ErrUnauthenticated
 	}
 	id := &Identity{TokenID: str(claims["jti"])}
-	if id.Subject = str(claims["sub"]); id.Subject == "" {
-		return nil, ErrUnauthenticated
+	id.Subject = str(claims["sub"])
+	if id.Subject == "" {
+		// Keycloak 26 lightweight access tokens omit `sub` from the JWT.
+		// The signature/issuer/audience/expiry checks above already passed;
+		// resolve the subject from the issuer userinfo endpoint using the
+		// same verified token. userinfo failure → fail closed (401).
+		sub, err := v.userinfoSubject(ctx, rawToken)
+		if err != nil {
+			return nil, ErrUnauthenticated
+		}
+		id.Subject = sub
 	}
 	id.TenantRef = str(claims["tenant_ref"])
 	if sc, ok := claims["scope"].(string); ok {
@@ -232,13 +244,16 @@ func str(v any) string {
 	return s
 }
 
-// newRequestIDCounter is a process-local fallback correlation source when
-// the caller supplies no X-Request-ID.
-var requestIDCounter atomic.Uint64
-
-// NewRequestID mints a locally unique correlation id (fallback only).
+// NewRequestID mints a UUIDv4-shaped correlation id when the caller
+// supplies no X-Request-ID (downstream contracts validate UUID format).
 func NewRequestID() string {
-	return fmt.Sprintf("req-%d-%d", time.Now().UnixNano(), requestIDCounter.Add(1))
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "00000000-0000-0000-0000-000000000000"
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // jwkToRSAPublic converts JWK base64url (n, e) to an *rsa.PublicKey.
@@ -260,4 +275,34 @@ func jwkToRSAPublic(nB64, eB64 string) (*rsa.PublicKey, error) {
 		return nil, fmt.Errorf("bad exponent value")
 	}
 	return pub, nil
+}
+
+// userinfoSubject resolves the subject via the OIDC userinfo endpoint
+// (Phase 0 Keycloak 26 lightweight-access-token enrichment). The token
+// itself was already signature/issuer/audience/expiry verified.
+func (v *Validator) userinfoSubject(ctx context.Context, rawToken string) (string, error) {
+	url := strings.TrimRight(v.issuer, "/") + "/protocol/openid-connect/userinfo"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+rawToken)
+	resp, err := v.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("userinfo status %d", resp.StatusCode)
+	}
+	var doc struct {
+		Sub string `json:"sub"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		return "", err
+	}
+	if doc.Sub == "" {
+		return "", errors.New("userinfo missing sub")
+	}
+	return doc.Sub, nil
 }

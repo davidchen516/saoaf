@@ -109,7 +109,7 @@ func ApprovalGate(pdp *authz.PDPClient, approvals *approval.Client, action strin
 			bodyRef := chi.URLParam(r, "id")
 			ev := authz.Evaluation{
 				Subject:  authz.Entity{Type: "identity", ID: id.Subject},
-				Action:   authz.Entity{ID: action},
+				Action:   authz.Entity{Name: action},
 				Resource: authz.Entity{Type: "binding", ID: bodyRef},
 				Context: map[string]any{
 					"tenant_ref":  id.TenantRef,

@@ -1,0 +1,36 @@
+# I05 真实 Mock 栈端到端记录（2026-09-23）
+
+环境：Keycloak 26.7.4（realm saoaf-dev 导入）+ Prism AuthZEN PDP（:4010）+ Prism 审批 Mock（:4011）+ control-plane-api（本机构建）。
+测试用户 e2e-alice（admin REST 创建，requiredActions 清空，role saoaf-publisher），client e2e-test（public + direct grant，default scopes: openid + audience + resource.read/publish）。
+
+## 全链结果
+
+```
+1. whoami（真实 Keycloak RS256 token，userinfo sub 富集）
+   → 200 {"subject":"11719763-b71a-4874-9088-f6648a8b1215","scopes":["openid","saoaf-control-plane-audience","resource.read","resource.publish"]}
+
+2. publish 全链（401→scope→PDP allow→审批 approved(bob 审批)→审计(NoopSink)）
+   → 200 {"binding_id":"b1","decision_ref":"approval:mock-1001","status":"published"}
+
+3. 负向：
+   no-token  → 401 UNAUTHENTICATED
+   fake token → 401 UNAUTHENTICATED
+   无审批 ref → 403 FORBIDDEN
+
+4. 故障注入：docker stop PDP → publish → 403 FORBIDDEN（fail-closed，无降级放行）→ PDP 重启后恢复
+```
+
+## Keycloak 26 轻量 access token 处理
+
+KC 26 默认轻量 access token 省略 `sub` 声明（realm API 不暴露关闭开关，PUT 被 400 拒绝：
+`Unrecognized field "lightweightAccessTokensEnabled"`）。适配器语义：
+1. JWT 先完成签名（JWKS RS256）→ issuer → audience → expiry 校验；
+2. `sub` 缺失时用同一 token 调 issuer userinfo 端点取 sub（已验证返回 `sub: 11719763-…`）；
+3. userinfo 不可达/无 sub → fail closed 401。
+签名校验始终前置；该路径不降低安全边界，仅适配 KC26 token 形态。
+
+## 中间件链修正记录（E2E 调试过程中发现并修复）
+
+- PDP 契约 action 用 `name` 字段（非 `id`）——Entity 增加 Name 字段；
+- X-Request-ID 需 UUID 格式（Prism schema 校验 format: uuid）——fallback 请求 ID 改为 v4 UUID 形态；
+- token 尾部空白会污染 Authorization header——Validate 入口 TrimSpace。

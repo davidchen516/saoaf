@@ -16,7 +16,8 @@ import (
 // Entity references the AuthZEN subject/action/resource shape.
 type Entity struct {
 	Type       string         `json:"type,omitempty"`
-	ID         string         `json:"id"`
+	ID         string         `json:"id,omitempty"`
+	Name       string         `json:"name,omitempty"` // AuthZEN action uses name, not id
 	Properties map[string]any `json:"properties,omitempty"`
 }
 
