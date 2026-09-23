@@ -271,16 +271,23 @@ func (w *OutboxWorker) publishOne(ctx context.Context, r OutboxRow) error {
 		if w.hooks.OnPublished != nil {
 			w.hooks.OnPublished(ctx, r.ID)
 		}
-		// the watermark read+write must be one serialized critical section:
+		// the watermark read+write must be ONE serialized critical section:
 		// read-committed lets two workers read the same MAX and the partial
-		// unique index outbox_published_seq_idx rejects the loser (23505),
-		// leaving the row PUBLISHING with the message already on the wire
-		// (review R1 P2-1, probe-proven). A per-mark xact advisory lock keeps
-		// the section tiny while making published_seq unique-by-construction.
-		if _, lerr := w.cfg.Pool.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('saoaf:outbox:watermark'))`); lerr != nil {
+		// unique index outbox_published_seq_idx rejects the loser (23505).
+		// pg_advisory_xact_lock is TRANSACTION-scoped — it only guards the
+		// mark if held in the SAME explicit transaction as the UPDATE
+		// (review R2-N1: a standalone autocommit Exec released the lock
+		// before the mark ever ran; single global key, no nesting, one
+		// statement — deadlock-free).
+		markTx, terr := w.cfg.Pool.Begin(ctx)
+		if terr != nil {
+			return terr
+		}
+		defer func() { _ = markTx.Rollback(ctx) }() // no-op after Commit
+		if _, lerr := markTx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('saoaf:outbox:watermark'))`); lerr != nil {
 			return lerr
 		}
-		tag, uerr := w.cfg.Pool.Exec(ctx, `
+		tag, uerr := markTx.Exec(ctx, `
 			UPDATE saoaf.outbox_event
 			SET status = 'PUBLISHED', published_at = now(), lease_expires_at = NULL,
 			    published_seq = (SELECT COALESCE(MAX(published_seq), 0) + 1 FROM saoaf.outbox_event)
@@ -293,6 +300,10 @@ func (w *OutboxWorker) publishOne(ctx context.Context, r OutboxRow) error {
 			// marked it — treat as done (idempotent marking)
 			return nil
 		}
+		if cerr := markTx.Commit(ctx); cerr != nil {
+			return cerr
+		}
+
 		ms := time.Since(start).Milliseconds()
 		w.mu.Lock()
 		w.stats.Published++
