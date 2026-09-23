@@ -51,8 +51,24 @@
 ### GO-2026-5932 接受记录（审查关注点预披露）
 
 - 事实：`x/crypto`（经 nats.go→nkeys，已批准 NATS 基线的传递依赖）携带 GO-2026-5932——`x/crypto/openpgp` 包永久无人维护的通告（**Fixed in: N/A**，不存在修复版本）。
-- 证据：`govulncheck` 符号级扫描（含 shipped binaries 两枚）确认 **openpgp 的任何符号零可达**；模块级扫描（I02 红运行语义，任何受影响模块即红）对本通告将永久误报。
-- 处置：quality.yml 的模块级扫描对**且仅对** GO-2026-5932 显式接受（`ACCEPTED-WITH-EVIDENCE` 注释 + 过滤实现于 workflow 内，可审查）；binary 符号扫描与其他一切 GO-* 发现保持严格 fatal。x/crypto 版本随 go.mod（v0.57.0）。
+- 证据：**import graph 零 openpgp**（`go list -deps ./cmd/...` 实证——x/crypto 仅经 curve25519/blake2b/nacl 进入）；govulncheck v1.1.4 的模块级扫描与 stripped 二进制扫描都会按包级通配兜底报告该通告（审查 R1 实测归因，`Fixed in: N/A` 永不修复）。
+- 处置：quality.yml 的模块级与 binary 两级扫描都对**且仅对** GO-2026-5932 显式接受（`ACCEPTED-WITH-EVIDENCE` 注释 + 过滤实现于 workflow 内，可审查）；其他一切 GO-* 发现保持严格 fatal。x/crypto 版本随 go.mod（v0.57.0）。
+
+## 审查 R1 整改（Findings → 修复 → 回归映射）
+
+| Finding | 修复 | 回归 |
+|---|---|---|
+| P1-1 binary 扫描同报 GO-2026-5932（stripped 二进制包级通配兜底）+ evidence 表述相反 | binary_scan 过滤器（同 module_scan：仅接受该通告，其余 fatal）；evidence 措辞更正为「import graph 实证零 openpgp；扫描兜底误报」 | CI SCA 绿 |
+| P2-1 published_seq MAX+1 竞态（审查风暴探针 3 轮实测 23505） | 标记语句前置 `pg_advisory_xact_lock('saoaf:outbox:watermark')`——临界区极小、水位唯一构造 | TestWorkerConcurrentClaimNoDoublePublish + 四窗口矩阵回归 |
+| P2-2 next_retry_at 只写不读（退避死代码） | claim 查询过滤 `next_retry_at < now()`；断连回 PUBLISHING→PENDING 带未来 retry 时间 → 下一轮领取为空 → Run 正常 sleep（热循环结构性消除） | TestWorkerOutageThenRecoveryNoLoss（清 next_retry_at 从 no-op 变为真解除退避） |
+| P2-3 生产传输 DLQ 不可达（一切错误→ErrTransportDown） | `isTerminalNATSError`（ErrMaxPayload/ErrBadSubject）→ 终态走重试预算→FAILED/DLQ；断连类仍永续重试 | TestWorkerDeadLetter（fake 终态）+ 分类注释 |
+| P2-4 管理面默认绑全接口 | `-admin-addr` 默认 `127.0.0.1:8081`（挂账披露的 loopback 前提成立） | — |
+| P3-1 claim N+1 查 tenant_ref 且吞错 | tenant_ref/trace_id JOIN 进 claim 单查询；死代码清除 | 既有套件 |
+| P3-2 PublishDLQ nil-map panic 地雷 | 非对象 payload 包装（不 panic） | — |
+| P3-4 traceparent 从不填充 | change_record.trace_id → 信封 Traceparent（随 JOIN 一并取出） | 既有套件 |
+| P3-6 readiness 恒真残缺表达式 | readyz = outbox 未配置→true；配置→TransportHealthy（断连期如实 not-ready） | — |
+| P3-8 evictOldestLocked 名不副实 | 更名 resetLocked + 注释如实（bounded FULL reset） | — |
+| P3-3/5/7 挂账 | 事件目录命名对齐（binding.published vs binding.activated.v1 等）与 payload 富化挂契约冻结批次；00007 Down 需先清 PUBLISHING 行（回退前置条件已入迁移注释）；背压门生产接线挂 I22 | — |
 
 ## 已知限制（挂账）
 

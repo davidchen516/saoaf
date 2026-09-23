@@ -7,6 +7,7 @@ package events
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -128,12 +129,24 @@ func (t *NATSTransport) Publish(ctx context.Context, ev *CloudEvent) error {
 		return err
 	}
 	subject := SubjectForTopic(topicFromType(ev.Type))
-	pub, err := t.js.Publish(ctx, subject, body, jetstream.WithMsgID(ev.ID))
+	_, err = t.js.Publish(ctx, subject, body, jetstream.WithMsgID(ev.ID))
 	if err != nil {
-		return ErrTransportDown // timeouts/disconnects retry; NATS is never terminal
+		if isTerminalNATSError(err) {
+			return fmt.Errorf("terminal publish rejection: %w", err)
+		}
+		return ErrTransportDown // timeouts/disconnects: retryable, never DLQ
 	}
-	_ = pub
 	return nil
+}
+
+// isTerminalNATSError separates poison messages (client-side permanent
+// rejections — oversized payloads, invalid subjects) from transport
+// outages. Terminal errors must reach the retry budget → FAILED/DLQ
+// (review R1 P2-3: mapping everything to ErrTransportDown made the DLQ
+// unreachable on the production transport).
+func isTerminalNATSError(err error) bool {
+	return errors.Is(err, nats.ErrMaxPayload) ||
+		errors.Is(err, nats.ErrBadSubject)
 }
 
 // PublishDLQ places the dead-letter copy on the main stream under
@@ -146,7 +159,11 @@ func (t *NATSTransport) PublishDLQ(ctx context.Context, ev *CloudEvent, reason s
 	dlqEvent := *ev
 	dlqEvent.Type = ev.Type + ".dead"
 	var data map[string]json.RawMessage
-	_ = json.Unmarshal(ev.Data, &data)
+	if err := json.Unmarshal(ev.Data, &data); err != nil || data == nil {
+		// non-object payload (e.g. an array) — wrap instead of panicking on
+		// a nil map (review R1 P3-2)
+		data = map[string]json.RawMessage{"payload": ev.Data}
+	}
 	data["dlq_reason"], _ = json.Marshal(reason)
 	dlqEvent.Data, _ = json.Marshal(data)
 	body, err := json.Marshal(&dlqEvent)

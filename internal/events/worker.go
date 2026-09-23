@@ -108,6 +108,12 @@ func (w *OutboxWorker) Pause() { w.mu.Lock(); w.paused = true; w.mu.Unlock() }
 // Resume lifts the pause.
 func (w *OutboxWorker) Resume() { w.mu.Lock(); w.paused = false; w.mu.Unlock() }
 
+// TransportHealthy reports whether the event transport can accept
+// publishes (readiness input; GWT 断连期间 readyz 如实 false).
+func (w *OutboxWorker) TransportHealthy(ctx context.Context) bool {
+	return w.cfg.Transport != nil && w.cfg.Transport.Healthy(ctx)
+}
+
 // Stats returns a monitoring snapshot.
 func (w *OutboxWorker) Stats() WorkerStats {
 	w.mu.Lock()
@@ -209,29 +215,30 @@ func (w *OutboxWorker) claim(ctx context.Context) ([]OutboxRow, error) {
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	rows, err := tx.Query(ctx, `
-		SELECT id, event_id, topic, payload, aggregate_kind, aggregate_id,
-		       aggregate_revision, created_at, attempts
-		FROM saoaf.outbox_event
-		WHERE status = 'PENDING'
-		   OR (status = 'PUBLISHING' AND lease_expires_at IS NOT NULL AND lease_expires_at < now())
-		ORDER BY id
+		SELECT oe.id, oe.event_id, oe.topic, oe.payload, oe.aggregate_kind, oe.aggregate_id,
+		       oe.aggregate_revision, oe.created_at, oe.attempts,
+		       cr.tenant_ref, cr.trace_id
+		FROM saoaf.outbox_event oe
+		JOIN saoaf.change_record cr ON cr.id = oe.change_record_id
+		WHERE (oe.status = 'PENDING'
+		         AND (oe.next_retry_at IS NULL OR oe.next_retry_at < now()))
+		   OR (oe.status = 'PUBLISHING' AND oe.lease_expires_at IS NOT NULL AND oe.lease_expires_at < now())
+		ORDER BY oe.id
 		LIMIT $1
 		FOR UPDATE SKIP LOCKED`, w.cfg.BatchSize)
 	if err != nil {
 		return nil, err
 	}
 	var claimed []OutboxRow
-	tenantRefs := map[int64]string{}
 	for rows.Next() {
 		var r OutboxRow
-		var tenant string
 		if err := rows.Scan(&r.ID, &r.EventID, &r.Topic, &r.Payload, &r.AggregateKind,
-			&r.AggregateID, &r.AggregateRevision, &r.CreatedAt, &r.Attempts); err != nil {
+			&r.AggregateID, &r.AggregateRevision, &r.CreatedAt, &r.Attempts,
+			&r.TenantRef, &r.TraceID); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		claimed = append(claimed, r)
-		_ = tenant
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -247,22 +254,9 @@ func (w *OutboxWorker) claim(ctx context.Context) ([]OutboxRow, error) {
 			fmt.Sprintf("%d seconds", int(w.cfg.LeaseTTL.Seconds())), w.cfg.WorkerID, r.ID); err != nil {
 			return nil, err
 		}
-		_ = tenantRefs
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
-	}
-	// tenant_ref joins the envelope from the change_record (context attrs
-	// carry no sensitive content; tenantref is the non-reversible alias
-	// slot — specs §5.1)
-	for i := range claimed {
-		var tenant string
-		if err := w.cfg.Pool.QueryRow(ctx, `
-			SELECT cr.tenant_ref FROM saoaf.change_record cr
-			JOIN saoaf.outbox_event oe ON oe.change_record_id = cr.id
-			WHERE oe.id = $1`, claimed[i].ID).Scan(&tenant); err == nil {
-			claimed[i].TenantRef = tenant
-		}
 	}
 	return claimed, nil
 }
@@ -276,6 +270,15 @@ func (w *OutboxWorker) publishOne(ctx context.Context, r OutboxRow) error {
 	if err == nil {
 		if w.hooks.OnPublished != nil {
 			w.hooks.OnPublished(ctx, r.ID)
+		}
+		// the watermark read+write must be one serialized critical section:
+		// read-committed lets two workers read the same MAX and the partial
+		// unique index outbox_published_seq_idx rejects the loser (23505),
+		// leaving the row PUBLISHING with the message already on the wire
+		// (review R1 P2-1, probe-proven). A per-mark xact advisory lock keeps
+		// the section tiny while making published_seq unique-by-construction.
+		if _, lerr := w.cfg.Pool.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('saoaf:outbox:watermark'))`); lerr != nil {
+			return lerr
 		}
 		tag, uerr := w.cfg.Pool.Exec(ctx, `
 			UPDATE saoaf.outbox_event
@@ -311,9 +314,11 @@ func (w *OutboxWorker) publishOne(ctx context.Context, r OutboxRow) error {
 	w.stats.PublishErrors++
 	w.mu.Unlock()
 	if errors.Is(err, ErrTransportDown) {
-		// message platform outage: release the lease so ANY worker (incl.
-		// this one) retries after the platform recovers; linear backoff via
-		// next_retry_at keeps the claimable scan from hot-looping
+		// message platform outage: release the lease and schedule the
+		// retry — the claim query skips rows whose next_retry_at is still
+		// in the future, which is what prevents a hot loop against the
+		// broken platform (review R1 P2-2: the column was previously
+		// written but never read)
 		w.mu.Lock()
 		w.stats.Retries++
 		w.mu.Unlock()

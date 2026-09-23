@@ -26,7 +26,7 @@ import (
 )
 
 func main() {
-	adminAddr := flag.String("admin-addr", envOr("CONTROL_PLANE_WORKER_ADMIN_ADDR", ":8081"), "admin health listen address")
+	adminAddr := flag.String("admin-addr", envOr("CONTROL_PLANE_WORKER_ADMIN_ADDR", "127.0.0.1:8081"), "admin health listen address (loopback: the Phase 0 boundary until I22 wires production identity)")
 	interval := flag.Duration("interval", time.Second, "no-op tick interval (skeleton)")
 	flag.Parse()
 
@@ -78,7 +78,12 @@ func main() {
 		return nil
 	})
 
-	health := httpapi.NewHealth(func() bool { return outbox == nil || true })
+	health := httpapi.NewHealth(func() bool {
+		if outbox == nil {
+			return true // outbox disabled: process-level readiness
+		}
+		return outbox.TransportHealthy(context.Background())
+	})
 
 	// Admin surface: worker metrics + pause/resume management operations
 	// (GWT#6: management actions are scope-gated; the local loopback

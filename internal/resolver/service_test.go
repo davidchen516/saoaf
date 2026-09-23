@@ -102,7 +102,7 @@ func newService(db string) *Service {
 		Pool:        pool,
 		PolicySetID: "",
 		Now:         time.Now,
-		NewID:       func() string { return fmt.Sprintf("plan-%d", time.Now().UnixNano()) },
+		NewID:       NewPlanID, // atomic: UnixNano collided under -race (I09 P3-4 fix surfaced the flake)
 		DefaultTTL:  300 * time.Second,
 		MaxTTL:      3600 * time.Second,
 	}

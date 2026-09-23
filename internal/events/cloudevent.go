@@ -47,6 +47,7 @@ type OutboxRow struct {
 	AggregateID       string
 	AggregateRevision int
 	TenantRef         string
+	TraceID           string // traceparent linkage (specs §5.1; review R1 P3-4)
 	CreatedAt         time.Time
 	Attempts          int
 }
@@ -69,6 +70,7 @@ func (r OutboxRow) Envelope() *CloudEvent {
 		Time:            r.CreatedAt.UTC().Format(time.RFC3339Nano),
 		DataContentType: "application/json",
 		TenantRef:       r.TenantRef,
+		Traceparent:     r.TraceID,
 		Data:            r.Payload,
 	}
 }

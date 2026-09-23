@@ -52,16 +52,17 @@ func (d *Deduper) FirstSeen(id string) bool {
 		return false
 	}
 	if len(d.seen) >= d.max {
-		d.evictOldestLocked()
+		d.resetLocked()
 	}
 	d.seen[id] = true
 	return true
 }
 
-func (d *Deduper) evictOldestLocked() {
-	// bounded reset: under adversarial id floods correctness wins over
-	// history depth (the transport-level dedup window covers the real
-	// crash duplication window)
+func (d *Deduper) resetLocked() {
+	// bounded FULL reset (not an LRU): under adversarial id floods
+	// correctness wins over history depth — the transport-level dedup
+	// window covers the real crash duplication window (review R1 P3-8
+	// renamed the misleading "evict oldest")
 	d.seen = make(map[string]bool, len(d.seen)/2)
 }
 

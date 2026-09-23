@@ -37,6 +37,9 @@ CREATE INDEX IF NOT EXISTS outbox_dlq
 GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA saoaf TO saoaf_app;
 
 -- +goose Down
+-- 前置条件（审查 R1 P3-5）：Down 恢复原三态 CHECK 时不得存在 PUBLISHING 行
+-- （00001 约束不识别租约态）——回退前须停 Worker 并等待在飞租约结算，
+-- 或手工将 PUBLISHING 行复位为 PENDING。
 ALTER TABLE saoaf.outbox_event DROP CONSTRAINT outbox_event_status_check;
 ALTER TABLE saoaf.outbox_event
   ADD CONSTRAINT outbox_event_status_check
