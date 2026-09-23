@@ -14,6 +14,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -86,6 +87,11 @@ func runEvidenceChild(t *testing.T, dsn, window string) {
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("child exited cleanly but must be SIGKILLed:\n%s", out)
+	}
+	// P2-1 (review): a t.Fatal exit(1) would silently degrade this to an
+	// ordinary consumption test — the kill must be an actual SIGKILL
+	if !strings.Contains(err.Error(), "signal: killed") {
+		t.Fatalf("child (%s) did not die by SIGKILL (hook misfired?): %v\n%s", window, err, out)
 	}
 	t.Logf("child (%s): %v", window, err)
 }

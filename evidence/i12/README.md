@@ -38,5 +38,8 @@
 
 - GWT#7 跨租户 403 的完整 API 门禁（scope + PDP）：查询 API 已按 tenant 过滤；HTTP 接线与 403 门禁挂 I17（管理面）批次。
 - 监控仪表盘（消费延迟/隔离深度/checkpoint 滞后）：`QuarantineDepth`/`Checkpoint` 导出接口已备，dashboard 导出挂 I13。
-- 真实 ARR/MMR 事件流的**非全 mock**消费运行记录（关闭判定第 2 项）：依赖真实 MMR 环境——与 #11 ledger 同批（本 Issue 的消费运行在 CI 全绿 + 本地记录下以仓库自身真实 outbox 事件驱动，非注入 mock 数据；「真实 MMR 事件」待外部环境）。
+- 真实 ARR/MMR 事件流的**非全 mock**消费运行记录（关闭判定第 2 项）：依赖真实 MMR 环境——与 #11 ledger 同批（说明：测试以合成 outbox 行驱动——payload 构造与三个生产发布方逐字段一致，审查核实；「真实 MMR 事件流」待外部环境，审查 R1 确认挂账诚实）。
+- 红线扫描为关键词 blocklist：无关键词的业务正文（如逐字对话转录）可 LINKED 落库（审查探针实证）——升级为 allowlist 字段模式挂契约冻结批次（与 I11 P3-1 ledger 同族）。
+- worker 进程接线：evidence consumer 已按 `SAOAF_EVIDENCE_CONSUMER=1` 环境变量接入 cmd/control-plane-worker（隔离深度/checkpoint 经 `/metrics/evidence` 导出）——默认关闭直至 I17 管理面批次决定生产启用。
+- `Query(tenant="")` 显式含义为「无租户过滤」（管理/审计用法）；HTTP 层强制租户参数的门禁挂 I17。
 - WORM 归档链路：I23（状态字段已就位）。

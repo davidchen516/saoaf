@@ -23,6 +23,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"time"
 
@@ -53,7 +54,6 @@ var forbiddenContent = regexp.MustCompile(
 // Retention classes (已批准保留与驻留基线).
 const (
 	RetentionPlanItem   = "PLAN_ITEM"     // 90d online / daily pack 1y
-	RetentionDecision   = "DECISION"      // 1y
 	RetentionChange     = "CHANGE"        // 2y
 	RetentionSnapshot   = "SNAPSHOT_META" // digest + refs 1y
 	RetentionEventAudit = "EVENT_AUDIT"   // DB 14d / audit summary only
@@ -279,9 +279,11 @@ func payloadViolation(raw []byte) string {
 func (ix Index) ScanBatch(ctx context.Context, consumerID string, batchSize int) ([]ConsumedEvent, error) {
 	var lastSeq int64
 	if err := ix.Pool.QueryRow(ctx,
-		`SELECT COALESCE(last_seq, 0) FROM saoaf.evidence_checkpoint WHERE consumer_id = $1`,
+		`SELECT last_seq FROM saoaf.evidence_checkpoint WHERE consumer_id = $1`,
 		consumerID).Scan(&lastSeq); err != nil {
-		// no row → start from 0
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err // review R1 P3-2: only a MISSING row means "start at 0"
+		}
 		lastSeq = 0
 	}
 	rows, err := ix.Pool.Query(ctx, `
@@ -298,21 +300,22 @@ func (ix Index) ScanBatch(ctx context.Context, consumerID string, batchSize int)
 	var out []ConsumedEvent
 	for rows.Next() {
 		var ev ConsumedEvent
-		var tenant string
 		if err := rows.Scan(&ev.OutboxID, &ev.EventID, &ev.Topic, &ev.Payload,
 			&ev.AggregateKind, &ev.AggregateID, &ev.AggregateRevision,
 			&ev.CreatedAt, &ev.PublishedSeq); err != nil {
 			return nil, err
 		}
-		_ = tenant
 		out = append(out, ev)
 	}
-	// tenant_ref joins from the change_record (context attribution)
+	// tenant_ref joins from the change_record (context attribution);
+	// a read failure surfaces (review R1 P3-2: silent '' is unrecoverable)
 	for i := range out {
-		_ = ix.Pool.QueryRow(ctx, `
+		if err := ix.Pool.QueryRow(ctx, `
 			SELECT cr.tenant_ref FROM saoaf.change_record cr
 			JOIN saoaf.outbox_event oe ON oe.change_record_id = cr.id
-			WHERE oe.id = $1`, out[i].OutboxID).Scan(&out[i].TenantRef)
+			WHERE oe.id = $1`, out[i].OutboxID).Scan(&out[i].TenantRef); err != nil {
+			return nil, err
+		}
 	}
 	return out, rows.Err()
 }
