@@ -18,4 +18,12 @@
 | TestDBSubmitSnapshotForbiddenProfiles | P2-1 回归：Submit 侧拒绝嵌套禁止字段 |
 
 产物：migration 00004（capability_definition/resource_provider/provider_snapshot/active_pointer + CHECK 状态机 + 唯一约束 + 不可变 trigger）；internal/registry（domain 状态机/校验 + store CAS/submit/activate/candidates）。
-已知限制：Capability 表结构与生命周期复用同一状态机（域层矩阵共享）；Owner/scope/审计挂 I05/I08 接线；outbox 事件发布挂 I10。
+
+## 已知限制
+
+- Capability 表结构与生命周期复用同一状态机（域层矩阵共享）；Owner/scope/审计挂 I05/I08 接线；outbox 事件发布挂 I10。
+- Snapshot 版本单调性无 DB 级兜底（P2-3）：SubmitSnapshot 是 check-then-insert，并发下落后事务可能基于陈旧 max 插入更低版本（同版本号有 UNIQUE 兜底）；后续用 advisory lock 或 trigger 补。
+- resource_provider.active_revision 为死列：只读不写（恒为 1），语义由 provider_active_pointer 表承载；下一迭代接线或删列。
+- VerifyDigest 无生产调用方（仅测试引用）：store 写路径拿不到原始 payload，内容比对由持有 payload 的调用层承担（I09 Resolver / I11 MMR adapter）。
+- profiles 列未持久化 Submit 校验的内容：DB 恒为默认 '[]'；内容承诺由 digest 承载，profiles 列后续要么持久化要么标注暂不承载数据。
+- 过期 snapshot 不可回滚：回滚路径重跑 ValidateSnapshot，过期即拒绝（ReasonExpired）——恢复需先生成新 snapshot。
