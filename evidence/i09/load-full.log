@@ -1,0 +1,6 @@
+=== RUN   TestLoadFull
+LOAD REPORT: duration=15m0s target_qps=100 requests=89997 actual_qps=100.0 errors=0 (0.0000%) p50=3.804458ms p95=5.529083ms p99=12.750084ms max=149.011792ms
+--- PASS: TestLoadFull (900.33s)
+PASS
+ok  	github.com/davidchen516/saoaf/internal/resolver	900.558s
+rc=0

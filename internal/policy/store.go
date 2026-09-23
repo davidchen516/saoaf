@@ -13,10 +13,41 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Store persists policy revisions with DB-enforced invariants.
-type Store struct{ DSN string }
+// Store persists policy revisions with DB-enforced invariants. High-QPS
+// callers (I09 resolver) set Pool to reuse connections; per-call Connect
+// remains the default for existing callers.
+type Store struct {
+	DSN  string
+	Pool *pgxpool.Pool // optional
+}
+
+// pgConn is the connection surface the store needs; both *pgx.Conn and
+// *pgxpool.Conn satisfy it.
+type pgConn interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+// acquire returns a connection and its release func.
+func (s Store) acquire(ctx context.Context) (pgConn, func(), error) {
+	if s.Pool != nil {
+		c, err := s.Pool.Acquire(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		return c, c.Release, nil
+	}
+	c, err := pgx.Connect(ctx, s.DSN)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c, func() { _ = c.Close(ctx) }, nil
+}
 
 // ErrUniqueActive is returned when a concurrent activation wins the race
 // (the unique partial index rejected our insert/update).
@@ -24,11 +55,11 @@ var ErrUniqueActive = errors.New("concurrent activation: another revision is ACT
 
 // SaveRevision inserts a revision row (DRAFT or PUBLISHED states only).
 func (s Store) SaveRevision(ctx context.Context, r *Revision, tenantRef string) error {
-	conn, err := pgx.Connect(ctx, s.DSN)
+	conn, release, err := s.acquire(ctx)
 	if err != nil {
 		return err
 	}
-	defer conn.Close(ctx)
+	defer release()
 	content, err := json.Marshal(r.Content)
 	if err != nil {
 		return err
@@ -45,11 +76,11 @@ func (s Store) SaveRevision(ctx context.Context, r *Revision, tenantRef string) 
 // then set this row ACTIVE — single transaction. On a concurrent winner
 // the unique partial index aborts the transaction (ErrUniqueActive).
 func (s Store) ActivateRevision(ctx context.Context, setID string, version int) error {
-	conn, err := pgx.Connect(ctx, s.DSN)
+	conn, release, err := s.acquire(ctx)
 	if err != nil {
 		return err
 	}
-	defer conn.Close(ctx)
+	defer release()
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return err
@@ -117,11 +148,11 @@ func (s Store) ActivateRevision(ctx context.Context, setID string, version int) 
 
 // ActiveRevision loads the single ACTIVE revision for a set.
 func (s Store) ActiveRevision(ctx context.Context, setID string) (*Revision, error) {
-	conn, err := pgx.Connect(ctx, s.DSN)
+	conn, release, err := s.acquire(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close(ctx)
+	defer release()
 	var r Revision
 	var state string
 	var content []byte
@@ -148,11 +179,11 @@ func (s Store) ActiveRevision(ctx context.Context, setID string) (*Revision, err
 // RecordPlanRef writes the immutable policy reference for a Resource Plan
 // (issue: Plan 携带 policy revision/reference；引用不可变 = 不 UPDATE)。
 func (s Store) RecordPlanRef(ctx context.Context, planID string, e Evaluation) error {
-	conn, err := pgx.Connect(ctx, s.DSN)
+	conn, release, err := s.acquire(ctx)
 	if err != nil {
 		return err
 	}
-	defer conn.Close(ctx)
+	defer release()
 	_, err = conn.Exec(ctx, `
 		INSERT INTO policy.plan_policy_ref
 			(resource_plan_id, policy_set_id, policy_version, policy_digest)
@@ -163,11 +194,11 @@ func (s Store) RecordPlanRef(ctx context.Context, planID string, e Evaluation) e
 
 // PlanRef loads the recorded reference (proves immutability after rollback).
 func (s Store) PlanRef(ctx context.Context, planID string) (Evaluation, *time.Time, error) {
-	conn, err := pgx.Connect(ctx, s.DSN)
+	conn, release, err := s.acquire(ctx)
 	if err != nil {
 		return Evaluation{}, nil, err
 	}
-	defer conn.Close(ctx)
+	defer release()
 	var e Evaluation
 	var created time.Time
 	err = conn.QueryRow(ctx, `
