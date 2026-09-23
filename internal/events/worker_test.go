@@ -406,6 +406,9 @@ func TestWorkerWatermarkStormNoDuplicates(t *testing.T) {
 		if len(seqs) != N {
 			t.Fatalf("watermarked rows = %d, want %d", len(seqs), N)
 		}
+		if seqs[0] != 1 || seqs[len(seqs)-1] != N {
+			t.Fatalf("watermark not dense: min=%d max=%d, want 1..%d", seqs[0], seqs[len(seqs)-1], N)
+		}
 		// at-least-once: a lease-expiry re-claim MAY republish an event
 		// before the original worker's mark lands (duplicate raw publish).
 		// The invariants that matter here: distinct events == N (no loss),

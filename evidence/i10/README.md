@@ -59,7 +59,7 @@
 | Finding | 修复 | 回归 |
 |---|---|---|
 | P1-1 binary 扫描同报 GO-2026-5932（stripped 二进制包级通配兜底）+ evidence 表述相反 | binary_scan 过滤器（同 module_scan：仅接受该通告，其余 fatal）；evidence 措辞更正为「import graph 实证零 openpgp；扫描兜底误报」 | CI SCA 绿 |
-| P2-1 published_seq MAX+1 竞态（审查风暴探针 3 轮实测 23505） | 标记语句前置 `pg_advisory_xact_lock('saoaf:outbox:watermark')`——临界区极小、水位唯一构造 | TestWorkerConcurrentClaimNoDoublePublish + 四窗口矩阵回归 |
+| P2-1 published_seq MAX+1 竞态（审查风暴探针 3 轮实测 23505） | 标记改为**显式事务**：Begin → 事务内 `pg_advisory_xact_lock('saoaf:outbox:watermark')` → UPDATE（MAX+1）→ Commit（R1 的"独立 Exec 前置锁"被 R2 证伪——xact 锁在 autocommit 语句结束即释放，审查员锁作用域探针 held=0 实锤） | TestWorkerWatermarkStormNoDuplicates（审查探针收编，R3 复放 3/3 绿 + 反证 2/3 红）+ 四窗口矩阵 |
 | P2-2 next_retry_at 只写不读（退避死代码） | claim 查询过滤 `next_retry_at < now()`；断连回 PUBLISHING→PENDING 带未来 retry 时间 → 下一轮领取为空 → Run 正常 sleep（热循环结构性消除） | TestWorkerOutageThenRecoveryNoLoss（清 next_retry_at 从 no-op 变为真解除退避） |
 | P2-3 生产传输 DLQ 不可达（一切错误→ErrTransportDown） | `isTerminalNATSError`（ErrMaxPayload/ErrBadSubject）→ 终态走重试预算→FAILED/DLQ；断连类仍永续重试 | TestWorkerDeadLetter（fake 终态）+ 分类注释 |
 | P2-4 管理面默认绑全接口 | `-admin-addr` 默认 `127.0.0.1:8081`（挂账披露的 loopback 前提成立） | — |
@@ -69,6 +69,13 @@
 | P3-6 readiness 恒真残缺表达式 | readyz = outbox 未配置→true；配置→TransportHealthy（断连期如实 not-ready） | — |
 | P3-8 evictOldestLocked 名不副实 | 更名 resetLocked + 注释如实（bounded FULL reset） | — |
 | P3-3/5/7 挂账 | 事件目录命名对齐（binding.published vs binding.activated.v1 等）与 payload 富化挂契约冻结批次；00007 Down 需先清 PUBLISHING 行（回退前置条件已入迁移注释）；背压门生产接线挂 I22 | — |
+
+### 风暴反证归档（R2-N1/R3）
+
+修复的有效性经双向验证（审查员 R3 独立复现）：
+- **坏锁（standalone autocommit Exec 取锁）**：TestWorkerWatermarkStormNoDuplicates 3 轮中 2 轮红，错误精确复现 `SQLSTATE 23505 on outbox_published_seq_idx`——与 R1 竞态一致。
+- **修复版（标记事务内持锁）**：3/3 + 5/5 绿，published_seq 恰 1..50 稠密唯一（R3 探针加钉 MIN/MAX 断言后一并入回归）。
+- 锁作用域（审查员 pg_locks 探针）：显式事务内 COMMIT 前 held=1，COMMIT 后 held=0，独立 Exec 后 held=0（失效模式对照）。
 
 ## 已知限制（挂账）
 
