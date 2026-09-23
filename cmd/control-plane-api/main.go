@@ -15,6 +15,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
+	"github.com/davidchen516/saoaf/internal/platform/approval"
+	"github.com/davidchen516/saoaf/internal/platform/audit"
+	"github.com/davidchen516/saoaf/internal/platform/authn"
+	"github.com/davidchen516/saoaf/internal/platform/authz"
 	"github.com/davidchen516/saoaf/internal/platform/httpapi"
 )
 
@@ -27,7 +33,16 @@ func main() {
 	// Startup readiness: the process is ready once it can serve traffic.
 	// Future issues replace this with dependency checks (I04 database, I05 identity).
 	health := httpapi.NewHealth(func() bool { return true })
-	router := httpapi.NewRouter(health)
+	router := chi.NewMux()
+	router.Get("/healthz", health.LivenessHandler)
+	router.Get("/readyz", health.ReadinessHandler)
+
+	// I05 admin demo endpoints: enabled only when the full adapter config
+	// is present (issuer + PDP + approval); otherwise the admin API stays
+	// CLOSED rather than open (fail-closed by default).
+	if cfg := adminConfigFromEnv(); cfg != nil {
+		httpapi.MountAdmin(router, *cfg)
+	}
 
 	srv := &http.Server{
 		Addr:              *addr,
@@ -63,6 +78,33 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("api stopped")
+}
+
+// adminConfigFromEnv returns the I05 admin wiring when all adapter
+// endpoints are configured; nil keeps the admin surface closed.
+func adminConfigFromEnv() *httpapi.AdminConfig {
+	issuer := os.Getenv("SAOAF_OIDC_ISSUER")
+	pdp := os.Getenv("SAOAF_PDP_URL")
+	appr := os.Getenv("SAOAF_APPROVAL_URL")
+	if issuer == "" || pdp == "" || appr == "" {
+		return nil
+	}
+	v, err := authn.NewValidator(issuer, "saoaf-control-plane")
+	if err != nil {
+		return nil
+	}
+	var sink audit.Sink = audit.NoopSink{}
+	if dsn := os.Getenv("SAOAF_DB_DSN"); dsn != "" {
+		sink = audit.PostgresSink{DSN: dsn}
+	}
+	return &httpapi.AdminConfig{
+		Authn:      v,
+		PDP:        authz.NewPDPClient(pdp),
+		Approvals:  approval.NewClient(appr),
+		Audit:      sink,
+		RatePerSec: 100,
+		RateBurst:  200,
+	}
 }
 
 func envOr(key, fallback string) string {

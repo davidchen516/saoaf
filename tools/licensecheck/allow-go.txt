@@ -42,3 +42,5 @@ github.com/stretchr/objx
 gopkg.in/check.v1
 # gopkg.in/yaml.v3 — Apache-2.0 (goose CLI transitive)
 gopkg.in/yaml.v3
+# github.com/golang-jwt/jwt/v5 — MIT (I05 authn)
+github.com/golang-jwt/jwt/v5
