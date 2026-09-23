@@ -50,11 +50,28 @@ func bearerToken(r *http.Request) string {
 	return ""
 }
 
+// ctxKeyRequestID carries the effective request id (caller-provided or
+// minted) so handlers read it from context, never from raw headers.
+type ctxKeyRequestID struct{}
+
 func requestID(r *http.Request) string {
 	if id := r.Header.Get("X-Request-ID"); id != "" {
 		return id
 	}
 	return authn.NewRequestID()
+}
+
+// RequestIDFrom returns the effective request id for the request.
+func RequestIDFrom(ctx context.Context) string {
+	if v, ok := ctx.Value(ctxKeyRequestID{}).(string); ok && v != "" {
+		return v
+	}
+	return ""
+}
+
+// withRequestID stores the effective id in the context chain.
+func withRequestID(ctx context.Context, rid string) context.Context {
+	return context.WithValue(ctx, ctxKeyRequestID{}, rid)
 }
 
 // RequireIdentity validates the bearer token and stores the trusted
@@ -71,6 +88,7 @@ func RequireIdentity(v *authn.Validator) func(http.Handler) http.Handler {
 				return
 			}
 			ctx := context.WithValue(r.Context(), ctxKeyIdentity{}, id)
+			ctx = withRequestID(ctx, rid)
 			ctx = approval.WithRequestID(ctx, rid)
 			ctx = authz.WithRequestID(ctx, rid)
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -121,17 +139,31 @@ func ApprovalGate(pdp *authz.PDPClient, approvals *approval.Client, action strin
 				writeError(w, http.StatusForbidden, "FORBIDDEN", "not permitted", rid)
 				return
 			}
+			_ = dec // policy decision id retained for future audit enrichment
 			approvalRef := r.Header.Get("X-Saoaf-Approval-Ref")
 			if approvalRef == "" {
 				writeError(w, http.StatusForbidden, "FORBIDDEN", "approval reference required", rid)
 				return
 			}
 			ad, err := approvals.Get(r.Context(), approvalRef)
-			if err != nil || !ad.SatisfiedFor(id.Subject, "") {
+			if err != nil {
 				writeError(w, http.StatusForbidden, "FORBIDDEN", "approval not satisfied", rid)
 				return
 			}
-			_ = dec
+			// response-request binding: the fetched decision must be for the
+			// SAME approval reference the caller presented (prevents a
+			// decision for a different/unknown request satisfying the gate)
+			if ad.ApprovalRef != approvalRef {
+				writeError(w, http.StatusForbidden, "FORBIDDEN", "approval not satisfied", rid)
+				return
+			}
+			// digest binding: the approval must cover the object being
+			// written — Phase 0 digest is the binding identity
+			objectDigest := "sha256:binding:" + bodyRef
+			if !ad.SatisfiedFor(id.Subject, objectDigest) {
+				writeError(w, http.StatusForbidden, "FORBIDDEN", "approval not satisfied", rid)
+				return
+			}
 			next.ServeHTTP(w, r)
 		})
 	}

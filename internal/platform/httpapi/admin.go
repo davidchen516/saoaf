@@ -28,10 +28,11 @@ type AdminConfig struct {
 // MountAdmin wires /admin/v1 under the fixed auth chain.
 func MountAdmin(r chi.Router, cfg AdminConfig) {
 	r.Route("/admin/v1", func(admin chi.Router) {
-		admin.Use(
-			middleware.RateLimit(cfg.RatePerSec, cfg.RateBurst),
-			middleware.RequireIdentity(cfg.Authn),
-		)
+		// identity FIRST so the rate limiter buckets per-subject (an
+		// anonymous flood must not starve authenticated admins; anonymous
+		// callers are rejected before any bucket is consumed)
+		admin.Use(middleware.RequireIdentity(cfg.Authn))
+		admin.Use(middleware.RateLimit(cfg.RatePerSec, cfg.RateBurst))
 
 		// whoami: any authenticated identity (diagnostic + smoke test)
 		admin.Get("/whoami", func(w http.ResponseWriter, req *http.Request) {
@@ -51,7 +52,7 @@ func MountAdmin(r chi.Router, cfg AdminConfig) {
 			id := middleware.IdentityFrom(req.Context())
 			approvalRef := req.Header.Get("X-Saoaf-Approval-Ref")
 			bindingID := chi.URLParam(req, "id")
-			traceID := req.Header.Get("X-Request-ID")
+			traceID := middleware.RequestIDFrom(req.Context())
 
 			if err := cfg.Audit.Write(req.Context(), audit.Entry{
 				TenantRef:   id.TenantRef,

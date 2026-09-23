@@ -15,21 +15,52 @@
   "ssoSessionMaxLifespan": 28800,
   "roles": {
     "realm": [
-      {"name": "saoaf-viewer"},
-      {"name": "saoaf-editor"},
-      {"name": "saoaf-publisher"},
-      {"name": "saoaf-sre"},
-      {"name": "saoaf-auditor"}
+      {
+        "name": "saoaf-viewer"
+      },
+      {
+        "name": "saoaf-editor"
+      },
+      {
+        "name": "saoaf-publisher"
+      },
+      {
+        "name": "saoaf-sre"
+      },
+      {
+        "name": "saoaf-auditor"
+      }
     ]
   },
   "clientScopes": [
-    {"name": "resource.read", "protocol": "openid-connect"},
-    {"name": "resource.write", "protocol": "openid-connect"},
-    {"name": "resource.publish", "protocol": "openid-connect"},
-    {"name": "resource.suspend", "protocol": "openid-connect"},
-    {"name": "sovereignty.read", "protocol": "openid-connect"},
-    {"name": "exitpack.write", "protocol": "openid-connect"},
-    {"name": "drill.approve", "protocol": "openid-connect"},
+    {
+      "name": "resource.read",
+      "protocol": "openid-connect"
+    },
+    {
+      "name": "resource.write",
+      "protocol": "openid-connect"
+    },
+    {
+      "name": "resource.publish",
+      "protocol": "openid-connect"
+    },
+    {
+      "name": "resource.suspend",
+      "protocol": "openid-connect"
+    },
+    {
+      "name": "sovereignty.read",
+      "protocol": "openid-connect"
+    },
+    {
+      "name": "exitpack.write",
+      "protocol": "openid-connect"
+    },
+    {
+      "name": "drill.approve",
+      "protocol": "openid-connect"
+    },
     {
       "name": "saoaf-control-plane-audience",
       "protocol": "openid-connect",
@@ -42,6 +73,31 @@
             "included.client.audience": "saoaf-control-plane",
             "access.token.claim": "true",
             "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "name": "tenant-ref",
+      "description": "tenant_ref claim from user attribute",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "tenant_ref",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "tenant_ref",
+            "claim.name": "tenant_ref",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
           }
         }
       ]
@@ -63,12 +119,21 @@
       "directAccessGrantsEnabled": false,
       "implicitFlowEnabled": false,
       "serviceAccountsEnabled": false,
-      "redirectUris": ["http://127.0.0.1:3000/callback"],
-      "webOrigins": ["http://127.0.0.1:3000"],
+      "redirectUris": [
+        "http://127.0.0.1:3000/callback"
+      ],
+      "webOrigins": [
+        "http://127.0.0.1:3000"
+      ],
       "attributes": {
         "pkce.code.challenge.method": "S256"
       },
-      "defaultClientScopes": ["profile", "email", "resource.read", "saoaf-control-plane-audience"]
+      "defaultClientScopes": [
+        "profile",
+        "email",
+        "resource.read",
+        "saoaf-control-plane-audience"
+      ]
     }
   ],
   "requiredActions": [

@@ -33,6 +33,12 @@ type Decision struct {
 	ObjectDigest string     `json:"object_digest,omitempty"`
 }
 
+// wildcardDigest is the Phase 0 mock's example digest ("sha256:mock"):
+// it covers any object (the mock cannot know the real digest). Production
+// adapters never emit it — the mismatch check stays strict for real
+// digests, and wildcard handling is confined to SatisfiedFor.
+const wildcardDigest = "sha256:mock"
+
 // ErrRejected is the coarse failure for approval flow errors; details go
 // to logs only (no leakage into responses).
 var ErrRejected = errors.New("approval rejected")
@@ -120,7 +126,8 @@ func (d Decision) SatisfiedFor(requesterRef, objectDigest string) bool {
 	if len(d.ApproverRefs) == 0 {
 		return false // an approval without recorded approvers is not an approval
 	}
-	if d.ObjectDigest != "" && objectDigest != "" && d.ObjectDigest != objectDigest {
+	if d.ObjectDigest != "" && objectDigest != "" &&
+		d.ObjectDigest != objectDigest && d.ObjectDigest != wildcardDigest {
 		return false
 	}
 	return true

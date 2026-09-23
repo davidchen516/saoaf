@@ -1,0 +1,18 @@
+=== I05 修复后 E2E（真实 Keycloak+PDP+审批+PostgresSink）===
+1. whoami:
+{"scopes":["openid","resource.publish","tenant-ref","resource.read","saoaf-control-plane-audience"],"subject":"6db5bb4f-ee51-4c09-b940-590bb214718d","tenant_ref":"tenant-demo"}
+
+2. publish 全链（真审计）:
+{"binding_id":"b1","decision_ref":"approval:mock-1001","request_id":"aa571ac8-b85c-4e4c-a206-dcf5c846626e","status":"published"}
+ [200]
+3. 未知审批 ref（P1-1 修复后应 403）:
+[403]
+4. 负向:
+no-token:[401] no-approval:[403] fake:[401]
+5. PDP 断连:
+pdp-down:[403]
+ tenant_ref  |                actor                 | entity_id | operation |    decision_ref    | trace_len 
+-------------+--------------------------------------+-----------+-----------+--------------------+-----------
+ tenant-demo | 6db5bb4f-ee51-4c09-b940-590bb214718d | b1        | PUBLISH   | approval:mock-1001 |        36
+(1 row)
+
