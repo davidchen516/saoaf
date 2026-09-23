@@ -1,0 +1,43 @@
+# I09 resolver 全套（33 项 PASS，真实 PG 18.6，-race；含 30s@100QPS 负载冲烟）
+--- PASS: TestCacheSingleflight (0.05s)
+--- PASS: TestCacheRevisionInvalidation (0.00s)
+--- PASS: TestCacheDegradedReadOnOutage (0.02s)
+--- PASS: TestCacheExpiredRefusedDuringOutage (0.06s)
+--- PASS: TestCacheColdMissOutage (0.00s)
+--- PASS: TestValidateRequestMatrix (0.00s)
+--- PASS: TestForbiddenFields (0.00s)
+--- PASS: TestErrorRoutingOrder (0.00s)
+--- PASS: TestFingerprintDeterminismCorpus (0.00s)
+--- PASS: TestRequestDigest (0.00s)
+--- PASS: TestPlanTransitionMatrix (0.00s)
+--- PASS: TestResolveErrorCodes (0.00s)
+LOAD REPORT: duration=30s target_qps=100 requests=3000 actual_qps=100.0 errors=0 (0.0000%) p50=3.478667ms p95=5.152834ms p99=6.421208ms max=47.024833ms
+--- PASS: TestLoadSmoke (30.28s)
+--- PASS: TestResolveDBOutageDegradation (0.29s)
+--- PASS: TestDBResolveHappyPath (0.27s)
+--- PASS: TestDBResolveCapabilityNotFound (0.26s)
+--- PASS: TestDBResolveNoCompatibleRegion (0.26s)
+--- PASS: TestDBResolveScopeFiltered (0.26s)
+--- PASS: TestDBResolveAmbiguousBinding (0.27s)
+--- PASS: TestDBResolvePriorityWins (0.26s)
+--- PASS: TestDBResolveSnapshotExpired (0.27s)
+--- PASS: TestDBResolveSnapshotNotActive (0.27s)
+--- PASS: TestDBResolveSuspendedProviderFiltered (0.28s)
+--- PASS: TestDBResolvePolicyDenied (0.27s)
+--- PASS: TestDBResolvePolicyRevisionCarried (0.28s)
+--- PASS: TestDBResolveIdempotencyEndToEnd (0.27s)
+--- PASS: TestDBResolve100ConcurrentOnePlan (0.32s)
+--- PASS: TestDBResolveTTL (0.26s)
+--- PASS: TestDBPlanIdempotentReplay (0.14s)
+--- PASS: TestDBPlan100ConcurrentSameKey (0.26s)
+--- PASS: TestDBPlanConcurrentDifferentBodies (0.13s)
+--- PASS: TestDBPlanItemsImmutable (0.12s)
+--- PASS: TestDBPlanLifecycle (0.13s)
+ok  	github.com/davidchen516/saoaf/internal/resolver	36.595s
+
+# 全仓 -race（15 包）
+#（见 PR CI 与本地跑批：binding/approval/authn/authz/httpapi/middleware/worker/workload/policy/registry/resolver/migrations/boundarycheck/contractlint/licensecheck 全 ok）
+
+# 完整负载跑批（15 分钟 @100 QPS，MVP 数据集 100 Cap/50 Prov/500 Binding，本地独占 PG）
+LOAD REPORT: duration=15m0s target_qps=100 requests=89978 actual_qps=100.0 errors=0 (0.0000%) p50=3.647625ms p95=5.170958ms p99=6.559333ms max=326.994458ms
+# 判定：P99 6.56ms ≤ 100ms；错误率 0.0000% < 0.1% —— AC 达标（完整日志 load-full.log）

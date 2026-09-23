@@ -16,12 +16,15 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/davidchen516/saoaf/internal/platform/approval"
 	"github.com/davidchen516/saoaf/internal/platform/audit"
 	"github.com/davidchen516/saoaf/internal/platform/authn"
 	"github.com/davidchen516/saoaf/internal/platform/authz"
 	"github.com/davidchen516/saoaf/internal/platform/httpapi"
+	"github.com/davidchen516/saoaf/internal/policy"
+	"github.com/davidchen516/saoaf/internal/resolver"
 )
 
 func main() {
@@ -42,6 +45,12 @@ func main() {
 	// CLOSED rather than open (fail-closed by default).
 	if cfg := adminConfigFromEnv(); cfg != nil {
 		httpapi.MountAdmin(router, *cfg)
+	}
+
+	// I09 runtime resolver API: mounted only when identity + database are
+	// configured; otherwise the runtime surface stays CLOSED.
+	if cfg := resolverConfigFromEnv(); cfg != nil {
+		httpapi.MountResolver(router, cfg)
 	}
 
 	srv := &http.Server{
@@ -78,6 +87,55 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("api stopped")
+}
+
+// resolverConfigFromEnv returns the I09 resolver wiring when identity +
+// database are configured; nil keeps the runtime surface closed.
+func resolverConfigFromEnv() *httpapi.ResolverMountConfig {
+	issuer := os.Getenv("SAOAF_OIDC_ISSUER")
+	dsn := os.Getenv("SAOAF_DB_DSN")
+	if issuer == "" || dsn == "" {
+		return nil
+	}
+	v, err := authn.NewValidator(issuer, "saoaf-control-plane")
+	if err != nil {
+		return nil
+	}
+	pool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		return nil
+	}
+	// optional policy filtering (issue: Policy 过滤携带 policy revision —
+	// no configured set means a documented pass-through)
+	policySetID := envOr("SAOAF_RESOLVER_POLICY_SET", "")
+	var pol *policy.Store
+	if policySetID != "" {
+		pol = &policy.Store{DSN: dsn, Pool: pool}
+	}
+	cache := resolver.NewSnapshotCache(resolver.NewRegistrySnapshotLoader(pool), 30*time.Second)
+	svc := &resolver.Service{
+		Plans:       &resolver.Store{Pool: pool},
+		Cache:       cache,
+		Pool:        pool,
+		Policy:      pol,
+		Eval:        policy.NewEvaluator(),
+		PolicySetID: policySetID,
+		Now:         time.Now,
+		NewID:       resolver.NewPlanID,
+		DefaultTTL:  300 * time.Second,
+		MaxTTL:      3600 * time.Second,
+	}
+	// ready: DB readable AND at least one published snapshot loaded
+	// (specs §3.3 — readiness reports dependency state, nothing else)
+	health := httpapi.NewHealth(func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return pool.Ping(ctx) == nil && cache.Loaded() > 0
+	})
+	return &httpapi.ResolverMountConfig{
+		Service: svc, Authn: v, Health: health,
+		RatePerSec: 100, RateBurst: 200,
+	}
 }
 
 // adminConfigFromEnv returns the I05 admin wiring when all adapter
