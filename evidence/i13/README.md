@@ -24,10 +24,23 @@
 5. **公式回滚**：UNIQUE (metric, dims, revision, formula_version)——不同公式版本历史并存；Latest 按版本过滤——回滚即切查询版本，历史行零改写。
 6. **风险规则 v1**：替代覆盖 < 0.5 → MEDIUM；未知供应商 → HIGH；Binding 健康不足 → LOW。规则随公式版本化。
 
-## 已知限制（挂账）
+## 审查 R1 整改（Findings → 修复 → 回归映射）
 
-- 证据完整率/Exit Pack 完整率的完整聚合（依赖 I14 Exit Pack Registry 数据面）→ 挂 I14 就绪后接入（本 PR 表结构与 ComputeV1 框架已就位）。
-- 聚合任务调度（定期跑批）→ worker 进程接线按 I17 管理面批次决定（Store/PersistResults 幂等使任何调度器安全）。
-- 监控仪表盘导出（聚合成功率/延迟/告警触发）→ I13 交付 Store 查询面，dashboard 导出挂 I13 后续/I17。
-- GWT#5 kill 注入：与 I12 同模式（单事务 + 幂等吸收）——专门的 kill 矩阵在 I12 已交付同构证据；如审查要求本 Issue 独立注入矩阵可补。
+| Finding | 修复 | 回归 |
+|---|---|---|
+| P1-1 聚合输入管道缺失且未诚实挂账 | **提取器交付**：`Store.ExtractDataset` 从真实表（capability_definition ⋈ capability_binding ⋈ resource_provider）拉取 DimRow，含替代可用性 EXISTS 检测、重复 Provider 计数、未知供应商标记、租户归因；数据集 revision = 迁移版本 ×10⁹ + binding 行指纹（输入不变 → revision 不变 → 固定快照可重算） | `TestExtractDatasetFromLiveTables`（提取→计算→持久→维度过滤查询全链闭环 + 未变输入同 revision） |
+| P2-1 查询 API「维度过滤就位」失实 | Latest 增加 dimsFilter（JSONB 包含过滤：capability/provider/vendor/environment/tenant）+ since/computedUntil 时间窗；死变量 byEnv 移除 | 同上 + 既有查询测试 |
+| P2-2 协议兼容率二值退化 | 改为按 capability 的真实比率（healthy/live）；完全受损 → INSUFFICIENT_DATA；混合人口给比率 | `TestProtocolCompatibilityIsARatio`（0.5）+ TestSemanticClassification 扩展（比率 + 全受损） |
+| P2-3 evidence_ref 自指退化 | **挂账**（如实）：evidence_ref 当前为 `dataset:<rev>@<formula>` 合成引用（不指 I12 索引真实条目）；接入 evidence_record 真实引用挂 I14/I17 批次（需证据完整率聚合同批设计） | — |
+| P2-4 last_seen_at 三处宣称失实 | SQL 改为 `DO UPDATE SET last_seen_at = now()`——重算刷新但永不新增重复行 | `TestAlertLastSeenRefreshesWithoutDuplicates`（刷新断言 + 计数不变断言） |
+| P3-1/4 | 并发测试错误显式传播（atomic.CAS）；死代码清除 | 既有套件 |
+| P3-2/5 | Latest 语义（最近计算时间序）文档化；「当前生效公式」为调用方约定——挂 I17 管理面批次给系统状态 | — |
+
+## 已知限制（挂账，审查 R1 裁决口径）
+
+- **真实运行记录与监控导出**（关闭判定第 3 项的运行面）：提取器已交付使管道闭环可行，但**生产数据集的一次完整聚合运行 + 监控曲线导出**需调度器接线与生产数据——挂 I17 批次；按审查口径，Issue 关闭在补齐前为 **NOT PROVEN 保留 OPEN**（与 #5/#11 同先例）。
+- 证据完整率/Exit Pack 完整率的完整聚合（依赖 I14 Exit Pack Registry 数据面）→ 挂 I14 就绪后接入（表结构与 ComputeV1 框架已就位）。
+- evidence_ref 接入 I12 真实索引条目 → 与证据完整率同批（I14/I17）。
+- 聚合任务调度（定期跑批）+ 「当前生效公式」系统状态 → I17 管理面批次。
+- GWT#5 kill 注入：与 I12 同模式（单事务 + 幂等吸收）——审查接受引 I12 同构证据。
 - GWT#6 跨租户 403 HTTP 门禁 → I17。

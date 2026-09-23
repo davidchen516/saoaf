@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -138,24 +139,34 @@ func TestSemanticClassification(t *testing.T) {
 		}
 	}
 
-	// 重复 Provider / 失效 Binding → 集中度 reason 标注 / 协议兼容 INSUFFICIENT_DATA
+	// 重复 Provider / 失效 Binding → 集中度 reason 标注 / 协议兼容：
+	// 混合人口是真实比率（R1 P2-2），完全受损 → INSUFFICIENT_DATA
 	d = &Dataset{Revision: 1, Rows: []DimRow{
 		{Capability: "cap-d", Provider: "p1", Vendor: "v1", ActiveBindings: 2, DupProviderRows: 1},
 		{Capability: "cap-d", Provider: "p1", Vendor: "v1", ActiveBindings: 1, DupProviderRows: 1},
-		{Capability: "cap-e", Provider: "p2", Vendor: "v2", ActiveBindings: 2, BindingIssues: 2},
+		{Capability: "cap-e", Provider: "p2", Vendor: "v2", ActiveBindings: 1, BindingIssues: 1},
+		{Capability: "cap-f", Provider: "p3", Vendor: "v3", BindingIssues: 2},
 	}}
 	res = ComputeV1(d)
-	var sawDup, sawIssues bool
+	var sawDup, sawRatio, sawIssues bool
 	for _, r := range res {
 		if r.MetricKey == KeyVendorConcentration && r.StatusReason != "" {
 			sawDup = true
 		}
-		if r.MetricKey == KeyProtocolCompat && r.Status == StatusInsufficientData {
+		if r.MetricKey == KeyProtocolCompat && r.Dimensions["capability"] == "cap-e" {
+			if r.Status == StatusOK && r.Value != nil && *r.Value == 0.5 {
+				sawRatio = true
+			}
+		}
+		// protocol compat is a per-capability ratio (R1 P2-2): a FULLY
+		// compromised capability classifies INSUFFICIENT_DATA
+		if r.MetricKey == KeyProtocolCompat && r.Dimensions["capability"] == "cap-f" &&
+			r.Status == StatusInsufficientData {
 			sawIssues = true
 		}
 	}
-	if !sawDup || !sawIssues {
-		t.Fatalf("duplicate-provider (%v) / binding-issues (%v) classification missing", sawDup, sawIssues)
+	if !sawDup || !sawRatio || !sawIssues {
+		t.Fatalf("dup(%v)/ratio(%v)/issues(%v) classification missing", sawDup, sawRatio, sawIssues)
 	}
 }
 
@@ -197,14 +208,20 @@ func TestConcurrentAggregation(t *testing.T) {
 	withDBM(t, func(dsn string, store Store) {
 		ctx := context.Background()
 		var wg sync.WaitGroup
+		var firstErr atomic.Value
 		for i := 0; i < 4; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_ = store.PersistResults(ctx, ComputeV1(fixedDataset(42)))
+				if err := store.PersistResults(ctx, ComputeV1(fixedDataset(42))); err != nil {
+					firstErr.CompareAndSwap(nil, err)
+				}
 			}()
 		}
 		wg.Wait()
+		if v := firstErr.Load(); v != nil {
+			t.Fatalf("concurrent persist error: %v", v)
+		}
 		var metricRows int
 		_ = store.Pool.QueryRow(ctx,
 			`SELECT count(*) FROM saoaf.metric_result`).Scan(&metricRows)
@@ -264,7 +281,7 @@ func TestFormulaRollbackNoHistoryRewrite(t *testing.T) {
 			t.Fatalf("history must contain both formula versions: %+v", hist)
 		}
 		// Latest under v1 (the rolled-back active formula) serves v1 values
-		latest, err := store.Latest(ctx, FormulaV1, KeySubstitutionCoverage, 10)
+		latest, err := store.Latest(ctx, FormulaV1, KeySubstitutionCoverage, nil, time.Time{}, time.Time{}, 10)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -283,7 +300,7 @@ func TestQueryDrilldownTriple(t *testing.T) {
 		if err := store.PersistResults(ctx, ComputeV1(fixedDataset(99))); err != nil {
 			t.Fatal(err)
 		}
-		latest, err := store.Latest(ctx, FormulaV1, "", 100)
+		latest, err := store.Latest(ctx, FormulaV1, "", nil, time.Time{}, time.Time{}, 100)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -304,4 +321,152 @@ func TestQueryDrilldownTriple(t *testing.T) {
 			t.Fatal("fixed dataset (cap-b coverage 0.0 < 0.5) must raise a substitution alert")
 		}
 	})
+}
+
+// R1-P1 回归：提取器从真实表拉 Dataset（管道闭环——不再只有测试构造的行）。
+func TestExtractDatasetFromLiveTables(t *testing.T) {
+	withDBM(t, func(dsn string, store Store) {
+		ctx := context.Background()
+		conn := store.Pool
+		// seed the FK chain: capability + provider + snapshot + 2 bindings
+		if _, err := conn.Exec(ctx, `
+			INSERT INTO registry.capability_definition
+				(capability_key, major_version, revision, resource_type, requirement_schema, state, owner_ref)
+			VALUES ('cap-x', 1, 1, 'MODEL', '{}', 'PUBLISHED', 'u')`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Exec(ctx, `
+			INSERT INTO registry.resource_provider
+				(provider_key, provider_type, endpoint_ref, owner_ref, workload_identity, state, revision, active_revision)
+			VALUES ('prov-x', 'MODEL', 'svc://x', 'vendor-live', 'spiffe://saoaf.test/x', 'PUBLISHED', 1, 1),
+			       ('prov-y', 'MODEL', 'svc://y', 'vendor-live', 'spiffe://saoaf.test/y', 'PUBLISHED', 1, 1)`); err != nil {
+			t.Fatal(err)
+		}
+		var xID, yID int
+		if err := conn.QueryRow(ctx,
+			`SELECT id FROM registry.resource_provider WHERE provider_key='prov-x'`).Scan(&xID); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.QueryRow(ctx,
+			`SELECT id FROM registry.resource_provider WHERE provider_key='prov-y'`).Scan(&yID); err != nil {
+			t.Fatal(err)
+		}
+		for i, pid := range []int{xID, yID} {
+			if _, err := conn.Exec(ctx, `
+				INSERT INTO registry.provider_snapshot
+					(provider_id, snapshot_version, contract_version, digest, signature, workload_identity,
+					 profiles, generated_at, valid_until, state)
+				VALUES ($1, 1, '2026.09', 'sha256:333333333333333333333333333333333333333333333333333333333333333`+fmt.Sprint(i)+`', 's',
+				       'spiffe://saoaf.test/x', '[]'::jsonb, now(), now() + interval '1 day', 'PUBLISHED')`, pid); err != nil {
+				t.Fatal(err)
+			}
+			var snapID int64
+			if err := conn.QueryRow(ctx,
+				`SELECT id FROM registry.provider_snapshot WHERE provider_id = $1 ORDER BY id DESC LIMIT 1`, pid).Scan(&snapID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := conn.Exec(ctx, `
+				INSERT INTO registry.capability_binding
+					(binding_key, capability_id, provider_id, snapshot_id, profile_or_action,
+					 environment, scope, scope_hash, priority, state, revision, is_active, tenant_ref)
+				VALUES ($1, (SELECT id FROM registry.capability_definition WHERE capability_key='cap-x'),
+				       $2, $3, 'p', 'production', '{}'::jsonb, 'sha256:x', $4, 'PUBLISHED', 1, TRUE, 'tenant-x')`,
+				fmt.Sprintf("bind-x%d", i), pid, snapID, 100+i); err != nil {
+				t.Fatal(err)
+			}
+		}
+		d, err := store.ExtractDataset(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(d.Rows) != 2 || d.Revision == 0 {
+			t.Fatalf("extracted = %d rows rev=%d, want 2 rows rev>0", len(d.Rows), d.Revision)
+		}
+		for _, r := range d.Rows {
+			if r.Capability != "cap-x" || r.Vendor != "vendor-live" || r.Tenant != "tenant-x" {
+				t.Fatalf("extracted row = %+v", r)
+			}
+			if r.ActiveBindings != 1 || r.BindingsWithSubstitute != 1 {
+				t.Fatalf("substitute detection broken: %+v", r)
+			}
+		}
+		// pipeline closure: extract → compute → persist → query
+		results := ComputeV1(d)
+		if err := store.PersistResults(ctx, results); err != nil {
+			t.Fatal(err)
+		}
+		latest, err := store.Latest(ctx, FormulaV1, KeySubstitutionCoverage,
+			map[string]string{"capability": "cap-x"}, time.Time{}, time.Time{}, 10)
+		if err != nil || len(latest) != 1 {
+			t.Fatalf("dims-filtered query = %d err=%v", len(latest), err)
+		}
+		if latest[0].Status != StatusOK || latest[0].Value == nil || *latest[0].Value != 1.0 {
+			t.Fatalf("cap-x coverage = %+v, want 1.0 (both providers are substitutes)", latest[0])
+		}
+		// a second extract of the UNCHANGED tables yields the same revision
+		d2, err := store.ExtractDataset(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d2.Revision != d.Revision {
+			t.Fatalf("unchanged input changed revision: %d → %d", d.Revision, d2.Revision)
+		}
+	})
+}
+
+// R1-P2-4 回归：重算刷新 last_seen_at（与文档一致），仍零重复。
+func TestAlertLastSeenRefreshesWithoutDuplicates(t *testing.T) {
+	withDBM(t, func(dsn string, store Store) {
+		ctx := context.Background()
+		results := ComputeV1(fixedDataset(42))
+		if err := store.PersistResults(ctx, results); err != nil {
+			t.Fatal(err)
+		}
+		var before time.Time
+		if err := store.Pool.QueryRow(ctx, `
+			SELECT last_seen_at FROM saoaf.risk_alert ORDER BY id LIMIT 1`).Scan(&before); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(20 * time.Millisecond)
+		if err := store.PersistResults(ctx, ComputeV1(fixedDataset(42))); err != nil {
+			t.Fatal(err)
+		}
+		var count int
+		var after time.Time
+		_ = store.Pool.QueryRow(ctx, `SELECT count(*) FROM saoaf.risk_alert`).Scan(&count)
+		if err := store.Pool.QueryRow(ctx, `
+			SELECT last_seen_at FROM saoaf.risk_alert ORDER BY id LIMIT 1`).Scan(&after); err != nil {
+			t.Fatal(err)
+		}
+		if count == 0 {
+			t.Fatal("no alerts to test")
+		}
+		if !after.After(before) {
+			t.Fatalf("last_seen_at not refreshed on recompute: %v → %v", before, after)
+		}
+		var after2 int
+		_ = store.Pool.QueryRow(ctx, `SELECT count(*) FROM saoaf.risk_alert`).Scan(&after2)
+		if count != after2 {
+			t.Fatalf("refresh duplicated alerts: %d → %d", count, after2)
+		}
+	})
+}
+
+// R1-P2-2 回归：协议兼容率是真实比率（1.0-or-unknown 退化已修）。
+func TestProtocolCompatibilityIsARatio(t *testing.T) {
+	// cap-mixed: one healthy row + one issue row → ratio 0.5, NOT unknown
+	d := &Dataset{Revision: 1, Rows: []DimRow{
+		{Capability: "cap-mixed", Provider: "p1", Vendor: "v", ActiveBindings: 1},
+		{Capability: "cap-mixed", Provider: "p2", Vendor: "v", BindingIssues: 1},
+	}}
+	res := ComputeV1(d)
+	for _, r := range res {
+		if r.MetricKey == KeyProtocolCompat && r.Dimensions["capability"] == "cap-mixed" {
+			if r.Status != StatusOK || r.Value == nil || *r.Value != 0.5 {
+				t.Fatalf("mixed population must yield ratio 0.5: %+v", r)
+			}
+			return
+		}
+	}
+	t.Fatal("protocol ratio row missing")
 }

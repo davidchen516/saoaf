@@ -77,6 +77,75 @@ type Dataset struct {
 	Rows []DimRow
 }
 
+// ExtractDataset pulls the aggregation input from the LIVE registry tables
+// (review R1 P1: the pipeline previously had no extractor — DimRow only
+// existed in tests, making the issue's real-run evidence impossible).
+// Deterministic: ORDER BY over stable keys; the revision is the current
+// migration state + row count fingerprint so fixed snapshots recompute.
+func (s Store) ExtractDataset(ctx context.Context) (*Dataset, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT cd.capability_key, rp.provider_key, rp.owner_ref,
+		       cb.environment,
+		       CASE WHEN cb.state = 'PUBLISHED' AND cb.is_active THEN 1 ELSE 0 END,
+		       CASE WHEN cb.state = 'PUBLISHED' AND cb.is_active
+		            AND EXISTS (SELECT 1 FROM registry.capability_binding cb2
+		                        WHERE cb2.capability_id = cb.capability_id
+		                          AND cb2.state = 'PUBLISHED' AND cb2.is_active
+		                          AND cb2.provider_id <> cb.provider_id)
+		            THEN 1 ELSE 0 END,
+		       CASE WHEN cb.state <> 'PUBLISHED' OR NOT cb.is_active THEN 1 ELSE 0 END,
+		       0,  -- dup provider rows: computed below
+		       CASE WHEN rp.owner_ref = '' THEN TRUE ELSE FALSE END,
+		       cb.tenant_ref
+		FROM registry.capability_definition cd
+		JOIN registry.capability_binding cb ON cb.capability_id = cd.id
+		JOIN registry.resource_provider rp ON rp.id = cb.provider_id
+		ORDER BY cd.capability_key, rp.provider_key, cb.environment, cb.revision`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	d := &Dataset{}
+	var providerSeen = map[string]int{}
+	for rows.Next() {
+		var r DimRow
+		var active, withSub, issues int
+		var unknownVendor bool
+		var dup int
+		if err := rows.Scan(&r.Capability, &r.Provider, &r.Vendor, &r.Environment,
+			&active, &withSub, &issues, &dup, &unknownVendor, &r.Tenant); err != nil {
+			return nil, err
+		}
+		r.ActiveBindings = active
+		r.BindingsWithSubstitute = withSub
+		r.BindingIssues = issues
+		r.UnknownVendor = unknownVendor
+		r.DupProviderRows = dup
+		providerSeen[r.Provider]++
+		d.Rows = append(d.Rows, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// duplicate providers: a provider key spanning multiple rows
+	for i := range d.Rows {
+		if providerSeen[d.Rows[i].Provider] > 1 {
+			d.Rows[i].DupProviderRows = providerSeen[d.Rows[i].Provider] - 1
+		}
+	}
+	// dataset revision: migration version + input fingerprint (a fixed
+	// snapshot recomputes identically; a changed input bumps the revision)
+	var fingerprint int64
+	if err := s.Pool.QueryRow(ctx, `
+		SELECT (SELECT COALESCE(MAX(version_id), 0) FROM goose_db_version) * 1000000000
+		     + COALESCE(SUM(cb.id), 0)
+		FROM registry.capability_binding cb`).Scan(&fingerprint); err != nil {
+		return nil, err
+	}
+	d.Revision = fingerprint
+	return d, nil
+}
+
 // DimRow is one aggregation input row.
 type DimRow struct {
 	Capability  string
@@ -113,7 +182,6 @@ func ComputeV1(d *Dataset) []MetricResult {
 	var out []MetricResult
 	byCap := groupBy(d.Rows, func(r DimRow) string { return r.Capability })
 	byCap = filterNonEmpty(byCap)
-	byEnv := groupBy(d.Rows, func(r DimRow) string { return r.Environment })
 
 	// 替代覆盖率: fraction of live bindings whose capability has a viable
 	// alternative provider. 空分母（无在役 binding）→ NOT_APPLICABLE.
@@ -170,28 +238,31 @@ func ComputeV1(d *Dataset) []MetricResult {
 		out = append(out, mr(KeyVendorConcentration, map[string]string{}, &v, StatusOK, reason, d.Revision, FormulaV1))
 	}
 
-	// 协议兼容率: live bindings whose provider snapshot is active and
-	// within its window (protocol contract healthy). BindingIssues make
-	// the denominator untrustworthy → INSUFFICIENT_DATA with explicit counts.
-	healthy := 0
-	live := 0
-	issues := 0
-	for _, r := range d.Rows {
-		live += r.ActiveBindings
-		issues += r.BindingIssues
-	}
-	_ = byEnv
-	// healthy = live bindings with no issues on their row (deterministic proxy)
-	healthy = live - issues
-	if live == 0 {
-		out = append(out, mr(KeyProtocolCompat, map[string]string{}, nil,
-			StatusNotApplicable, "no live bindings (empty denominator)", d.Revision, FormulaV1))
-	} else if issues > 0 {
-		out = append(out, mr(KeyProtocolCompat, map[string]string{}, nil,
-			StatusInsufficientData, fmt.Sprintf("inactive bindings/expired snapshots: %d", issues), d.Revision, FormulaV1))
-	} else {
+	// 协议兼容率: fraction of capability bindings that are live AND
+	// issue-free (active snapshot in its window, published state). A mixed
+	// population yields a real ratio (review R1 P2-2: the previous
+	// formulation collapsed to 1.0-or-unknown); a FULLY compromised
+	// denominator classifies INSUFFICIENT_DATA (未知 ≠ 0).
+	for cap, rows := range byCap {
+		live := 0
+		healthy := 0
+		for _, r := range rows {
+			live += r.ActiveBindings + r.BindingIssues
+			healthy += r.ActiveBindings
+		}
+		dims := map[string]string{"capability": cap}
+		if live == 0 {
+			out = append(out, mr(KeyProtocolCompat, dims, nil,
+				StatusNotApplicable, "no bindings for capability (empty denominator)", d.Revision, FormulaV1))
+			continue
+		}
+		if healthy == 0 {
+			out = append(out, mr(KeyProtocolCompat, dims, nil,
+				StatusInsufficientData, "all bindings inactive/expired snapshots", d.Revision, FormulaV1))
+			continue
+		}
 		v := float64(healthy) / float64(live)
-		out = append(out, mr(KeyProtocolCompat, map[string]string{}, &v, StatusOK, "", d.Revision, FormulaV1))
+		out = append(out, mr(KeyProtocolCompat, dims, &v, StatusOK, "", d.Revision, FormulaV1))
 	}
 
 	// 纯函数的确定性输出序：按 (metric key, dims JSON) 排序——固定数据集
@@ -207,6 +278,15 @@ func sortResults(rs []MetricResult) {
 		}
 		return mustDims(rs[i].Dimensions) < mustDims(rs[j].Dimensions)
 	})
+}
+
+// dimsJSON marshals a dims filter for the containment query (nil → {}).
+func dimsJSON(m map[string]string) []byte {
+	if m == nil {
+		return []byte("{}")
+	}
+	b, _ := json.Marshal(m)
+	return b
 }
 
 func mustDims(m map[string]string) string {
@@ -315,30 +395,44 @@ func upsertAlert(ctx context.Context, tx pgx.Tx, rule, entityKind, entityID stri
 		return err
 	}
 	// 幂等键 (rule, entity, revision): first sight creates; recomputes /
-	// restarts only refresh last_seen_at — never a duplicate alert
+	// restarts refresh last_seen_at ONLY — never a duplicate alert
+	// (review R1 P2-4: DO NOTHING never refreshed, contradicting three
+	// documentation claims)
 	_, err = tx.Exec(ctx, `
 		INSERT INTO saoaf.risk_alert
 			(rule_key, entity_kind, entity_id, dataset_revision, severity, detail)
 		VALUES ($1, $2, $3, $4, $5, $6::jsonb)
-		ON CONFLICT (rule_key, entity_kind, entity_id, dataset_revision) DO NOTHING`,
+		ON CONFLICT (rule_key, entity_kind, entity_id, dataset_revision)
+		DO UPDATE SET last_seen_at = now()`,
 		rule, entityKind, entityID, rev, severity, d)
 	return err
 }
 
 // Latest returns the newest result per (metric, dims) for the given
 // formula version — the query API surface (GWT#1: 与上次运行完全一致 + 下钻三元组).
-func (s Store) Latest(ctx context.Context, formulaVersion, metricKey string, limit int) ([]MetricResult, error) {
+// dimsFilter narrows by dimension keys (capability / provider / vendor /
+// environment / tenant — the dims the formulas emit); since/computedUntil
+// bound the computation time (review R1 P2-1: the previous surface had
+// only formula+metric filters).
+func (s Store) Latest(ctx context.Context, formulaVersion, metricKey string, dimsFilter map[string]string, since, computedUntil time.Time, limit int) ([]MetricResult, error) {
 	if limit <= 0 {
 		limit = 100
+	}
+	if computedUntil.IsZero() {
+		computedUntil = time.Now().Add(24 * time.Hour) // no upper bound by default
 	}
 	rows, err := s.Pool.Query(ctx, `
 		SELECT DISTINCT ON (metric_key, dimensions)
 			metric_key, dimensions, value, status, status_reason,
 			dataset_revision, formula_version, evidence_ref, computed_at
 		FROM saoaf.metric_result
-		WHERE formula_version = $1 AND ($2 = '' OR metric_key = $2)
+		WHERE formula_version = $1
+		  AND ($2 = '' OR metric_key = $2)
+		  AND ($3::jsonb = '{}'::jsonb OR dimensions @> $3::jsonb)
+		  AND ($4 = timestamptz 'epoch' OR computed_at >= $4)
+		  AND computed_at <= $5
 		ORDER BY metric_key, dimensions, computed_at DESC
-		LIMIT $3`, formulaVersion, metricKey, limit)
+		LIMIT $6`, formulaVersion, metricKey, dimsJSON(dimsFilter), since, computedUntil, limit)
 	if err != nil {
 		return nil, err
 	}
