@@ -117,7 +117,7 @@ CR=$(echo 'SELECT count(*) FROM saoaf.change_record;' | psql_rec)
 OB=$(echo 'SELECT count(*) FROM saoaf.outbox_event;' | psql_rec)
 WP=$(echo 'SELECT max(published_seq) FROM saoaf.outbox_event;' | psql_rec)
 ENT=$(echo "SELECT count(*) FROM saoaf.change_record WHERE entity_id IN ('cap-t0','cap-t1');" | psql_rec)
-echo "schema version : $V (want 8)"
+echo "schema version : $V (want 9)"
 echo "change_record   : $CR rows (want 2 — T0+T1, disaster excluded)"
 echo "outbox_event    : $OB rows (want 2)"
 echo "outbox watermark: $WP (want 1 — evt-t1 published_seq)"
@@ -131,7 +131,7 @@ else
   echo "constraint probe: NOT REJECTED — $NEG"
   CONSTRAINT_OK=0
 fi
-if [ "$V" = "8" ] && [ "$CR" = "2" ] && [ "$OB" = "2" ] && [ "$WP" = "1" ] && [ "$ENT" = "2" ] && [ "$CONSTRAINT_OK" = "1" ]; then
+if [ "$V" = "9" ] && [ "$CR" = "2" ] && [ "$OB" = "2" ] && [ "$WP" = "1" ] && [ "$ENT" = "2" ] && [ "$CONSTRAINT_OK" = "1" ]; then
   echo "PITR DRILL: PASS"
   docker rm -f saoaf-pitr-primary saoaf-pitr-recover >/dev/null 2>&1 || true
   exit 0
