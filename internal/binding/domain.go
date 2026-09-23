@@ -1,0 +1,189 @@
+// Package binding implements the Capability Binding lifecycle (I08):
+// scope normalization with canonical hashing, publish/suspend/resume/retire,
+// conflict detection, and rollback-as-new-revision semantics.
+package binding
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"sort"
+
+	"golang.org/x/text/unicode/norm"
+)
+
+// State is the binding lifecycle state.
+type State string
+
+const (
+	StateDraft      State = "DRAFT"
+	StatePublished  State = "PUBLISHED"
+	StateSuspended  State = "SUSPENDED"
+	StateDeprecated State = "DEPRECATED"
+	StateRetired    State = "RETIRED"
+)
+
+// ValidTransitions is the full lifecycle matrix.
+var ValidTransitions = map[State][]State{
+	StateDraft:      {StatePublished},
+	StatePublished:  {StateSuspended, StateDeprecated},
+	StateSuspended:  {StatePublished, StateRetired},
+	StateDeprecated: {StateRetired},
+	StateRetired:    {},
+}
+
+// ValidateTransition reports whether from→to is legal.
+func ValidateTransition(from, to State) bool {
+	for _, t := range ValidTransitions[from] {
+		if t == to {
+			return true
+		}
+	}
+	return false
+}
+
+// Reason codes.
+const (
+	ReasonInvalidTransition = "BINDING_INVALID_TRANSITION"
+	ReasonScopeNotCanonical = "BINDING_SCOPE_NOT_CANONICAL"
+	ReasonScopeOverlap      = "BINDING_SCOPE_OVERLAP"
+	ReasonMissingApproval   = "BINDING_MISSING_APPROVAL"
+	ReasonRevisionConflict  = "BINDING_REVISION_CONFLICT"
+	ReasonNotFound          = "BINDING_NOT_FOUND"
+	ReasonAlreadyActive     = "BINDING_ALREADY_ACTIVE"
+	ReasonIdemKeyReuse      = "BINDING_IDEMPOTENCY_KEY_REUSE"
+)
+
+// ValidationError carries a reason code.
+type ValidationError struct {
+	Reason string
+	Msg    string
+}
+
+func (e *ValidationError) Error() string { return e.Reason + ": " + e.Msg }
+
+func errV(reason, msg string) error { return &ValidationError{Reason: reason, Msg: msg} }
+
+// Scope is the binding scope structure (specs §1.2).
+type Scope struct {
+	TenantRefs  []string `json:"tenant_refs"`
+	FactoryRefs []string `json:"factory_refs"`
+	Regions     []string `json:"regions"`
+	AgentRefs   []string `json:"agent_refs"`
+}
+
+// forbiddenScopeFields: scope cannot carry credentials or business payloads.
+var scopeFieldPattern = regexp.MustCompile(`(?i)(credential|secret|password|api_key|prompt)`)
+
+// CanonicalScope returns the normalized scope: each array is sorted,
+// deduplicated, Unicode NFC-normalized; empty arrays stay empty (denotes
+// "not restricted" — deny is NOT expressible here per specs §1.2).
+func (s Scope) CanonicalScope() Scope {
+	return Scope{
+		TenantRefs:  canonicalizeStrings(s.TenantRefs),
+		FactoryRefs: canonicalizeStrings(s.FactoryRefs),
+		Regions:     canonicalizeStrings(s.Regions),
+		AgentRefs:   canonicalizeStrings(s.AgentRefs),
+	}
+}
+
+func canonicalizeStrings(in []string) []string {
+	out := make([]string, 0, len(in))
+	seen := map[string]bool{}
+	for _, s := range in {
+		nfc := norm.NFC.String(s)
+		if !seen[nfc] {
+			seen[nfc] = true
+			out = append(out, nfc)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ScopeHash computes the canonical hash: JSON with sorted keys and
+// normalized arrays, then SHA-256.
+func (s Scope) ScopeHash() string {
+	c := s.CanonicalScope()
+	b, err := json.Marshal(c)
+	if err != nil {
+		panic("scope marshal: " + err.Error())
+	}
+	sum := sha256.Sum256(b)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// Overlaps reports whether two canonical scopes share any binding dimension.
+// Two scopes overlap when they share at least one value in a dimension
+// AND neither is empty in that dimension (empty = unrestricted).
+func (a Scope) Overlaps(b Scope) bool {
+	return overlapDim(a.TenantRefs, b.TenantRefs) ||
+		overlapDim(a.FactoryRefs, b.FactoryRefs) ||
+		overlapDim(a.Regions, b.Regions) ||
+		overlapDim(a.AgentRefs, b.AgentRefs)
+}
+
+func overlapDim(a, b []string) bool {
+	am := setOf(a)
+	for _, v := range b {
+		if am[v] {
+			return true
+		}
+	}
+	return false
+}
+
+func setOf(s []string) map[string]bool {
+	m := map[string]bool{}
+	for _, v := range s {
+		m[v] = true
+	}
+	return m
+}
+
+// CheckScopeFields validates no forbidden keys ride on the scope JSON.
+func CheckScopeFields(raw []byte) error {
+	if scopeFieldPattern.Match(raw) {
+		return errV(ReasonScopeNotCanonical, "scope carries forbidden keys (credentials/prompt)")
+	}
+	return nil
+}
+
+// PublishGate checks the production publish prerequisites (issue: 审批引用
+// + change record 存在，否则拒绝).
+func PublishGate(approvalRef, changeReason, ticketRef string) error {
+	if approvalRef == "" {
+		return errV(ReasonMissingApproval, "production publish requires approval_ref")
+	}
+	if changeReason == "" {
+		return errV(ReasonMissingApproval, "production publish requires change_reason")
+	}
+	return nil
+}
+
+// Binding is the domain aggregate.
+type Binding struct {
+	ID           int64
+	BindingKey   string
+	CapabilityID int64
+	ProviderID   int64
+	SnapshotID   int64
+	Profile      string
+	Environment  string
+	Scope        Scope
+	ScopeHash    string
+	Priority     int
+	State        State
+	Revision     int
+	IsActive     bool
+	ChangeReason string
+	TicketRef    string
+	ApprovalRef  string
+}
+
+// String provides a compact representation for debugging.
+func (b *Binding) String() string {
+	return fmt.Sprintf("binding(%s#%d %s %s)", b.BindingKey, b.Revision, b.State, b.ScopeHash)
+}

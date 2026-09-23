@@ -1,0 +1,47 @@
+# Binding package (verbose, real PG postgres:18.6)
+=== RUN   TestScopeCanonicalGolden
+--- PASS: TestScopeCanonicalGolden (0.00s)
+=== RUN   TestScopeOverlap
+--- PASS: TestScopeOverlap (0.00s)
+=== RUN   TestTransitionMatrix
+--- PASS: TestTransitionMatrix (0.00s)
+=== RUN   TestPublishGate
+--- PASS: TestPublishGate (0.00s)
+=== RUN   TestScopeForbiddenFields
+--- PASS: TestScopeForbiddenFields (0.00s)
+=== RUN   TestBindingString
+--- PASS: TestBindingString (0.00s)
+=== RUN   TestDB50ConcurrentPublishSingleActive
+--- PASS: TestDB50ConcurrentPublishSingleActive (0.19s)
+=== RUN   TestDBScopeConflictBlocked
+--- PASS: TestDBScopeConflictBlocked (0.25s)
+=== RUN   TestDBSuspendResumeRetire
+--- PASS: TestDBSuspendResumeRetire (0.23s)
+=== RUN   TestDBCASRevisionConflict
+--- PASS: TestDBCASRevisionConflict (0.21s)
+=== RUN   TestDBRollbackCreatesNewRevision
+--- PASS: TestDBRollbackCreatesNewRevision (0.23s)
+=== RUN   TestDBPublishIdempotentReplay
+--- PASS: TestDBPublishIdempotentReplay (0.15s)
+ok  	github.com/davidchen516/saoaf/internal/binding	1.502s
+
+# Red run: 审批缺失 → 发布拒绝（GWT#2 负向）
+=== RUN   TestPublishGate
+--- PASS: TestPublishGate (0.00s)
+ok  	github.com/davidchen516/saoaf/internal/binding	0.198s
+
+# Full repo -race
+ok  	github.com/davidchen516/saoaf/internal/binding	2.966s
+ok  	github.com/davidchen516/saoaf/internal/platform/approval	1.425s
+ok  	github.com/davidchen516/saoaf/internal/platform/authn	2.121s
+ok  	github.com/davidchen516/saoaf/internal/platform/authz	1.770s
+ok  	github.com/davidchen516/saoaf/internal/platform/httpapi	1.936s
+ok  	github.com/davidchen516/saoaf/internal/platform/middleware	2.801s
+ok  	github.com/davidchen516/saoaf/internal/platform/worker	2.528s
+ok  	github.com/davidchen516/saoaf/internal/platform/workload	2.828s
+ok  	github.com/davidchen516/saoaf/internal/policy	4.681s
+ok  	github.com/davidchen516/saoaf/internal/registry	4.558s
+ok  	github.com/davidchen516/saoaf/migrations	6.772s
+ok  	github.com/davidchen516/saoaf/tools/boundarycheck	3.011s
+ok  	github.com/davidchen516/saoaf/tools/contractlint	2.373s
+ok  	github.com/davidchen516/saoaf/tools/licensecheck	1.756s
