@@ -50,6 +50,24 @@
 2. **govulncheck GO-2026-6094（cel-go v0.26.0）**：升级 cel-go → v0.30.0（policy 沙箱操作符表全测通过）；x/exp/protobuf 传递升级。
 3. 迁移后 HTTP 测试 goose 路径层级修正。
 
+## 审查 R1 整改（Findings → 修复 → 回归映射）
+
+| Finding | 修复 | 回归测试 |
+|---|---|---|
+| P1-1 降级读分支吞掉 ErrSnapshotUnavailable（热缓存在 pointer 切换后持续供给已失效快照至 valid_until；探针实测复现） | cache.Get 的 loader 失败分支先判 `errors.Is(lerr, ErrSnapshotUnavailable)` → **驱逐条目并原样上抛**（424 分类），仅其余错误进入降级读；degraded 计数不再被非断连场景污染 | `TestDBResolveWarmCachePointerFlip`（热缓存+pointer 切换 → 424 + 计数零污染） |
+| P2-1 readiness 死锁（新实例在 readiness 门控后永远收不到首个 resolve 来预热缓存） | `SnapshotCache.WarmupActive`（启动时预载全部 active published 快照）+ cmd 接线；warmup 失败非致命（readiness 如实反映） | 启动路径（cmd 日志）；readiness 语义不变 |
+| P2-2 HTTP 禁止字段负向测试死代码（构造未断言） | 真实 POST + 400 断言 + envelope 不回显 payload 内容断言 | `TestResolverHTTPInputHygiene` 扩展 |
+| P3-1 路由顺序文档与实现不一致 | 文档改为与 issue 原文一致的「Schema → 禁止字段 → **Policy → Capability** → 消歧 → Snapshot → 候选」；HTTP 边界 RAW 扫描先于 JSON decode 的次序差异（共用 INVALID_REQUIREMENT、外部不可观察）已在 service.go 注释与本文说明 | — |
+| P3-3 provider.contract_version 硬编码空串 | PlanItem 增 ContractVersion（migration 00006 列 + 落库 + 响应输出） | 既有套件 + happy path 字段断言 |
+| P3-4 CreatePlan 一切 23505 均视为幂等冲突 | 按约束名分流：`(caller_ref, idempotency_key)` 唯一 → 幂等重读；PK 碰撞 → 500 要求新请求 | 既有幂等套件回归 |
+| P3-2/3-5/3-6 | 值子串 fail-closed 语义（调用方命名约束）写入本文已知限制；`X-Saoaf-Environment` vs spec `X-Environment`、traceparent 强制、环境枚举校验挂契约冻结批次；消歧 fail-loud 的多 region 配置指南挂平台文档 | — |
+| P3-7 load-full.log 版本口径 | 在最终 HEAD 重录 15 分钟跑批（见下） | 重录替换 evidence |
+
+### 审查 R1 结论摘要（完整报告回填于 PR #43 评论）
+- 39/39 resolver 测试 + 全仓 16/16 包 -race 由审查员在 8fd75fb 亲自复跑全绿；负载冒烟复跑一致（p99 6.39ms）。
+- 8 项对抗探针：确定性反证/幂等风暴/路由优先级/越权矩阵全 PASS；探针 E（热缓存 pointer 切换）复现 P1-1 → 已修。
+- 审计角色（resolver.audit）读取路径由审查员首次实证放行语义（200）。
+
 ## 已知限制（挂账）
 
 - GWT#8 的 2 倍峰值 60 分钟稳态归 #21（issue 明示）。

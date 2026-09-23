@@ -314,6 +314,60 @@ func TestDBResolveSnapshotExpired(t *testing.T) {
 	})
 }
 
+// R1 P1 回归：热缓存下 pointer 切换必须 424——降级读只属于断连，
+// 不属于「快照已非 active」的确定性裁决。
+func TestDBResolveWarmCachePointerFlip(t *testing.T) {
+	withDBR(t, func(db string) {
+		ids := seedFullStack(t, db)
+		seedActiveBinding(t, db, ids, "bind-warm", allScope(), 100)
+		pool, err := pgxpool.New(context.Background(), db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		svc := &Service{
+			Plans: &Store{Pool: pool},
+			Cache: NewSnapshotCache(NewRegistrySnapshotLoader(pool), 10*time.Millisecond),
+			Pool:  pool, Now: time.Now, NewID: NewPlanID,
+			DefaultTTL: 300 * time.Second, MaxTTL: 3600 * time.Second,
+		}
+		// prime: cache is warm with snapshot v1
+		if _, _, err := svc.Resolve(context.Background(), resolveReq(), callerMeta(), "idem-warm-1"); err != nil {
+			t.Fatalf("prime resolve: %v", err)
+		}
+		// publish snapshot v2 and move the active pointer
+		conn := mustConnR(t, db)
+		if _, err := conn.Exec(context.Background(), `
+			INSERT INTO registry.provider_snapshot
+				(provider_id, snapshot_version, contract_version, digest, signature, workload_identity,
+				 profiles, generated_at, valid_until, state)
+			VALUES ($1, 2, '2026.09', 'sha256:7777777777777777777777777777777777777777777777777777777777777777', 'sig',
+			        'spiffe://saoaf.test/ns/default/sa/mmr',
+			        '[{"profile_id":"p2","capability_keys":[],"regions":[],"status":"AVAILABLE"}]'::jsonb,
+			        now(), now() + interval '2 hour', 'PUBLISHED')`, ids.ProviderID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Exec(context.Background(), `
+			UPDATE registry.provider_active_pointer SET snapshot_id = (
+				SELECT id FROM registry.provider_snapshot WHERE provider_id = $1 AND snapshot_version = 2)
+			WHERE provider_id = $1`, ids.ProviderID); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(20 * time.Millisecond) // soft refresh deadline passes
+		_, _, err = svc.Resolve(context.Background(), resolveReq(), callerMeta(), "idem-warm-2")
+		if err == nil {
+			t.Fatal("warm cache served the deactivated pinned snapshot (must 424)")
+		}
+		re, ok := err.(*ResolveError)
+		if !ok || re.Code != CodeSnapshotExpired {
+			t.Fatalf("want PROVIDER_SNAPSHOT_EXPIRED after pointer flip, got %v", err)
+		}
+		if svc.Cache.Stats().DegradedHits != 0 {
+			t.Fatal("degraded-hit counter polluted by a deterministic verdict")
+		}
+	})
+}
+
 // PROVIDER_SNAPSHOT_EXPIRED（424）：active pointer 已移到新 snapshot，
 // binding 仍钉住旧的（必须重发布 binding，而不是静默用旧 provider 内容）。
 func TestDBResolveSnapshotNotActive(t *testing.T) {

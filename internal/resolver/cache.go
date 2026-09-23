@@ -18,6 +18,7 @@ package resolver
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -110,6 +111,17 @@ func (c *SnapshotCache) Get(ctx context.Context, providerID int64) (*LoadedSnaps
 		}
 		c.statsMu.Unlock()
 		if lerr != nil {
+			// ErrSnapshotUnavailable is a DETERMINISTIC verdict from a
+			// healthy DB (pointer moved / snapshot no longer published),
+			// not an outage: evict the entry and propagate so resolve
+			// classifies PROVIDER_SNAPSHOT_EXPIRED (review P1 — a warm
+			// cache must never silently serve a deactivated snapshot).
+			if errors.Is(lerr, ErrSnapshotUnavailable) {
+				c.mu.Lock()
+				delete(c.entries, providerID)
+				c.mu.Unlock()
+				return nil, lerr
+			}
 			// degraded read: only within the approved validity window
 			c.mu.Lock()
 			old, had := c.entries[providerID]
@@ -134,6 +146,24 @@ func (c *SnapshotCache) Get(ctx context.Context, providerID int64) (*LoadedSnaps
 		return nil, err
 	}
 	return v.(*LoadedSnapshot), nil
+}
+
+// WarmupActive preloads every currently-active published snapshot (startup
+// warmup: readiness requires at least one loaded snapshot, and a fresh
+// instance behind a readiness-gated LB would otherwise never receive the
+// first resolve to load it — review P2-1).
+func (c *SnapshotCache) WarmupActive(ctx context.Context, listActive func(ctx context.Context) ([]int64, error)) (int, error) {
+	ids, err := listActive(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, id := range ids {
+		if _, err := c.Get(ctx, id); err == nil {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // Loaded reports how many distinct providers are currently cached.

@@ -375,9 +375,29 @@ func TestResolverHTTPInputHygiene(t *testing.T) {
 	if resp := post("idem-x1", bad); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("unknown field = %d, want 400", resp.StatusCode)
 	}
-	// forbidden payload in raw body
+	// forbidden payload in raw body → 400, and the envelope must not echo
+	// the payload content (P2-2: real assertion replaces dead code)
 	forbidden := append(resolveBody()[:len(resolveBody())-1], []byte(`,"task_ref":"inject-prompt-here"}`)...)
-	_ = forbidden
+	respF := post("idem-x3", forbidden)
+	if respF.StatusCode != http.StatusBadRequest {
+		t.Fatalf("forbidden payload = %d, want 400", respF.StatusCode)
+	}
+	var envelopeF struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Details []struct {
+				ReasonCodes []string `json:"reason_codes"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	_ = json.NewDecoder(respF.Body).Decode(&envelopeF)
+	if envelopeF.Error.Code != "INVALID_REQUIREMENT" {
+		t.Fatalf("forbidden payload code = %s", envelopeF.Error.Code)
+	}
+	if bytes.Contains([]byte(envelopeF.Error.Message), []byte("inject-prompt-here")) {
+		t.Fatal("error message echoed the forbidden payload content")
+	}
 	// oversized body (256 KiB + 1)
 	huge := make([]byte, 256*1024+16)
 	copy(huge, []byte(`{"contract_version":"1.0","task_ref":"`))

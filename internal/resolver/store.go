@@ -77,9 +77,18 @@ func (s Store) CreatePlan(ctx context.Context, plan *Plan) (bool, *Plan, error) 
 		plan.RequestDigest, plan.IdempotencyKey, plan.PolicySetID, plan.PolicyVersion,
 		plan.TraceID, plan.CreatedAt, plan.ExpiresAt)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if c, ok := constraintOf(err); ok {
 			// concurrent same-key commit: the tx is ABORTED (25P02) —
-			// roll it back before re-reading on the same pooled conn
+			// roll it back before re-reading on the same pooled conn.
+			// Only the (caller_ref, idempotency_key) constraint is an
+			// idempotency replay; a PK hit (plan-ID collision) is a
+			// distinct failure the caller must retry with a new request
+			// (review P3-4).
+			if c != "resource_plan_caller_ref_idempotency_key_key" {
+				_ = tx.Rollback(ctx)
+				return false, nil, resErr(CodeResolverUnavailable, 500,
+					"plan id collision; caller must retry with a new request")
+			}
 			_ = tx.Rollback(ctx)
 			existing, ok, qerr := s.byKey(ctx, conn, plan.CallerRef, plan.IdempotencyKey)
 			if qerr != nil {
@@ -103,11 +112,12 @@ func (s Store) CreatePlan(ctx context.Context, plan *Plan) (bool, *Plan, error) 
 		_, err = tx.Exec(ctx, `
 			INSERT INTO resolver.resource_plan_item
 				(plan_id, requirement_id, capability_key, major_version, capability_revision,
-				 binding_key, binding_revision, provider_key, snapshot_version, profile_or_action, reason_codes)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+				 binding_key, binding_revision, provider_key, snapshot_version,
+				 contract_version, profile_or_action, reason_codes)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 			plan.ID, it.RequirementID, it.CapabilityKey, it.MajorVersion, it.CapabilityRevision,
 			it.BindingKey, it.BindingRevision, it.ProviderKey, it.SnapshotVersion,
-			it.ProfileOrAction, reasons)
+			it.ContractVersion, it.ProfileOrAction, reasons)
 		if err != nil {
 			return false, nil, err
 		}
@@ -224,7 +234,7 @@ func (s Store) items(ctx context.Context, conn *pgxpool.Conn, planID string) ([]
 	rows, err := conn.Query(ctx, `
 		SELECT requirement_id, capability_key, major_version, capability_revision,
 		       binding_key, binding_revision, provider_key, snapshot_version,
-		       profile_or_action, reason_codes
+		       contract_version, profile_or_action, reason_codes
 		FROM resolver.resource_plan_item
 		WHERE plan_id = $1
 		ORDER BY requirement_id`, planID)
@@ -238,7 +248,7 @@ func (s Store) items(ctx context.Context, conn *pgxpool.Conn, planID string) ([]
 		var reasons []byte
 		if err := rows.Scan(&it.RequirementID, &it.CapabilityKey, &it.MajorVersion,
 			&it.CapabilityRevision, &it.BindingKey, &it.BindingRevision, &it.ProviderKey,
-			&it.SnapshotVersion, &it.ProfileOrAction, &reasons); err != nil {
+			&it.SnapshotVersion, &it.ContractVersion, &it.ProfileOrAction, &reasons); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(reasons, &it.ReasonCodes); err != nil {
@@ -249,7 +259,16 @@ func (s Store) items(ctx context.Context, conn *pgxpool.Conn, planID string) ([]
 	return out, rows.Err()
 }
 
-func isUniqueViolation(err error) bool {
+// constraintOf extracts the constraint name of a unique-violation (23505).
+func constraintOf(err error) (string, bool) {
 	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return pgErr.ConstraintName, true
+	}
+	return "", false
+}
+
+func isUniqueViolation(err error) bool {
+	_, ok := constraintOf(err)
+	return ok
 }

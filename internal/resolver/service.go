@@ -1,10 +1,14 @@
 package resolver
 
 // Resolve service (I09): deterministic pipeline with the FIXED error
-// routing order from the issue 核心验收逻辑:
-//
-//	Schema 校验 → 禁止字段 → Capability 查找 → Policy 过滤（携带 policy
-//	revision）→ Binding 消歧 → Snapshot 有效性 → 候选过滤
+// routing order from the issue 核心验收逻辑 (review R1 P3-1: the doc
+// previously claimed Capability→Policy; the code runs Policy→Capability,
+// which matches the issue's literal order — Schema 校验 → 禁止字段 →
+// Policy 过滤（携带 policy revision）→ Capability 查找 → Binding 消歧 →
+// Snapshot 有效性 → 候选过滤). The HTTP boundary additionally scans the
+// raw body for forbidden fields before JSON decode (schema); both steps
+// share the INVALID_REQUIREMENT code so the order is externally
+// unobservable (disclosed in evidence/i09).
 //
 // first hit wins, exactly one reason code per rejection. Determinism: every
 // choice is ordered (priority, binding_key) and the fingerprint pins the
@@ -239,6 +243,7 @@ func (s *Service) Resolve(ctx context.Context, req *Request, meta CallerMeta, id
 			ProviderType:       snap.ProviderType,
 			EndpointRef:        snap.EndpointRef,
 			SnapshotVersion:    snap.SnapshotVersion,
+			ContractVersion:    snap.ContractVersion,
 			ProfileOrAction:    top.Profile,
 			ReasonCodes:        reasons,
 		})

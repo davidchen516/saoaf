@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS resolver.resource_plan_item (
   provider_key        TEXT        NOT NULL,
   snapshot_version    INT         NOT NULL CHECK (snapshot_version >= 1),
   profile_or_action   TEXT        NOT NULL,
+  contract_version    TEXT        NOT NULL DEFAULT '',
   reason_codes        JSONB       NOT NULL,
   UNIQUE (plan_id, requirement_id)
 );

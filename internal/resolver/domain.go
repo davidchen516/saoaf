@@ -382,6 +382,7 @@ type PlanItem struct {
 	ProviderType       string   `json:"provider_type"`
 	EndpointRef        string   `json:"endpoint_ref"`
 	SnapshotVersion    int      `json:"snapshot_version"`
+	ContractVersion    string   `json:"contract_version"`
 	ProfileOrAction    string   `json:"profile_or_action"`
 	ReasonCodes        []string `json:"reason_codes"`
 }

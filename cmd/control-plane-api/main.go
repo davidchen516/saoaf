@@ -118,6 +118,13 @@ func resolverConfigFromEnv() *resolver.ResolverMountConfig {
 		}
 	}
 	cache := resolver.NewSnapshotCache(resolver.NewRegistrySnapshotLoader(pool), 30*time.Second)
+	// startup warmup (review P2-1): readiness requires ≥1 loaded snapshot;
+	// preloading here keeps a fresh instance ready before first traffic
+	if n, err := cache.WarmupActive(context.Background(), resolver.ActiveSnapshotIDs(pool)); err != nil {
+		// warmup failure is NOT fatal: readiness reflects it (Loaded()==0)
+		// and traffic-driven loads can still warm the cache
+		_, _ = n, err
+	}
 	svc := &resolver.Service{
 		Plans:       &resolver.Store{Pool: pool},
 		Cache:       cache,

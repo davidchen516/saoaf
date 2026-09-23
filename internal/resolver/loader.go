@@ -17,6 +17,34 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// ActiveSnapshotIDs lists every snapshot currently pointed at by an
+// active pointer with both snapshot and provider PUBLISHED (startup
+// warmup input).
+func ActiveSnapshotIDs(pool *pgxpool.Pool) func(ctx context.Context) ([]int64, error) {
+	return func(ctx context.Context) ([]int64, error) {
+		rows, err := pool.Query(ctx, `
+			SELECT pap.snapshot_id
+			FROM registry.provider_active_pointer pap
+			JOIN registry.provider_snapshot ps ON ps.id = pap.snapshot_id
+			     AND ps.state = 'PUBLISHED'
+			JOIN registry.resource_provider rp ON rp.id = ps.provider_id
+			     AND rp.state = 'PUBLISHED'`)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var ids []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				return nil, err
+			}
+			ids = append(ids, id)
+		}
+		return ids, rows.Err()
+	}
+}
+
 // NewRegistrySnapshotLoader returns a SnapshotLoader over the registry
 // tables (pooled: the resolver's QPS budget forbids per-call connects).
 func NewRegistrySnapshotLoader(pool *pgxpool.Pool) SnapshotLoader {
