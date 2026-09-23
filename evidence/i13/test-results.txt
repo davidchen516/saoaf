@@ -1,0 +1,6 @@
+# I13 metrics 全套（6 项 PASS，真实 PG 18.6，-race）
+# TestReproducibilityDiffZero（固定语料 diff=0 + 三元组 + 输出确定性序）/ TestSemanticClassification（五类边界，未知≠0）
+# TestRecomputeIdempotency（重算×3 零重复行+零重复告警）/ TestConcurrentAggregation（4 worker 幂等合并）
+# TestFormulaRollbackNoHistoryRewrite（v1/v2 并存历史不改写 + 回滚后 Latest 服务 v1）/ TestQueryDrilldownTriple
+
+# 全仓 -race：20/20 包 ok（新增 internal/metrics）；migration v10；BOUNDARY 25 包 PASS
