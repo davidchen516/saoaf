@@ -69,9 +69,11 @@ paths:
             X-Model-Route-Decision-ID:
               required: true
               schema: {type: string}
+              example: mrd-mock-success
             X-Resource-Plan-ID:
               required: true
               schema: {type: string}
+              example: plan-mock-001
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ChatResponse'}
