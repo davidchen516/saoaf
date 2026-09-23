@@ -294,6 +294,19 @@ func TestDBSuspendResumeRetire(t *testing.T) {
 		if crCount < 1 {
 			t.Fatal("no change records linked for binding publishes")
 		}
+		// I10 半提交=0 协变断言：发布必留同事务 outbox 行。删除 Publish 中的
+		// outbox insert（「只提交域状态」负向实现）会在此变红（红运行见
+		// evidence/i10/README.md）。
+		var outboxCount int
+		if err := conn.QueryRow(ctx,
+			`SELECT count(*) FROM saoaf.outbox_event
+			 WHERE aggregate_kind = 'binding' AND aggregate_id = 'bind-lc'
+			   AND event_id = 'binding:bind-lc:2'`).Scan(&outboxCount); err != nil {
+			t.Fatal(err)
+		}
+		if outboxCount != 1 {
+			t.Fatalf("outbox rows for the publish = %d, want 1 (half-commit guard)", outboxCount)
+		}
 		// R2 N-P3.4：retire 事件 topic 显式断言
 		var evRetired int
 		if err := conn.QueryRow(ctx,
@@ -1166,6 +1179,74 @@ func TestDBCreateDeprecateImpactQuery(t *testing.T) {
 func isCheckViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23514"
+}
+
+// —— I10 GWT#8：背压超阈值阻止大批量管理发布；resolve 不受影响 ——
+func TestDBBackpressureGate(t *testing.T) {
+	withDBB(t, func(db string) {
+		conn := mustConnB(t, db)
+		ctx := context.Background()
+		seedBinding(t, conn, "bind-bp")
+		store := Store{DSN: db, MaxBacklog: 3}
+
+		// prime: publish succeeds with an empty backlog
+		b := &Binding{CapabilityID: 1, ProviderID: 1, SnapshotID: 1, Profile: "p1"}
+		if err := store.Publish(ctx, PublishReq{
+			BindingKey: "bind-bp", Revision: 1,
+			Scope:    Scope{TenantRefs: []string{"tenant-bp"}, Regions: []string{"cn-east"}},
+			Priority: 100, Environment: "production",
+			ApprovalRef: "appr:bp", ChangeReason: "bp test", TenantRef: "t",
+			Actor: "user:admin", TraceID: "trace-test",
+		}, b); err != nil {
+			t.Fatalf("publish under threshold: %v", err)
+		}
+
+		// flood the outbox past the threshold (simulates a stalled bus)
+		var crID int64
+		if err := conn.QueryRow(ctx, `
+			INSERT INTO saoaf.change_record (tenant_ref, actor, trace_id, entity_kind, entity_id, operation)
+			VALUES ('t', 'x', 'x', 'synthetic', 'synthetic', 'SYNTH')
+			RETURNING id`).Scan(&crID); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 5; i++ {
+			if _, err := conn.Exec(ctx, `
+				INSERT INTO saoaf.outbox_event
+					(topic, payload, change_record_id, event_id, aggregate_kind, aggregate_id, aggregate_revision)
+				VALUES ('synthetic.flood', '{}', $1, $2, 'synthetic', $3, 1)`,
+				crID, fmt.Sprintf("flood-%d", i), fmt.Sprintf("s%d", i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// management publish is blocked fail-closed
+		var rev int
+		if err := conn.QueryRow(ctx, `
+			SELECT revision FROM registry.capability_binding
+			WHERE binding_key = 'bind-bp' AND is_active`).Scan(&rev); err != nil {
+			t.Fatal(err)
+		}
+		err := store.Publish(ctx, PublishReq{
+			BindingKey: "bind-bp", Revision: rev,
+			Scope:    Scope{TenantRefs: []string{"tenant-bp"}, Regions: []string{"cn-east"}},
+			Priority: 200, Environment: "production",
+			ApprovalRef: "appr:bp2", ChangeReason: "blocked", TenantRef: "t",
+			Actor: "user:admin", TraceID: "trace-test",
+		}, b)
+		if !isErr(err, ErrBacklogBlocked) {
+			t.Fatalf("over-threshold publish must be blocked, got %v", err)
+		}
+		// 已有 Plan 不受影响：既有 active revision 未被破坏
+		var state string
+		if err := conn.QueryRow(ctx, `
+			SELECT state FROM registry.capability_binding
+			WHERE binding_key = 'bind-bp' AND is_active`).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		if state != "PUBLISHED" {
+			t.Fatalf("existing active revision damaged: %s", state)
+		}
+	})
 }
 
 func isErr(err, target error) bool {

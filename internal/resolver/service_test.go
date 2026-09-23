@@ -521,6 +521,39 @@ func TestDBResolve100ConcurrentOnePlan(t *testing.T) {
 	})
 }
 
+// I10：Resolve 同事务写 plan 审计 + plan.resolved outbox 事件（半提交=0）。
+func TestDBResolveEmitsPlanEvent(t *testing.T) {
+	withDBR(t, func(db string) {
+		ids := seedFullStack(t, db)
+		seedActiveBinding(t, db, ids, "bind-ev", allScope(), 100)
+		svc := newService(db)
+		plan, _, err := svc.Resolve(context.Background(), resolveReq(), callerMeta(), "idem-plan-ev")
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn := mustConnR(t, db)
+		var events, audits int
+		if err := conn.QueryRow(context.Background(), `
+			SELECT count(*) FROM saoaf.outbox_event
+			WHERE topic = 'plan.resolved' AND aggregate_id = $1
+			  AND event_id = $2`, plan.ID, "plan:"+plan.ID).Scan(&events); err != nil {
+			t.Fatal(err)
+		}
+		if events != 1 {
+			t.Fatalf("plan.resolved outbox rows = %d, want 1 (same-tx, 半提交=0)", events)
+		}
+		if err := conn.QueryRow(context.Background(), `
+			SELECT count(*) FROM saoaf.change_record
+			WHERE entity_kind = 'plan' AND entity_id = $1 AND operation = 'RESOLVE'`,
+			plan.ID).Scan(&audits); err != nil {
+			t.Fatal(err)
+		}
+		if audits != 1 {
+			t.Fatalf("plan RESOLVE audit rows = %d, want 1", audits)
+		}
+	})
+}
+
 // TTL：默认 300s；options 可缩短；plan 过期后 Get 返回 EXPIRED 前需 sweep。
 func TestDBResolveTTL(t *testing.T) {
 	withDBR(t, func(db string) {

@@ -1,0 +1,6 @@
+=== RUN   TestDBSuspendResumeRetire
+    store_test.go:308: outbox rows for the publish = 0, want 1 (half-commit guard)
+--- FAIL: TestDBSuspendResumeRetire (0.31s)
+FAIL
+FAIL	github.com/davidchen516/saoaf/internal/binding	0.513s
+FAIL

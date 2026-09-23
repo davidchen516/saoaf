@@ -145,7 +145,7 @@ func TestDBPlan100ConcurrentSameKey(t *testing.T) {
 			go func(n int) {
 				defer wg.Done()
 				plan := &Plan{
-					ID: fmt.Sprintf("plan-%d", n), CallerRef: "caller-c", TaskRef: "task-c",
+					ID: fmt.Sprintf("plan-%d", n), CallerRef: "caller-c", TenantRef: "tenant-c", TaskRef: "task-c",
 					Fingerprint:    "sha256:" + h64("fp"),
 					RequestDigest:  "sha256:" + h64("same-body"),
 					IdempotencyKey: "idem-c",
@@ -189,7 +189,7 @@ func TestDBPlanConcurrentDifferentBodies(t *testing.T) {
 		store := newStoreR(t, db)
 		mk := func(id, digest string) *Plan {
 			return &Plan{
-				ID: id, CallerRef: "caller-d", TaskRef: "task-d",
+				ID: id, CallerRef: "caller-d", TenantRef: "tenant-d", TaskRef: "task-d",
 				Fingerprint: "sha256:" + h64(digest), RequestDigest: "sha256:" + h64(digest),
 				IdempotencyKey: "idem-d",
 				CreatedAt:      "2026-09-23T00:00:00Z", ExpiresAt: "2026-09-23T00:05:00Z",

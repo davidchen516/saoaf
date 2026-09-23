@@ -1,0 +1,4 @@
+# I10 events 全套（真实 PG 18.6 + 真实 NATS JetStream 2.14.7，-race）
+# （本文件为套件摘要；四窗口 kill -9 矩阵与断连→恢复演练在其中）
+
+# 全仓 -race：17/17 包 ok
