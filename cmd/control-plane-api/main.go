@@ -49,7 +49,7 @@ func main() {
 
 	// I09 runtime resolver API: mounted only when identity + database are
 	// configured; otherwise the runtime surface stays CLOSED.
-	if cfg := resolverConfigFromEnv(); cfg != nil {
+	if cfg := resolverConfigFromEnv(logger); cfg != nil {
 		resolver.MountResolver(router, cfg)
 	}
 
@@ -91,7 +91,7 @@ func main() {
 
 // resolverConfigFromEnv returns the I09 resolver wiring when identity +
 // database are configured; nil keeps the runtime surface closed.
-func resolverConfigFromEnv() *resolver.ResolverMountConfig {
+func resolverConfigFromEnv(logger *slog.Logger) *resolver.ResolverMountConfig {
 	issuer := os.Getenv("SAOAF_OIDC_ISSUER")
 	dsn := os.Getenv("SAOAF_DB_DSN")
 	if issuer == "" || dsn == "" {
@@ -123,7 +123,9 @@ func resolverConfigFromEnv() *resolver.ResolverMountConfig {
 	if n, err := cache.WarmupActive(context.Background(), resolver.ActiveSnapshotIDs(pool)); err != nil {
 		// warmup failure is NOT fatal: readiness reflects it (Loaded()==0)
 		// and traffic-driven loads can still warm the cache
-		_, _ = n, err
+		logger.Warn("resolver snapshot warmup failed", "error", err)
+	} else {
+		logger.Info("resolver snapshots warmed", "loaded", n)
 	}
 	svc := &resolver.Service{
 		Plans:       &resolver.Store{Pool: pool},

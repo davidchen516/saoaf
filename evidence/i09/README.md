@@ -25,7 +25,7 @@
 
 ## 关键设计决策（审查关注点预披露）
 
-1. **错误路由顺序固定**（issue 原文）：Schema 校验 → 禁止字段（HTTP 边界 RAW body 扫描——闭环 struct 无法携带未声明 key，扫 remarshal 值会有子串误报，同 I08 P3-2 结论）→ Capability 查找（404）→ Policy 过滤（携带 policy revision；无配置 set 时为**已披露的 pass-through**）→ Binding 消歧（409 同优先级并列）→ Snapshot 有效性（424）→ 候选过滤（422 带逐项 reason codes）。
+1. **错误路由顺序固定**（issue 原文顺序，审查 R1 P3-1/R2-P3-2 修正文档与实现一致）：Schema 校验 → 禁止字段（HTTP 边界 RAW body 扫描——闭环 struct 无法携带未声明 key，扫 remarshal 值会有子串误报，同 I08 P3-2 结论；该扫描先于 JSON decode 执行，但与 Schema 校验共用 INVALID_REQUIREMENT，外部不可观察）→ Policy 过滤（携带 policy revision；无配置 set 时为**已披露的 pass-through**）→ Capability 查找（404）→ Binding 消歧（409 同优先级并列）→ Snapshot 有效性（424）→ 候选过滤（422 带逐项 reason codes）。
 2. **消歧先于候选过滤**：按 issue 固定顺序，同优先级两个匹配 binding 即 409（即使其中之一的 profile 也不合格）——fail-loud 配置错误检测；I08 的 overlap guard 使经 API 无法造出该状态，测试用 SQL 直插构造。
 3. **Snapshot 有效性 = binding 钉住的 snapshot 仍为 provider active pointer 且未过 valid_until**：新 snapshot 发布后旧 binding 必须重发布，不静默用旧 provider 内容（确定性与新鲜度的取舍，保守方向）。
 4. **连接池化**：resolver 全路径 + policy store（可选 Pool 字段，增量改动）使用 pgxpool——100 QPS 预算下逐请求 TCP connect 不可行；100 并发幂等测试曾打爆 max_connections 证实必要。
