@@ -176,3 +176,37 @@ func Transition(from State, to State) (State, error) {
 
 // PublishableStates are the states eligible for new binding/plan usage.
 var PublishableStates = map[State]bool{StatePublished: true}
+
+// CheckForbiddenFieldsRecursive scans a nested structure for forbidden keys
+// at ANY depth (P2-1: profiles JSONB can nest forbidden fields).
+func CheckForbiddenFieldsRecursive(v any) error {
+	switch t := v.(type) {
+	case map[string]any:
+		if err := CheckForbiddenFields(t); err != nil {
+			return err
+		}
+		for _, child := range t {
+			if err := CheckForbiddenFieldsRecursive(child); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, child := range t {
+			if err := CheckForbiddenFieldsRecursive(child); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// VerifyDigest recomputes the canonical digest of a payload and compares it
+// to the expected digest (P2-2: tamper detection — the stored digest must
+// match the actual content).
+func VerifyDigest(payload string, expectedDigest string) error {
+	actual := Digest(payload)
+	if actual != expectedDigest {
+		return errV(ReasonDigestMismatch, "content digest mismatch: expected "+expectedDigest+" got "+actual)
+	}
+	return nil
+}

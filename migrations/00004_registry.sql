@@ -86,8 +86,7 @@ BEGIN
     IF NEW.endpoint_ref IS DISTINCT FROM OLD.endpoint_ref
        OR NEW.owner_ref IS DISTINCT FROM OLD.owner_ref
        OR NEW.workload_identity IS DISTINCT FROM OLD.workload_identity
-       OR NEW.provider_type IS DISTINCT FROM OLD.provider_type
-       OR NEW.revision IS DISTINCT FROM OLD.revision THEN
+       OR NEW.provider_type IS DISTINCT FROM OLD.provider_type THEN
       RAISE EXCEPTION 'published provider revision immutable' USING ERRCODE = '23514';
     END IF;
   END IF;

@@ -33,6 +33,12 @@ func (s Store) connect(ctx context.Context) (*pgx.Conn, error) {
 // the UPDATE matches expectedRevision; a concurrent writer bumping the
 // revision first makes our match fail → ErrRevisionConflict.
 func (s Store) TransitionProvider(ctx context.Context, providerKey string, expectedRevision int, from, to State) error {
+	// P1-1: the lifecycle matrix is enforced at the ONLY write path —
+	// raw SQL can still update state (admin/recovery) but the store API
+	// never allows an illegal jump (issue: 全矩阵).
+	if !ValidateTransition(from, to) {
+		return errV(ReasonInvalidTransition, string(from)+" → "+string(to))
+	}
 	conn, err := s.connect(ctx)
 	if err != nil {
 		return err
@@ -76,7 +82,11 @@ func (s Store) TransitionProvider(ctx context.Context, providerKey string, expec
 
 // SubmitSnapshot inserts a snapshot; duplicate (provider_id, version) →
 // ErrDuplicate (covers both replay and same-version-different-digest).
-func (s Store) SubmitSnapshot(ctx context.Context, snap *Snapshot) error {
+// Profiles are validated recursively for forbidden fields (P2-1).
+func (s Store) SubmitSnapshot(ctx context.Context, snap *Snapshot, profiles map[string]any) error {
+	if err := CheckForbiddenFieldsRecursive(profiles); err != nil {
+		return err
+	}
 	conn, err := s.connect(ctx)
 	if err != nil {
 		return err
@@ -126,7 +136,12 @@ func (s Store) ActivateSnapshot(ctx context.Context, snap *Snapshot, profiles ma
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	tag, err := tx.Exec(ctx, `
+	// For first-time activation: transition DRAFT/VALIDATED → PUBLISHED.
+	// For rollback: the snapshot is ALREADY PUBLISHED — the pointer just
+	// moves back to it (issue Rollback: 切换 active pointer 到上一已发布
+	// revision). The UPDATE is a no-op when already PUBLISHED (0 rows
+	// affected is legal for the rollback path).
+	_, err = tx.Exec(ctx, `
 		UPDATE registry.provider_snapshot
 		SET state = 'PUBLISHED'
 		WHERE provider_id = $1 AND snapshot_version = $2 AND state IN ('DRAFT','VALIDATED')`,
@@ -134,15 +149,18 @@ func (s Store) ActivateSnapshot(ctx context.Context, snap *Snapshot, profiles ma
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return errV(ReasonInvalidTransition, "snapshot not in activatable state")
-	}
 	var snapID int64
+	var snapState string
 	if err := tx.QueryRow(ctx, `
-		SELECT id FROM registry.provider_snapshot
+		SELECT id, state FROM registry.provider_snapshot
 		WHERE provider_id = $1 AND snapshot_version = $2`,
-		snap.ProviderID, snap.SnapshotVersion).Scan(&snapID); err != nil {
+		snap.ProviderID, snap.SnapshotVersion).Scan(&snapID, &snapState); err != nil {
 		return err
+	}
+	// P2-4: the pointer must point to a PUBLISHED snapshot — never DRAFT
+	// or SUSPENDED (issue invariant: active pointer 指向 PUBLISHED revision)
+	if snapState != "PUBLISHED" {
+		return errV(ReasonInvalidTransition, "cannot point active pointer at state "+snapState)
 	}
 	// upsert active pointer (exactly one per provider)
 	if _, err := tx.Exec(ctx, `

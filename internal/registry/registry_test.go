@@ -235,20 +235,20 @@ func TestDBSnapshotOrderAndDuplicate(t *testing.T) {
 				GeneratedAt:      now.Add(-time.Hour), ValidUntil: now.Add(24 * time.Hour)}
 		}
 		// v1 提交
-		if err := store.SubmitSnapshot(ctx, mk(1, Digest("v1"))); err != nil {
+		if err := store.SubmitSnapshot(ctx, mk(1, Digest("v1")), map[string]any{}); err != nil {
 			t.Fatalf("v1: %v", err)
 		}
 		// 乱序：v0 ≤ max(1) → out of order
-		if err := store.SubmitSnapshot(ctx, mk(0, Digest("x"))); err == nil {
+		if err := store.SubmitSnapshot(ctx, mk(0, Digest("x")), map[string]any{}); err == nil {
 			t.Fatal("out-of-order accepted")
 		}
 		// 同版本不同 digest → 明确拒绝（乱序或唯一冲突均覆盖语义：
 		// 同版本不可能再插入）
-		if err := store.SubmitSnapshot(ctx, mk(1, Digest("different"))); err == nil {
+		if err := store.SubmitSnapshot(ctx, mk(1, Digest("different")), map[string]any{}); err == nil {
 			t.Fatal("same-version-different-digest accepted")
 		}
 		// 同版本同 digest 重放 → 同样拒绝（幂等冲突信号）
-		if err := store.SubmitSnapshot(ctx, mk(1, Digest("v1"))); err == nil {
+		if err := store.SubmitSnapshot(ctx, mk(1, Digest("v1")), map[string]any{}); err == nil {
 			t.Fatal("duplicate replay accepted without conflict signal")
 		}
 		// 唯一约束直接验证（绕过乱序前置检查）：直接 INSERT 同 (provider, version)
@@ -338,10 +338,10 @@ func TestDBActivePointerSwitch(t *testing.T) {
 				WorkloadIdentity: "spiffe://saoaf.test/ns/default/sa/mmr",
 				GeneratedAt:      now.Add(-time.Hour), ValidUntil: now.Add(24 * time.Hour)}
 		}
-		if err := store.SubmitSnapshot(ctx, mk(1)); err != nil {
+		if err := store.SubmitSnapshot(ctx, mk(1), map[string]any{}); err != nil {
 			t.Fatal(err)
 		}
-		if err := store.SubmitSnapshot(ctx, mk(2)); err != nil {
+		if err := store.SubmitSnapshot(ctx, mk(2), map[string]any{}); err != nil {
 			t.Fatal(err)
 		}
 		// activate v1
@@ -368,6 +368,173 @@ func TestDBActivePointerSwitch(t *testing.T) {
 		}
 		if n != 1 {
 			t.Fatalf("pointer rows = %d, want 1", n)
+		}
+	})
+}
+
+// —— R1 P1 回归：经 store API 走完 DRAFT→…→RETIRED 全链（不再绕 raw SQL）——
+func TestFullLifecycleViaStoreAPI(t *testing.T) {
+	withDBR(t, func(db string) {
+		conn := mustConnR(t, db)
+		ctx := context.Background()
+		seedProvider(t, conn, "prov-full")
+		store := Store{DSN: db}
+		rev := 1
+
+		// Seed creates VALIDATED at revision 1.
+		// VALIDATED → PUBLISHED (rev 1→2)
+		if err := store.TransitionProvider(ctx, "prov-full", rev, StateValidated, StatePublished); err != nil {
+			t.Fatalf("validated→published: %v", err)
+		}
+		rev++
+		// PUBLISHED → SUSPENDED (rev 2→3) — trigger must NOT reject (revision is mutable)
+		if err := store.TransitionProvider(ctx, "prov-full", rev, StatePublished, StateSuspended); err != nil {
+			t.Fatalf("published→suspended: %v (P1-2: trigger rejecting legal transition)", err)
+		}
+		rev++
+		// SUSPENDED → PUBLISHED resume (rev 4→5)
+		if err := store.TransitionProvider(ctx, "prov-full", rev, StateSuspended, StatePublished); err != nil {
+			t.Fatalf("suspended→published resume: %v", err)
+		}
+		rev++
+		// PUBLISHED → DEPRECATED (rev 5→6)
+		if err := store.TransitionProvider(ctx, "prov-full", rev, StatePublished, StateDeprecated); err != nil {
+			t.Fatalf("published→deprecated: %v", err)
+		}
+		rev++
+		// DEPRECATED → RETIRED (rev 6→7)
+		if err := store.TransitionProvider(ctx, "prov-full", rev, StateDeprecated, StateRetired); err != nil {
+			t.Fatalf("deprecated→retired: %v", err)
+		}
+	})
+
+	// 非法跳转经 store API 拒绝（P1-1: matrix wired at the only write path）
+	withDBR(t, func(db string) {
+		conn := mustConnR(t, db)
+		ctx := context.Background()
+		seedProvider(t, conn, "prov-bad")
+		store := Store{DSN: db}
+		// DRAFT → PUBLISHED (skip VALIDATED) → rejected
+		if err := store.TransitionProvider(ctx, "prov-bad", 1, StateDraft, StatePublished); err == nil {
+			t.Fatal("DRAFT→PUBLISHED skip accepted (P1-1)")
+		}
+		// DRAFT → RETIRED → rejected
+		if err := store.TransitionProvider(ctx, "prov-bad", 1, StateDraft, StateRetired); err == nil {
+			t.Fatal("DRAFT→RETIRED accepted")
+		}
+		// state unchanged
+		var state string
+		if err := conn.QueryRow(ctx,
+			`SELECT state FROM registry.resource_provider WHERE provider_key = 'prov-bad'`).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		if state != "VALIDATED" {
+			t.Fatalf("state drifted after rejected transitions: %s", state)
+		}
+	})
+}
+
+// —— R1 P1-3 回归：active pointer 回滚到已发布 snapshot ——
+func TestActivePointerRollback(t *testing.T) {
+	withDBR(t, func(db string) {
+		conn := mustConnR(t, db)
+		ctx := context.Background()
+		pid := seedProvider(t, conn, "prov-rb")
+		store := Store{DSN: db}
+		now := time.Now()
+		mk := func(ver int) *Snapshot {
+			return &Snapshot{ProviderID: pid, SnapshotVersion: ver,
+				ContractVersion: "2026.09", Digest: Digest(fmt.Sprintf("v%d", ver)), Signature: "sig",
+				WorkloadIdentity: "spiffe://saoaf.test/ns/default/sa/mmr",
+				GeneratedAt:      now.Add(-time.Hour), ValidUntil: now.Add(24 * time.Hour)}
+		}
+		for _, v := range []int{1, 2} {
+			if err := store.SubmitSnapshot(ctx, mk(v), map[string]any{}); err != nil {
+				t.Fatalf("submit v%d: %v", v, err)
+			}
+			if err := store.ActivateSnapshot(ctx, mk(v), map[string]any{}, "", "", func() time.Time { return now }); err != nil {
+				t.Fatalf("activate v%d: %v", v, err)
+			}
+		}
+		// rollback: pointer back to v1 (P1-3 — must succeed)
+		if err := store.ActivateSnapshot(ctx, mk(1), map[string]any{}, "", "", func() time.Time { return now }); err != nil {
+			t.Fatalf("rollback to v1 (P1-3): %v", err)
+		}
+		as, err := store.ActiveSnapshot(ctx, pid)
+		if err != nil || as.SnapshotVersion != 1 {
+			t.Fatalf("active after rollback = %+v err=%v", as, err)
+		}
+		// v2 still PUBLISHED (not demoted)
+		var v2State string
+		if err := conn.QueryRow(ctx,
+			`SELECT state FROM registry.provider_snapshot WHERE provider_id = $1 AND snapshot_version = 2`,
+			pid).Scan(&v2State); err != nil {
+			t.Fatal(err)
+		}
+		if v2State != "PUBLISHED" {
+			t.Fatalf("v2 state after rollback = %s (must remain PUBLISHED)", v2State)
+		}
+	})
+}
+
+// —— R1 P2-1 回归：profiles 嵌套禁止字段 ——
+func TestForbiddenFieldsRecursive(t *testing.T) {
+	nested := map[string]any{
+		"capabilities": map[string]any{
+			"profiles": []any{
+				map[string]any{"profile_id": "ok"},
+			},
+		},
+	}
+	if err := CheckForbiddenFieldsRecursive(nested); err != nil {
+		t.Fatalf("legitimate nested rejected: %v", err)
+	}
+	bad := map[string]any{
+		"capabilities": map[string]any{
+			"profiles": []any{
+				map[string]any{"profile_id": "ok", "price": 99},
+			},
+		},
+	}
+	if err := CheckForbiddenFieldsRecursive(bad); err == nil {
+		t.Fatal("nested forbidden field accepted")
+	}
+}
+
+// —— R1 P2-2 回归：digest 内容比对 ——
+func TestVerifyDigest(t *testing.T) {
+	payload := `{"profiles": [{"profile_id": "reasoning-high"}]}`
+	d := Digest(payload)
+	if err := VerifyDigest(payload, d); err != nil {
+		t.Fatalf("correct digest rejected: %v", err)
+	}
+	if err := VerifyDigest(payload+"tampered", d); err == nil {
+		t.Fatal("tampered payload accepted")
+	}
+}
+
+// —— R1 P2-1 回归：SubmitSnapshot 拒绝含禁止字段的 profiles ——
+func TestDBSubmitSnapshotForbiddenProfiles(t *testing.T) {
+	withDBR(t, func(db string) {
+		conn := mustConnR(t, db)
+		ctx := context.Background()
+		pid := seedProvider(t, conn, "prov-fp")
+		store := Store{DSN: db}
+		now := time.Now()
+		snap := &Snapshot{ProviderID: pid, SnapshotVersion: 1,
+			ContractVersion: "2026.09", Digest: Digest("x"), Signature: "sig",
+			WorkloadIdentity: "spiffe://saoaf.test/ns/default/sa/mmr",
+			GeneratedAt:      now.Add(-time.Hour), ValidUntil: now.Add(24 * time.Hour)}
+		badProfiles := map[string]any{
+			"nested": map[string]any{"weight": 1.5},
+		}
+		if err := store.SubmitSnapshot(ctx, snap, badProfiles); err == nil {
+			t.Fatal("forbidden nested profile accepted at submit")
+		}
+		// clean profiles OK
+		goodProfiles := map[string]any{"profile_id": "p1"}
+		if err := store.SubmitSnapshot(ctx, snap, goodProfiles); err != nil {
+			t.Fatalf("clean profile rejected: %v", err)
 		}
 	})
 }
