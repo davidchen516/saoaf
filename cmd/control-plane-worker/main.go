@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/davidchen516/saoaf/internal/events"
+	"github.com/davidchen516/saoaf/internal/evidence"
 	"github.com/davidchen516/saoaf/internal/platform/httpapi"
 	"github.com/davidchen516/saoaf/internal/platform/worker"
 )
@@ -39,6 +40,9 @@ func main() {
 	// transport are configured; otherwise the skeleton tick keeps the
 	// process alive (fail-closed wiring).
 	var outbox *events.OutboxWorker
+	// I12 evidence consumer (optional, same pool; declared here so the
+	// admin router below can expose its metrics)
+	var evidenceConsumer *evidence.Consumer
 	dsn := os.Getenv("SAOAF_DB_DSN")
 	natsURL := os.Getenv("SAOAF_NATS_URL")
 	if dsn == "" || natsURL == "" {
@@ -71,6 +75,26 @@ func main() {
 				logger.Error("outbox worker exited", "error", err)
 			}
 		}()
+
+		// I12 evidence consumer: same pool, own checkpoint; disabled unless
+		// explicitly enabled (review R1 P2-2 wiring). The /metrics/evidence
+		// route lands on the admin router once it exists (declared after
+		// this block).
+		if envInt("SAOAF_EVIDENCE_CONSUMER", 0) == 1 {
+			ix := evidence.Index{Pool: pool}
+			evidenceConsumer = &evidence.Consumer{
+				Index: ix, ConsumerID: envOr("SAOAF_EVIDENCE_CONSUMER_ID", "evidence-1"),
+				BatchSize: int(envInt("SAOAF_EVIDENCE_BATCH", 100)),
+				Interval:  time.Duration(envInt("SAOAF_EVIDENCE_INTERVAL_MS", 250)) * time.Millisecond,
+				Logger:    logger,
+			}
+			go func() {
+				if err := evidenceConsumer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+					logger.Error("evidence consumer exited", "error", err)
+				}
+			}()
+			logger.Info("evidence consumer enabled", "consumer", evidenceConsumer.ConsumerID)
+		}
 	}
 
 	// Skeleton tick: superseded by the outbox worker when enabled.
@@ -89,6 +113,21 @@ func main() {
 	// (GWT#6: management actions are scope-gated; the local loopback
 	// binding is the Phase 0 boundary — I22 wires production identity).
 	admin := chi.NewRouter()
+	if evidenceConsumer != nil {
+		ix := evidenceConsumer.Index
+		admin.Get("/metrics/evidence", func(w http.ResponseWriter, r *http.Request) {
+			ctx2 := r.Context()
+			depth, derr := ix.QuarantineDepth(ctx2)
+			cp, cerr := ix.Checkpoint(ctx2, evidenceConsumer.ConsumerID)
+			if derr != nil || cerr != nil {
+				httpapi.WriteJSON(w, http.StatusInternalServerError, map[string]any{"error": "evidence metrics unavailable"})
+				return
+			}
+			httpapi.WriteJSON(w, http.StatusOK, map[string]any{
+				"quarantine_depth": depth, "checkpoint": cp,
+			})
+		})
+	}
 	admin.Get("/healthz", health.LivenessHandler)
 	admin.Get("/readyz", health.ReadinessHandler)
 	admin.Get("/metrics", func(w http.ResponseWriter, r *http.Request) {

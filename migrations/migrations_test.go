@@ -186,8 +186,8 @@ func TestApplyFromEmptyDatabase(t *testing.T) {
 	defer dropDB(t, base, dbNameFromDSN(db))
 
 	gooseRun(t, db, "up")
-	if v := queryVersion(t, db); v != 8 {
-		t.Fatalf("version = %d, want 8", v)
+	if v := queryVersion(t, db); v != 9 {
+		t.Fatalf("version = %d, want 9", v)
 	}
 
 	ctx := context.Background()
@@ -226,8 +226,8 @@ func TestUpgradePathFromPreviousRelease(t *testing.T) {
 
 	// 升级到最新（expand：纯加法——00002/00003）
 	gooseRun(t, db, "up")
-	if v := queryVersion(t, db); v != 8 {
-		t.Fatalf("latest version = %d, want 8", v)
+	if v := queryVersion(t, db); v != 9 {
+		t.Fatalf("latest version = %d, want 9", v)
 	}
 
 	// 旧应用（不认识 published_seq）继续工作；expand 兼容性证明
@@ -249,8 +249,8 @@ func TestMigrationIdempotentRerun(t *testing.T) {
 
 	gooseRun(t, db, "up")
 	gooseRun(t, db, "up") // no-op
-	if v := queryVersion(t, db); v != 8 {
-		t.Fatalf("version after rerun = %d, want 8", v)
+	if v := queryVersion(t, db); v != 9 {
+		t.Fatalf("version after rerun = %d, want 9", v)
 	}
 
 	ctx := context.Background()
@@ -320,8 +320,8 @@ func TestConcurrentRunnersSingleLock(t *testing.T) {
 	if succeeded != 1 || locked != 1 {
 		t.Fatalf("want exactly one success and one lock-rejection, got %d/%d:\n%s\n%s", succeeded, locked, outA, outB)
 	}
-	if v := queryVersion(t, db); v != 8 {
-		t.Fatalf("version after concurrent migrators = %d, want 8", v)
+	if v := queryVersion(t, db); v != 9 {
+		t.Fatalf("version after concurrent migrators = %d, want 9", v)
 	}
 
 	// lock released after exit: a subsequent migrator run is a clean no-op
@@ -422,8 +422,8 @@ func TestInterruptedMigrationRecoversSafely(t *testing.T) {
 	// 释放锁后安全重试 → 完整收敛
 	_ = blkTx.Rollback(ctx)
 	gooseRun(t, db, "up")
-	if v := queryVersion(t, db); v != 8 {
-		t.Fatalf("version after retry = %d, want 8", v)
+	if v := queryVersion(t, db); v != 9 {
+		t.Fatalf("version after retry = %d, want 9", v)
 	}
 	if err := conn.QueryRow(ctx, `
 		SELECT EXISTS (SELECT 1 FROM information_schema.columns
@@ -802,8 +802,8 @@ ALTER TABLE saoaf.outbox_event ADD COLUMN good_col TEXT;
 	if out, err := exec.Command(bin, "-dir", tmpDir, "postgres", db, "up").CombinedOutput(); err == nil {
 		t.Fatalf("bad migration unexpectedly passed:\n%s", out)
 	}
-	if v := queryVersion(t, db); v != 8 {
-		t.Fatalf("version after failed migration = %d, want 8", v)
+	if v := queryVersion(t, db); v != 9 {
+		t.Fatalf("version after failed migration = %d, want 9", v)
 	}
 	var col bool
 	if err := admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns
@@ -845,11 +845,11 @@ func TestMigrationUpDownUpRoundTrip(t *testing.T) {
 	if out, err := tryGooseRun(db, "down"); err != nil {
 		t.Fatalf("goose down failed (Down section broken): %v\n%s", err, out)
 	}
-	if v := queryVersion(t, db); v != 7 {
-		t.Fatalf("version after down = %d, want 7", v)
+	if v := queryVersion(t, db); v != 8 {
+		t.Fatalf("version after down = %d, want 8", v)
 	}
 	gooseRun(t, db, "up")
-	if v := queryVersion(t, db); v != 8 {
-		t.Fatalf("version after up-down-up = %d, want 8", v)
+	if v := queryVersion(t, db); v != 9 {
+		t.Fatalf("version after up-down-up = %d, want 9", v)
 	}
 }
