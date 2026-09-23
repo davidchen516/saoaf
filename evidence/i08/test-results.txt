@@ -1,0 +1,39 @@
+# I08 R2（复审整改后）binding 全套，真实 PG postgres:18.6，-race
+--- PASS: TestScopeCanonicalGolden (0.00s)
+--- PASS: TestScopeOverlap (0.00s)
+--- PASS: TestTransitionMatrix (0.00s)
+--- PASS: TestPublishGate (0.00s)
+--- PASS: TestScopeForbiddenFields (0.00s)
+--- PASS: TestBindingString (0.00s)
+--- PASS: TestDB50ConcurrentPublishSingleActive (0.56s)
+--- PASS: TestDBScopeConflictBlocked (0.18s)
+--- PASS: TestDBSuspendResumeRetire (0.25s)
+--- PASS: TestDBCASRevisionConflict (0.17s)
+--- PASS: TestDBRollbackCreatesNewRevision (0.30s)
+--- PASS: TestDBPublishIdempotentReplay (0.34s)
+--- PASS: TestDBPartialOverlapBlocked (0.23s)
+--- PASS: TestDBConcurrentOverlapSingleWinner (0.34s)
+--- PASS: TestDBResumeOverlapRejected (0.22s)
+--- PASS: TestDBConcurrentResumeVsPublishSingleWinner (0.29s)
+--- PASS: TestDBTerminalStatesBlockPublish (0.44s)
+--- PASS: TestDBTransitionAuditsAndEvents (0.19s)
+--- PASS: TestDBResumeSlotConflictClassified (0.19s)
+--- PASS: TestDBHistoricalContentImmutable (0.15s)
+--- PASS: TestDBCreateDeprecateImpactQuery (0.37s)
+ok  	github.com/davidchen516/saoaf/internal/binding	5.587s
+
+# Full repo -race
+ok  	github.com/davidchen516/saoaf/internal/binding	6.098s
+ok  	github.com/davidchen516/saoaf/internal/platform/approval	1.522s
+ok  	github.com/davidchen516/saoaf/internal/platform/authn	2.623s
+ok  	github.com/davidchen516/saoaf/internal/platform/authz	2.457s
+ok  	github.com/davidchen516/saoaf/internal/platform/httpapi	2.718s
+ok  	github.com/davidchen516/saoaf/internal/platform/middleware	3.774s
+ok  	github.com/davidchen516/saoaf/internal/platform/worker	3.673s
+ok  	github.com/davidchen516/saoaf/internal/platform/workload	4.203s
+ok  	github.com/davidchen516/saoaf/internal/policy	6.462s
+ok  	github.com/davidchen516/saoaf/internal/registry	6.179s
+ok  	github.com/davidchen516/saoaf/migrations	9.163s
+ok  	github.com/davidchen516/saoaf/tools/boundarycheck	4.195s
+ok  	github.com/davidchen516/saoaf/tools/contractlint	4.272s
+ok  	github.com/davidchen516/saoaf/tools/licensecheck	3.106s
