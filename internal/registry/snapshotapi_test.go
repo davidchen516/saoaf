@@ -521,6 +521,33 @@ func TestSnapshotIngestContractMajorConfig(t *testing.T) {
 		if code := post(t, h, body); code != http.StatusOK {
 			t.Fatalf("matching major = %d", code)
 		}
+		// mismatch rejected BEFORE any write — no garbage DRAFT row
+		// (R2 review probe M adopted; P3-3 check moved ahead of submit)
+		bad := ingestBody(2, "sha256:"+fmt.Sprintf("%064d", 2))
+		bad["contract_version"] = "1999.01"
+		b, _ := json.Marshal(bad)
+		resp, err := h.client.Post(h.srv.URL+"/providers/mmr-test/snapshots", "application/json", bytes.NewReader(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("mismatched major = %d, want 400", resp.StatusCode)
+		}
+		var env struct {
+			ErrorCode string `json:"error_code"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&env)
+		if env.ErrorCode != "CONTRACT_MAJOR_REJECTED" {
+			t.Fatalf("code = %s", env.ErrorCode)
+		}
+		conn, _ := connectHelper(context.Background(), dsn)
+		var rows int
+		_ = conn.QueryRow(context.Background(),
+			`SELECT count(*) FROM registry.provider_snapshot WHERE snapshot_version = 2`).Scan(&rows)
+		if rows != 0 {
+			t.Fatalf("mismatched major left %d garbage rows (check must precede submit)", rows)
+		}
 	})
 }
 

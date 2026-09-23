@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -75,6 +76,17 @@ func tryGooseRun(dsn, sub string, args ...string) (string, error) {
 	args = append([]string{"-dir", migrationsDir(), "postgres", dsn, sub}, args...)
 	out, err := exec.Command(bin, args...).CombinedOutput()
 	return string(out), err
+}
+
+// dbNameFromDSN extracts the database name even when the DSN carries a
+// query string (filepath.Base glues "?sslmode=..." onto the name — R2
+// review out-of-PR observation: TestAppRoleCannotRunMigrations false red
+// + dropDB silently leaking test databases).
+func dbNameFromDSN(dsn string) string {
+	if u, err := url.Parse(dsn); err == nil && u.Path != "" {
+		return strings.TrimPrefix(u.Path, "/")
+	}
+	return filepath.Base(dsn)
 }
 
 func queryVersion(t *testing.T, dsn string) int64 {
@@ -171,7 +183,7 @@ func isPgCode(err error, code string) bool {
 func TestApplyFromEmptyDatabase(t *testing.T) {
 	base := dsn(t)
 	db := freshDB(t, base)
-	defer dropDB(t, base, filepath.Base(db))
+	defer dropDB(t, base, dbNameFromDSN(db))
 
 	gooseRun(t, db, "up")
 	if v := queryVersion(t, db); v != 8 {
@@ -194,7 +206,7 @@ func TestApplyFromEmptyDatabase(t *testing.T) {
 func TestUpgradePathFromPreviousRelease(t *testing.T) {
 	base := dsn(t)
 	db := freshDB(t, base)
-	defer dropDB(t, base, filepath.Base(db))
+	defer dropDB(t, base, dbNameFromDSN(db))
 
 	// v1 = 上一发布版本的库（只应用 00001）
 	gooseRun(t, db, "up-to", "1")
@@ -233,7 +245,7 @@ func TestUpgradePathFromPreviousRelease(t *testing.T) {
 func TestMigrationIdempotentRerun(t *testing.T) {
 	base := dsn(t)
 	db := freshDB(t, base)
-	defer dropDB(t, base, filepath.Base(db))
+	defer dropDB(t, base, dbNameFromDSN(db))
 
 	gooseRun(t, db, "up")
 	gooseRun(t, db, "up") // no-op
@@ -265,7 +277,7 @@ func TestMigrationIdempotentRerun(t *testing.T) {
 func TestConcurrentRunnersSingleLock(t *testing.T) {
 	base := dsn(t)
 	db := freshDB(t, base)
-	defer dropDB(t, base, filepath.Base(db))
+	defer dropDB(t, base, dbNameFromDSN(db))
 
 	// I04 review P1: run the REAL migration entry (tools/migrator, advisory
 	// lock 781927001) twice concurrently against a fresh database; exactly
@@ -356,7 +368,7 @@ func goRunAsync(t *testing.T, fn func() (string, int)) func() (string, int) {
 func TestInterruptedMigrationRecoversSafely(t *testing.T) {
 	base := dsn(t)
 	db := freshDB(t, base)
-	defer dropDB(t, base, filepath.Base(db))
+	defer dropDB(t, base, dbNameFromDSN(db))
 
 	gooseRun(t, db, "up-to", "1") // v1 就位；v2 将 ALTER outbox_event
 
@@ -430,7 +442,7 @@ func TestInterruptedMigrationRecoversSafely(t *testing.T) {
 func TestAppRoleCannotRunMigrations(t *testing.T) {
 	base := dsn(t)
 	db := freshDB(t, base)
-	defer dropDB(t, base, filepath.Base(db))
+	defer dropDB(t, base, dbNameFromDSN(db))
 
 	ctx := context.Background()
 	admin, err := pgx.Connect(ctx, db)
@@ -444,7 +456,7 @@ func TestAppRoleCannotRunMigrations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	noddlDSN := withDBName(base, filepath.Base(db))
+	noddlDSN := withDBName(base, dbNameFromDSN(db))
 	nu, _ := url.Parse(noddlDSN)
 	q := nu.Query()
 	q.Set("user", "saoaf_noddl")
@@ -464,7 +476,7 @@ func TestAppRoleCannotRunMigrations(t *testing.T) {
 	if _, err := admin.Exec(ctx, `ALTER ROLE saoaf_app PASSWORD 'app-pass'`); err != nil {
 		t.Fatal(err)
 	}
-	appDSN := withDBName(base, filepath.Base(db))
+	appDSN := withDBName(base, dbNameFromDSN(db))
 	au, _ := url.Parse(appDSN)
 	aq := au.Query()
 	aq.Set("user", "saoaf_app")
@@ -516,7 +528,7 @@ func indexOf(s, sub string) int {
 func TestConstraintEnforcement(t *testing.T) {
 	base := dsn(t)
 	db := freshDB(t, base)
-	defer dropDB(t, base, filepath.Base(db))
+	defer dropDB(t, base, dbNameFromDSN(db))
 
 	gooseRun(t, db, "up")
 	ctx := context.Background()
@@ -573,7 +585,7 @@ func TestConstraintEnforcement(t *testing.T) {
 func TestTransactionalAtomicityNoHalfCommit(t *testing.T) {
 	base := dsn(t)
 	db := freshDB(t, base)
-	defer dropDB(t, base, filepath.Base(db))
+	defer dropDB(t, base, dbNameFromDSN(db))
 
 	gooseRun(t, db, "up")
 	ctx := context.Background()
@@ -648,7 +660,7 @@ func assertCount(t *testing.T, conn *pgx.Conn, want int) {
 func TestPoolConcurrentWritesInvariant(t *testing.T) {
 	base := dsn(t)
 	db := freshDB(t, base)
-	defer dropDB(t, base, filepath.Base(db))
+	defer dropDB(t, base, dbNameFromDSN(db))
 	gooseRun(t, db, "up")
 
 	ctx := context.Background()
@@ -756,7 +768,7 @@ func TestPoolConcurrentWritesInvariant(t *testing.T) {
 func TestFailedMigrationStaysConsistent(t *testing.T) {
 	base := dsn(t)
 	db := freshDB(t, base)
-	defer dropDB(t, base, filepath.Base(db))
+	defer dropDB(t, base, dbNameFromDSN(db))
 
 	gooseRun(t, db, "up") // v2 就位
 
@@ -824,7 +836,7 @@ ALTER TABLE saoaf.outbox_event ADD COLUMN good_col TEXT;
 func TestMigrationUpDownUpRoundTrip(t *testing.T) {
 	base := dsn(t)
 	db := freshDB(t, base)
-	defer dropDB(t, base, filepath.Base(db))
+	defer dropDB(t, base, dbNameFromDSN(db))
 
 	// up → down → up
 	gooseRun(t, db, "up")

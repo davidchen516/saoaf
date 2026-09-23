@@ -222,6 +222,17 @@ func (cfg SnapshotAPIConfig) handleIngest(w http.ResponseWriter, r *http.Request
 			"status":                     p.Status,
 		}
 	}
+	// contract major is a CONFIGURED expectation (spec §3.2), checked
+	// BEFORE any write so a mismatch leaves no garbage DRAFT row
+	// occupying the version (review R2 P3-3)
+	if cfg.ExpectedContractMajor != "" &&
+		majorOf(req.ContractVersion) != cfg.ExpectedContractMajor {
+		httpapi.WriteJSON(w, http.StatusBadRequest, map[string]any{
+			"error_code": "CONTRACT_MAJOR_REJECTED",
+			"message":    "snapshot contract major not accepted by ARR (configured expectation)",
+		})
+		return
+	}
 	if verdict != IngestResumable {
 		if err := cfg.Store.SubmitSnapshot(ctx, snap, profiles); err != nil {
 			// concurrent same-version submit won the race (review R1
@@ -248,6 +259,15 @@ func (cfg SnapshotAPIConfig) handleIngest(w http.ResponseWriter, r *http.Request
 				return
 			case IngestResumable:
 				// fall through: retry activation below
+			case IngestVersionRegression:
+				// a higher version landed while we were submitting —
+				// classify honestly (review R2 P3-1: the default branch
+				// surfaced 400 instead of the 409 regression class)
+				httpapi.WriteJSON(w, http.StatusConflict, map[string]any{
+					"error_code": "SNAPSHOT_VERSION_REGRESSION",
+					"message":    "snapshot_version must be monotonic",
+				})
+				return
 			default:
 				httpapi.WriteJSON(w, http.StatusBadRequest, map[string]any{
 					"error_code": "SNAPSHOT_REJECTED", "message": err.Error(),
@@ -255,15 +275,6 @@ func (cfg SnapshotAPIConfig) handleIngest(w http.ResponseWriter, r *http.Request
 				return
 			}
 		}
-	}
-	// contract major is a CONFIGURED expectation (spec §3.2)
-	if cfg.ExpectedContractMajor != "" &&
-		majorOf(req.ContractVersion) != cfg.ExpectedContractMajor {
-		httpapi.WriteJSON(w, http.StatusBadRequest, map[string]any{
-			"error_code": "CONTRACT_MAJOR_REJECTED",
-			"message":    "snapshot contract major not accepted by ARR (configured expectation)",
-		})
-		return
 	}
 	if err := cfg.Store.ActivateSnapshot(ctx, snap, profiles,
 		cfg.ExpectedIdentity, majorOf(req.ContractVersion), nowFn); err != nil {
