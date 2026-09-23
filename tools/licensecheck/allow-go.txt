@@ -58,3 +58,17 @@ github.com/google/go-cmp
 github.com/stoewer/go-strcase
 # golang.org/x/exp — BSD-3 (cel-go transitive)
 golang.org/x/exp
+# golang.org/x/net — BSD-3 (cel-go transitive)
+golang.org/x/net
+# golang.org/x/xerrors — BSD-3 (cel-go transitive)
+golang.org/x/xerrors
+# google.golang.org/genproto/googleapis/api — Apache-2.0 (cel-go transitive)
+google.golang.org/genproto/googleapis/api
+# google.golang.org/genproto/googleapis/rpc — Apache-2.0 (cel-go transitive)
+google.golang.org/genproto/googleapis/rpc
+# google.golang.org/grpc — Apache-2.0 (cel-go transitive)
+google.golang.org/grpc
+# google.golang.org/protobuf — BSD-3 (cel-go transitive)
+google.golang.org/protobuf
+# gopkg.in/yaml.v2 — Apache-2.0 (cel-go transitive)
+gopkg.in/yaml.v2
