@@ -32,7 +32,13 @@ docker run -d --name saoaf-pitr-primary \
   -p 127.0.0.1:${PORT_PRIMARY}:5432 \
   postgres:18.6 \
   -c wal_level=replica -c archive_mode=on -c archive_command='cp %p /archive/%f' >/dev/null
-for i in $(seq 1 60); do docker exec saoaf-pitr-primary pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done
+# pg_isready must probe TCP (-h 127.0.0.1), not the default unix socket:
+# the postgres image's first-boot initdb runs a TEMPORARY server that only
+# binds the socket — a socket probe reports ready during init and lets goose
+# race the restart window (CI flake: "connection reset by peer" on 5434).
+# The temp server has listen_addresses='' so the TCP probe only succeeds
+# once the final server is really listening.
+for i in $(seq 1 60); do docker exec saoaf-pitr-primary pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1 && break; sleep 1; done
 
 echo "== 2/7 apply migrations + T0 baseline rows =="
 "$GOOSE_BIN" -dir migrations postgres "$DSN" up
@@ -96,8 +102,8 @@ docker run -d --name saoaf-pitr-recover \
   -v "$WORK/archive:/archive:ro" \
   -p 127.0.0.1:${PORT_RECOVER}:5432 \
   postgres:18.6 >/dev/null
-for i in $(seq 1 60); do docker exec saoaf-pitr-recover pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done
-if ! docker exec saoaf-pitr-recover pg_isready -U postgres >/dev/null 2>&1; then
+for i in $(seq 1 60); do docker exec saoaf-pitr-recover pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1 && break; sleep 1; done
+if ! docker exec saoaf-pitr-recover pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1; then
   echo "recovery container failed to become ready; logs:"
   docker logs saoaf-pitr-recover 2>&1 | tail -25
   echo "PITR DRILL: FAIL"
