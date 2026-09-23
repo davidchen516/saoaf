@@ -203,7 +203,11 @@ jobs:
           # of every openpgp symbol. This filter accepts ONLY that advisory
           # from the module-level scan; any other finding fails the job.
           module_scan() {
+            # set -e (GH Actions bash) would abort at the failing scan before
+            # the rc capture — soften for the capture window only
+            set +e
             out="$( cd "$1" && govulncheck -scan module 2>&1 )"; rc=$?
+            set -e
             printf '%s' "$out"
             findings="$(printf '%s' "$out" | grep -oE 'GO-[0-9]{4}-[0-9]+' | sort -u)"
             blocking="$(printf '%s' "$findings" | grep -v '^GO-2026-5932$' || true)"
