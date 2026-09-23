@@ -48,6 +48,12 @@
 - `cmd/control-plane-worker/main.go`：env 门控接线（SAOAF_DB_DSN + SAOAF_NATS_URL）+ /metrics + pause/resume 管理端点。
 - `internal/binding`：MaxBacklog 门 + 协变断言；`internal/resolver`：plan 审计 + 事件同事务。
 
+### GO-2026-5932 接受记录（审查关注点预披露）
+
+- 事实：`x/crypto`（经 nats.go→nkeys，已批准 NATS 基线的传递依赖）携带 GO-2026-5932——`x/crypto/openpgp` 包永久无人维护的通告（**Fixed in: N/A**，不存在修复版本）。
+- 证据：`govulncheck` 符号级扫描（含 shipped binaries 两枚）确认 **openpgp 的任何符号零可达**；模块级扫描（I02 红运行语义，任何受影响模块即红）对本通告将永久误报。
+- 处置：quality.yml 的模块级扫描对**且仅对** GO-2026-5932 显式接受（`ACCEPTED-WITH-EVIDENCE` 注释 + 过滤实现于 workflow 内，可审查）；binary 符号扫描与其他一切 GO-* 发现保持严格 fatal。x/crypto 版本随 go.mod（v0.57.0）。
+
 ## 已知限制（挂账）
 
 - GWT#6 HTTP 403：worker 管理端点（pause/resume）当前为进程内管理面（loopback 边界 = Phase 0）；I05 身份链接线挂 I22（生产 Identity 接入时统一挂 scope 门）。

@@ -80,3 +80,5 @@ github.com/nats-io/nats.go
 github.com/nats-io/nkeys
 # github.com/nats-io/nuid — Apache-2.0 (nats.go transitive)
 github.com/nats-io/nuid
+# golang.org/x/term — BSD-3-Clause (nats.go transitive, I10)
+golang.org/x/term
