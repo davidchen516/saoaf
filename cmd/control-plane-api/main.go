@@ -50,7 +50,7 @@ func main() {
 	// I09 runtime resolver API: mounted only when identity + database are
 	// configured; otherwise the runtime surface stays CLOSED.
 	if cfg := resolverConfigFromEnv(); cfg != nil {
-		httpapi.MountResolver(router, cfg)
+		resolver.MountResolver(router, cfg)
 	}
 
 	srv := &http.Server{
@@ -91,7 +91,7 @@ func main() {
 
 // resolverConfigFromEnv returns the I09 resolver wiring when identity +
 // database are configured; nil keeps the runtime surface closed.
-func resolverConfigFromEnv() *httpapi.ResolverMountConfig {
+func resolverConfigFromEnv() *resolver.ResolverMountConfig {
 	issuer := os.Getenv("SAOAF_OIDC_ISSUER")
 	dsn := os.Getenv("SAOAF_DB_DSN")
 	if issuer == "" || dsn == "" {
@@ -106,19 +106,23 @@ func resolverConfigFromEnv() *httpapi.ResolverMountConfig {
 		return nil
 	}
 	// optional policy filtering (issue: Policy 过滤携带 policy revision —
-	// no configured set means a documented pass-through)
+	// no configured set means a documented pass-through). ADR-0006: the
+	// resolver module cannot import the policy module; this composition
+	// root adapts one onto the other.
 	policySetID := envOr("SAOAF_RESOLVER_POLICY_SET", "")
-	var pol *policy.Store
+	var engine resolver.PolicyEngine
 	if policySetID != "" {
-		pol = &policy.Store{DSN: dsn, Pool: pool}
+		engine = policyEngine{
+			store: &policy.Store{DSN: dsn, Pool: pool},
+			eval:  policy.NewEvaluator(),
+		}
 	}
 	cache := resolver.NewSnapshotCache(resolver.NewRegistrySnapshotLoader(pool), 30*time.Second)
 	svc := &resolver.Service{
 		Plans:       &resolver.Store{Pool: pool},
 		Cache:       cache,
 		Pool:        pool,
-		Policy:      pol,
-		Eval:        policy.NewEvaluator(),
+		Policy:      engine,
 		PolicySetID: policySetID,
 		Now:         time.Now,
 		NewID:       resolver.NewPlanID,
@@ -132,10 +136,45 @@ func resolverConfigFromEnv() *httpapi.ResolverMountConfig {
 		defer cancel()
 		return pool.Ping(ctx) == nil && cache.Loaded() > 0
 	})
-	return &httpapi.ResolverMountConfig{
+	return &resolver.ResolverMountConfig{
 		Service: svc, Authn: v, Health: health,
 		RatePerSec: 100, RateBurst: 200,
 	}
+}
+
+// policyEngine adapts the policy module onto resolver.PolicyEngine
+// (the composition root is the only place allowed to see both modules).
+type policyEngine struct {
+	store *policy.Store
+	eval  *policy.Evaluator
+}
+
+func (p policyEngine) ActiveRevision(ctx context.Context, setID string) (*resolver.PolicyRevision, error) {
+	r, err := p.store.ActiveRevision(ctx, setID)
+	if errors.Is(err, policy.ErrNotFound) {
+		return nil, resolver.ErrNoActivePolicy
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &resolver.PolicyRevision{
+		SetID: r.SetID, Version: r.Version, Expression: r.Content.EligibilityCEL,
+	}, nil
+}
+
+func (p policyEngine) Evaluate(ctx context.Context, rev *resolver.PolicyRevision, in resolver.PolicyInput) (bool, string, error) {
+	pr := &policy.Revision{
+		SetID: rev.SetID, Version: rev.Version,
+		Content: policy.Content{EligibilityCEL: rev.Expression},
+	}
+	ev, reason, err := p.eval.Evaluate(ctx, pr, policy.EligibilityInput{
+		Region: in.Region, DataClass: in.DataClass,
+		Environment: in.Environment, TenantRef: in.TenantRef,
+	})
+	if err != nil {
+		return false, reason, err
+	}
+	return ev.Allow, reason, nil
 }
 
 // adminConfigFromEnv returns the I05 admin wiring when all adapter

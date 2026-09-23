@@ -41,6 +41,15 @@
 - `internal/platform/httpapi/resolver.go` + `cmd/control-plane-api/main.go`：runtime API（resolve/GET plan/health）+ 环境变量门控接线（SAOAF_OIDC_ISSUER + SAOAF_DB_DSN + 可选 SAOAF_RESOLVER_POLICY_SET）。
 - `internal/policy/store.go`：可选 pgxpool（增量，非池化路径不变）。
 
+## CI 整改（R1，PR 首轮红→修）
+
+1. **boundarycheck FAIL → 架构合规重构**（ADR-0006：模块间禁依赖）：
+   - HTTP 适配器移入 resolver 模块本体（internal/resolver/httpapi.go；internal→platform 是唯一允许方向）；httpapi 仅保留 WriteJSON/NewHealth 等平台设施。
+   - resolver 不再 import policy：resolver 定义 `PolicyEngine` 接口（PolicyRevision/PolicyInput 为 resolver 本地类型；`ErrNoActivePolicy` 显式语义），**组合根（cmd/control-plane-api）提供 policyEngine 适配器**；跨模块集成测试落 cmd（TestPolicyEngineAdapterIntegration：真实 policy store + CEL evaluator 的 deny/allow + revision 携带全链）。
+   - resolver 包内 policy 相关测试改用 fakePolicy（fake 引擎）；policy↔resolver 的行为等价性由 cmd 集成测试证明。
+2. **govulncheck GO-2026-6094（cel-go v0.26.0）**：升级 cel-go → v0.30.0（policy 沙箱操作符表全测通过）；x/exp/protobuf 传递升级。
+3. 迁移后 HTTP 测试 goose 路径层级修正。
+
 ## 已知限制（挂账）
 
 - GWT#8 的 2 倍峰值 60 分钟稳态归 #21（issue 明示）。

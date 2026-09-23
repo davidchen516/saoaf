@@ -1,8 +1,9 @@
-package httpapi
+package resolver
 
 // I09 HTTP tests: resolve/GET-plan under the real middleware chain with a
 // stub OIDC issuer, Runtime/Admin isolation (GWT#6), error envelopes, and
-// idempotent replay over the wire. Real PostgreSQL for the resolver paths.
+// idempotent replay over the wire. The adapter lives in this module
+// (ADR-0006: platform packages may not import internal modules).
 
 import (
 	"bytes"
@@ -29,8 +30,7 @@ import (
 
 	"github.com/davidchen516/saoaf/internal/platform/authn"
 	"github.com/davidchen516/saoaf/internal/platform/authz"
-	"github.com/davidchen516/saoaf/internal/policy"
-	"github.com/davidchen516/saoaf/internal/resolver"
+	"github.com/davidchen516/saoaf/internal/platform/httpapi"
 )
 
 // —— stub OIDC issuer (minimal copy of the middleware test harness) ——
@@ -85,7 +85,7 @@ func (s *stubIssuer2) token(t *testing.T, sub, scope string) string {
 
 // —— test DB (same pattern as the other packages) ——
 
-func resolverTestDB(t *testing.T) string {
+func resolverTestDBR(t *testing.T) string {
 	t.Helper()
 	base := os.Getenv("SAOAF_TEST_PG_DSN")
 	if base == "" {
@@ -110,7 +110,7 @@ func resolverTestDB(t *testing.T) string {
 		}
 	}
 	wd, _ := os.Getwd()
-	dir := filepath.Join(wd, "..", "..", "..", "migrations")
+	dir := filepath.Join(wd, "..", "..", "migrations")
 	if out, err := exec.Command(bin, "-dir", dir, "postgres", db, "up").CombinedOutput(); err != nil {
 		t.Fatalf("goose up: %v\n%s", err, out)
 	}
@@ -191,22 +191,21 @@ func newResolverHarness(t *testing.T, db string) *resolverHarness {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	svc := &resolver.Service{
-		Plans:      &resolver.Store{Pool: pool},
-		Cache:      resolver.NewSnapshotCache(resolver.NewRegistrySnapshotLoader(pool), 5*time.Second),
+	svc := &Service{
+		Plans:      &Store{Pool: pool},
+		Cache:      NewSnapshotCache(NewRegistrySnapshotLoader(pool), 5*time.Second),
 		Pool:       pool,
-		Eval:       policy.NewEvaluator(),
 		Now:        time.Now,
-		NewID:      func() string { return fmt.Sprintf("plan-%d", time.Now().UnixNano()) },
+		NewID:      NewPlanID,
 		DefaultTTL: 300 * time.Second,
 		MaxTTL:     3600 * time.Second,
 	}
 	r := chi.NewRouter()
-	MountAdmin(r, AdminConfig{
+	httpapi.MountAdmin(r, httpapi.AdminConfig{
 		Authn: v, PDP: &authz.PDPClient{}, RatePerSec: 1000, RateBurst: 1000,
 	})
 	MountResolver(r, &ResolverMountConfig{
-		Service: svc, Authn: v, Health: NewHealth(nil), RatePerSec: 1000, RateBurst: 1000,
+		Service: svc, Authn: v, Health: httpapi.NewHealth(nil), RatePerSec: 1000, RateBurst: 1000,
 	})
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
@@ -259,7 +258,7 @@ func resolveBody() []byte {
 
 // —— GWT#6：Runtime/Admin 隔离 ——
 func TestResolverAdminIsolation(t *testing.T) {
-	db := resolverTestDB(t)
+	db := resolverTestDBR(t)
 	seedResolverStack(t, db)
 	h := newResolverHarness(t, db)
 	runtimeTok := h.iss.token(t, "user:runtime", "resource.resolve resource.read")
@@ -280,7 +279,7 @@ func TestResolverAdminIsolation(t *testing.T) {
 
 // Happy path over HTTP + idempotent replay + caller-scoped GET.
 func TestResolverHTTPHappyPathAndIdempotency(t *testing.T) {
-	db := resolverTestDB(t)
+	db := resolverTestDBR(t)
 	seedResolverStack(t, db)
 	h := newResolverHarness(t, db)
 	runtimeTok := h.iss.token(t, "user:runtime", "resource.resolve resource.read")
@@ -347,7 +346,7 @@ func TestResolverHTTPHappyPathAndIdempotency(t *testing.T) {
 
 // 输入卫生：幂等键缺失 / 未知字段 / 超限 / 禁止字段（信封 code 断言）。
 func TestResolverHTTPInputHygiene(t *testing.T) {
-	db := resolverTestDB(t)
+	db := resolverTestDBR(t)
 	seedResolverStack(t, db)
 	h := newResolverHarness(t, db)
 	runtimeTok := h.iss.token(t, "user:runtime", "resource.resolve resource.read")

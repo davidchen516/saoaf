@@ -37,7 +37,7 @@ func MountAdmin(r chi.Router, cfg AdminConfig) {
 		// whoami: any authenticated identity (diagnostic + smoke test)
 		admin.Get("/whoami", func(w http.ResponseWriter, req *http.Request) {
 			id := middleware.IdentityFrom(req.Context())
-			writeJSON(w, http.StatusOK, map[string]any{
+			WriteJSON(w, http.StatusOK, map[string]any{
 				"subject":    id.Subject,
 				"tenant_ref": id.TenantRef,
 				"scopes":     id.Scopes,
@@ -63,14 +63,14 @@ func MountAdmin(r chi.Router, cfg AdminConfig) {
 				Operation:   "PUBLISH",
 				DecisionRef: approvalRef,
 			}); err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]any{
+				WriteJSON(w, http.StatusInternalServerError, map[string]any{
 					"error_code": "INTERNAL",
 					"message":    "audit write failed",
 					"request_id": traceID,
 				})
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{
+			WriteJSON(w, http.StatusOK, map[string]any{
 				"status":       "published",
 				"binding_id":   bindingID,
 				"decision_ref": approvalRef,

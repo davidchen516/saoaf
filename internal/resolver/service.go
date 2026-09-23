@@ -24,9 +24,34 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/davidchen516/saoaf/internal/policy"
 )
+
+// PolicyRevision is the resolver's view of an active policy revision
+// (ADR-0006: modules do not import each other — the composition root
+// adapts the policy module onto this interface).
+type PolicyRevision struct {
+	SetID      string
+	Version    int
+	Expression string
+}
+
+// PolicyInput is the eligibility context for one requirement.
+type PolicyInput struct {
+	Region      string
+	DataClass   string
+	Environment string
+	TenantRef   string
+}
+
+// ErrNoActivePolicy marks a policy set with no active revision — a
+// documented pass-through, not an outage.
+var ErrNoActivePolicy = errors.New("resolver: no active policy revision")
+
+// PolicyEngine evaluates the eligibility policy for a resolve.
+type PolicyEngine interface {
+	ActiveRevision(ctx context.Context, setID string) (*PolicyRevision, error)
+	Evaluate(ctx context.Context, rev *PolicyRevision, in PolicyInput) (allow bool, reason string, err error)
+}
 
 // ErrSnapshotUnavailable marks a binding whose pinned snapshot is no longer
 // the provider's active published snapshot (or the snapshot itself is not
@@ -47,8 +72,7 @@ type Service struct {
 	Plans       *Store
 	Cache       *SnapshotCache
 	Pool        *pgxpool.Pool
-	Policy      *policy.Store
-	Eval        *policy.Evaluator
+	Policy      PolicyEngine // optional; nil = no policy step (documented)
 	PolicySetID string
 
 	Now        func() time.Time
@@ -112,30 +136,30 @@ func (s *Service) Resolve(ctx context.Context, req *Request, meta CallerMeta, id
 	if s.Policy != nil && s.PolicySetID != "" {
 		rev, err := s.Policy.ActiveRevision(ctx, s.PolicySetID)
 		if err == nil && rev != nil {
-			polSet, polVer = s.PolicySetID, rev.Version
+			polSet, polVer = rev.SetID, rev.Version
 			// 3. Policy filter: per requirement; denial is terminal for it
 			for i := range req.Requirements {
-				in := policy.EligibilityInput{
+				in := PolicyInput{
 					Region:      strConstraint(req.Requirements[i].Constraints, "region"),
 					DataClass:   strConstraint(req.Requirements[i].Constraints, "data_classification_max"),
 					Environment: meta.Environment,
 					TenantRef:   meta.TenantRef,
 				}
-				ev, reason, perr := s.Eval.Evaluate(ctx, rev, in)
+				allow, reason, perr := s.Policy.Evaluate(ctx, rev, in)
 				if perr != nil {
 					return nil, false, resErr(CodeResolverUnavailable, http.StatusServiceUnavailable,
 						"policy evaluation failed")
 				}
-				if !ev.Allow {
+				if !allow {
 					return nil, false, resErr(CodeNoCompatibleProvider, http.StatusUnprocessableEntity,
 						fmt.Sprintf("requirement %s denied by policy", req.Requirements[i].RequirementID),
 						ItemDetail{RequirementID: req.Requirements[i].RequirementID,
 							ReasonCodes: []string{ReasonPolicyDenied, reason}})
 				}
 			}
-		} else if err != nil && !errors.Is(err, policy.ErrNotFound) {
+		} else if err != nil && !errors.Is(err, ErrNoActivePolicy) {
 			return nil, false, resErr(CodeResolverUnavailable, http.StatusServiceUnavailable,
-				"policy store unavailable")
+				"policy source unavailable")
 		}
 		// no active revision for the set → policy step is a documented
 		// pass-through (empty revision recorded in the plan)

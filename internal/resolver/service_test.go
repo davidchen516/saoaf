@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/davidchen516/saoaf/internal/policy"
 )
 
 const (
@@ -72,21 +70,27 @@ func seedFullStack(t *testing.T, dsn string) seedIDs {
 	return ids
 }
 
-func seedPolicySet(t *testing.T, dsn, setID string, expr string) {
-	t.Helper()
-	conn := mustConnR(t, dsn)
-	ctx := context.Background()
-	c := policy.Content{EligibilityCEL: expr}
-	if _, err := conn.Exec(ctx, `
-		INSERT INTO policy.policy_revision
-			(set_id, version, state, content, content_digest, published_at, activated_at)
-		VALUES ($1, 1, 'ACTIVATED', $2::jsonb, $3, now(), now())`,
-		setID, fmt.Sprintf(`{"regions":[],"data_classification_max":"","vendor_restrictions":[],"export_requirements":[],"eligibility_cel":%q}`, expr), c.CanonicalDigest()); err != nil {
-		t.Fatalf("seed policy: %v", err)
-	}
+// fakePolicy is a resolver-local PolicyEngine for tests (ADR-0006: the
+// resolver package cannot import the policy module; integration coverage
+// lives in the cmd composition-root tests).
+type fakePolicy struct {
+	rev    *PolicyRevision
+	allow  bool
+	reason string
 }
 
-func newService(db string, policySetID string) *Service {
+func (f fakePolicy) ActiveRevision(ctx context.Context, setID string) (*PolicyRevision, error) {
+	if f.rev == nil {
+		return nil, ErrNoActivePolicy
+	}
+	return f.rev, nil
+}
+
+func (f fakePolicy) Evaluate(ctx context.Context, rev *PolicyRevision, in PolicyInput) (bool, string, error) {
+	return f.allow, f.reason, nil
+}
+
+func newService(db string) *Service {
 	pool, err := pgxpool.New(context.Background(), db)
 	if err != nil {
 		panic(err)
@@ -96,14 +100,20 @@ func newService(db string, policySetID string) *Service {
 		Plans:       &Store{Pool: pool},
 		Cache:       cache,
 		Pool:        pool,
-		Policy:      &policy.Store{DSN: db, Pool: pool},
-		Eval:        policy.NewEvaluator(),
-		PolicySetID: policySetID,
+		PolicySetID: "",
 		Now:         time.Now,
 		NewID:       func() string { return fmt.Sprintf("plan-%d", time.Now().UnixNano()) },
 		DefaultTTL:  300 * time.Second,
 		MaxTTL:      3600 * time.Second,
 	}
+}
+
+func newServiceWithPolicy(t *testing.T, db string, engine PolicyEngine) *Service {
+	t.Helper()
+	svc := newService(db)
+	svc.Policy = engine
+	svc.PolicySetID = "resolver-eligibility"
+	return svc
 }
 
 func resolveReq() *Request {
@@ -132,7 +142,7 @@ func TestDBResolveHappyPath(t *testing.T) {
 	withDBR(t, func(db string) {
 		ids := seedFullStack(t, db)
 		seedActiveBinding(t, db, ids, "bind-main", allScope(), 100)
-		svc := newService(db, "")
+		svc := newService(db)
 
 		plan, created, err := svc.Resolve(context.Background(), resolveReq(), callerMeta(), "idem-h1")
 		if err != nil || !created {
@@ -200,7 +210,7 @@ func TestDBResolveCapabilityNotFound(t *testing.T) {
 	withDBR(t, func(db string) {
 		ids := seedFullStack(t, db)
 		seedActiveBinding(t, db, ids, "bind-x", allScope(), 100)
-		svc := newService(db, "")
+		svc := newService(db)
 		req := resolveReq()
 		req.Requirements[0].CapabilityID = "model.missing"
 		_, _, err := svc.Resolve(context.Background(), req, callerMeta(), "idem-nf")
@@ -218,7 +228,7 @@ func TestDBResolveNoCompatibleRegion(t *testing.T) {
 		seedActiveBinding(t, db, ids, "bind-north",
 			stringJSONScope{scope: `{"tenant_refs":[],"factory_refs":[],"regions":["cn-north"],"agent_refs":[]}`,
 				hash: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}, 100)
-		svc := newService(db, "")
+		svc := newService(db)
 		_, _, err := svc.Resolve(context.Background(), resolveReq(), callerMeta(), "idem-rg")
 		if err == nil || err.(*ResolveError).Code != CodeNoCompatibleProvider {
 			t.Fatalf("want NO_COMPATIBLE_PROVIDER, got %v", err)
@@ -233,7 +243,7 @@ func TestDBResolveScopeFiltered(t *testing.T) {
 		seedActiveBinding(t, db, ids, "bind-other",
 			stringJSONScope{scope: `{"tenant_refs":["tenant-other"],"factory_refs":[],"regions":[],"agent_refs":[]}`,
 				hash: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}, 100)
-		svc := newService(db, "")
+		svc := newService(db)
 		_, _, err := svc.Resolve(context.Background(), resolveReq(), callerMeta(), "idem-sc")
 		if err == nil || err.(*ResolveError).Code != CodeNoCompatibleProvider {
 			t.Fatalf("want NO_COMPATIBLE_PROVIDER (scope), got %v", err)
@@ -252,7 +262,7 @@ func TestDBResolveAmbiguousBinding(t *testing.T) {
 		seedActiveBinding(t, db, ids, "bind-a2",
 			stringJSONScope{scope: `{"tenant_refs":["tenant-x","tenant-y"],"factory_refs":[],"regions":[],"agent_refs":[]}`,
 				hash: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}, 100)
-		svc := newService(db, "")
+		svc := newService(db)
 		_, _, err := svc.Resolve(context.Background(), resolveReq(), callerMeta(), "idem-amb")
 		if err == nil || err.(*ResolveError).Code != CodeAmbiguousBinding {
 			t.Fatalf("want AMBIGUOUS_BINDING, got %v", err)
@@ -272,7 +282,7 @@ func TestDBResolvePriorityWins(t *testing.T) {
 		seedActiveBinding(t, db, ids, "bind-high",
 			stringJSONScope{scope: `{"tenant_refs":["tenant-x"],"factory_refs":[],"regions":[],"agent_refs":[]}`,
 				hash: "sha256:1111111111111111111111111111111111111111111111111111111111111113"}, 50)
-		svc := newService(db, "")
+		svc := newService(db)
 		plan, _, err := svc.Resolve(context.Background(), resolveReq(), callerMeta(), "idem-prio")
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
@@ -296,7 +306,7 @@ func TestDBResolveSnapshotExpired(t *testing.T) {
 			t.Fatal(err)
 		}
 		seedActiveBinding(t, db, ids, "bind-stale", allScope(), 100)
-		svc := newService(db, "")
+		svc := newService(db)
 		_, _, err := svc.Resolve(context.Background(), resolveReq(), callerMeta(), "idem-exp")
 		if err == nil || err.(*ResolveError).Code != CodeSnapshotExpired {
 			t.Fatalf("want PROVIDER_SNAPSHOT_EXPIRED, got %v", err)
@@ -327,7 +337,7 @@ func TestDBResolveSnapshotNotActive(t *testing.T) {
 			WHERE provider_id = $1`, ids.ProviderID); err != nil {
 			t.Fatal(err)
 		}
-		svc := newService(db, "")
+		svc := newService(db)
 		_, _, err := svc.Resolve(context.Background(), resolveReq(), callerMeta(), "idem-ptr")
 		if err == nil || err.(*ResolveError).Code != CodeSnapshotExpired {
 			t.Fatalf("want PROVIDER_SNAPSHOT_EXPIRED (pointer moved), got %v", err)
@@ -345,7 +355,7 @@ func TestDBResolveSuspendedProviderFiltered(t *testing.T) {
 			t.Fatal(err)
 		}
 		seedActiveBinding(t, db, ids, "bind-susp", allScope(), 100)
-		svc := newService(db, "")
+		svc := newService(db)
 		_, _, err := svc.Resolve(context.Background(), resolveReq(), callerMeta(), "idem-susp")
 		if err == nil || err.(*ResolveError).Code != CodeNoCompatibleProvider {
 			t.Fatalf("want NO_COMPATIBLE_PROVIDER (suspended provider), got %v", err)
@@ -358,8 +368,8 @@ func TestDBResolvePolicyDenied(t *testing.T) {
 	withDBR(t, func(db string) {
 		ids := seedFullStack(t, db)
 		seedActiveBinding(t, db, ids, "bind-pol", allScope(), 100)
-		seedPolicySet(t, db, "resolver-eligibility", "false")
-		svc := newService(db, "resolver-eligibility")
+		svc := newServiceWithPolicy(t, db,
+			fakePolicy{rev: &PolicyRevision{SetID: "resolver-eligibility", Version: 1, Expression: "false"}, allow: false, reason: "REGION_NOT_ALLOWED"})
 		_, _, err := svc.Resolve(context.Background(), resolveReq(), callerMeta(), "idem-pol")
 		if err == nil {
 			t.Fatal("policy denial accepted")
@@ -376,13 +386,13 @@ func TestDBResolvePolicyRevisionCarried(t *testing.T) {
 	withDBR(t, func(db string) {
 		ids := seedFullStack(t, db)
 		seedActiveBinding(t, db, ids, "bind-pol-ok", allScope(), 100)
-		seedPolicySet(t, db, "resolver-eligibility", "true")
-		svc := newService(db, "resolver-eligibility")
+		svc := newServiceWithPolicy(t, db,
+			fakePolicy{rev: &PolicyRevision{SetID: "resolver-eligibility", Version: 3, Expression: "true"}, allow: true})
 		plan, _, err := svc.Resolve(context.Background(), resolveReq(), callerMeta(), "idem-pol-ok")
 		if err != nil {
 			t.Fatalf("resolve with policy: %v", err)
 		}
-		if plan.PolicySetID != "resolver-eligibility" || plan.PolicyVersion != 1 {
+		if plan.PolicySetID != "resolver-eligibility" || plan.PolicyVersion != 3 {
 			t.Fatalf("policy revision not carried: %s@%d", plan.PolicySetID, plan.PolicyVersion)
 		}
 	})
@@ -393,7 +403,7 @@ func TestDBResolveIdempotencyEndToEnd(t *testing.T) {
 	withDBR(t, func(db string) {
 		ids := seedFullStack(t, db)
 		seedActiveBinding(t, db, ids, "bind-idem", allScope(), 100)
-		svc := newService(db, "")
+		svc := newService(db)
 		p1, c1, err := svc.Resolve(context.Background(), resolveReq(), callerMeta(), "idem-e2e")
 		if err != nil || !c1 {
 			t.Fatalf("first: %v", err)
@@ -419,7 +429,7 @@ func TestDBResolve100ConcurrentOnePlan(t *testing.T) {
 	withDBR(t, func(db string) {
 		ids := seedFullStack(t, db)
 		seedActiveBinding(t, db, ids, "bind-c100", allScope(), 100)
-		svc := newService(db, "")
+		svc := newService(db)
 		var created atomic.Int64
 		var wg sync.WaitGroup
 		var firstID atomic.Value
@@ -462,7 +472,7 @@ func TestDBResolveTTL(t *testing.T) {
 	withDBR(t, func(db string) {
 		ids := seedFullStack(t, db)
 		seedActiveBinding(t, db, ids, "bind-ttl", allScope(), 100)
-		svc := newService(db, "")
+		svc := newService(db)
 		req := resolveReq()
 		req.Options.MaxPlanTTLSeconds = 60
 		plan, _, err := svc.Resolve(context.Background(), req, callerMeta(), "idem-ttl")

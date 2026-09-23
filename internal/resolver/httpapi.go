@@ -3,7 +3,11 @@
 // isolation via disjoint OAuth scopes (runtime callers hold
 // resource.resolve/resource.read; admin endpoints require resource.*.write
 // scopes — GWT#6).
-package httpapi
+//
+// The HTTP adapter lives in the resolver module itself: ADR-0006 module
+// boundaries forbid platform packages from importing internal modules, and
+// internal → platform (middleware, httpapi) is the allowed direction.
+package resolver
 
 import (
 	"bytes"
@@ -16,8 +20,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/davidchen516/saoaf/internal/platform/authn"
+	"github.com/davidchen516/saoaf/internal/platform/httpapi"
 	"github.com/davidchen516/saoaf/internal/platform/middleware"
-	"github.com/davidchen516/saoaf/internal/resolver"
 )
 
 // MountResolver wires /api/ai-resource-resolver/v1 under the fixed chain
@@ -45,9 +49,9 @@ func MountResolver(r chi.Router, cfg *ResolverMountConfig) {
 
 // ResolverMountConfig carries the resolver HTTP dependencies.
 type ResolverMountConfig struct {
-	Service    *resolver.Service
+	Service    *Service
 	Authn      *authn.Validator
-	Health     *Health
+	Health     *httpapi.Health
 	RatePerSec int
 	RateBurst  int
 }
@@ -58,39 +62,39 @@ func (cfg *ResolverMountConfig) handleResolve(w http.ResponseWriter, r *http.Req
 	rid := middleware.RequestIDFrom(r.Context())
 	idemKey := r.Header.Get("Idempotency-Key")
 	if idemKey == "" {
-		writeResolverError(w, &resolver.ResolveError{
-			Code: resolver.CodeInvalidRequirement, Status: http.StatusBadRequest,
+		writeResolverError(w, &ResolveError{
+			Code: CodeInvalidRequirement, Status: http.StatusBadRequest,
 			Msg: "Idempotency-Key header is required for resolve",
 		}, rid)
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, resolver.MaxRequestBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxRequestBytes))
 	if err != nil {
-		writeResolverError(w, &resolver.ResolveError{
-			Code: resolver.CodeInvalidRequirement, Status: http.StatusBadRequest,
+		writeResolverError(w, &ResolveError{
+			Code: CodeInvalidRequirement, Status: http.StatusBadRequest,
 			Msg: "request body exceeds 256 KiB or is unreadable",
 		}, rid)
 		return
 	}
 	// 禁止字段检查 on the RAW body (routing step 2 — boundary scan; the
 	// closed struct cannot carry undeclared keys)
-	if err := resolver.CheckForbiddenFields(body); err != nil {
-		writeResolverError(w, err.(*resolver.ResolveError), rid)
+	if err := CheckForbiddenFields(body); err != nil {
+		writeResolverError(w, err.(*ResolveError), rid)
 		return
 	}
-	var req resolver.Request
+	var req Request
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields() // v1: 未声明字段默认拒绝（除 extensions）
 	if err := dec.Decode(&req); err != nil {
-		writeResolverError(w, &resolver.ResolveError{
-			Code: resolver.CodeInvalidRequirement, Status: http.StatusBadRequest,
+		writeResolverError(w, &ResolveError{
+			Code: CodeInvalidRequirement, Status: http.StatusBadRequest,
 			Msg: "request body is not a valid resolve request: " + err.Error(),
 		}, rid)
 		return
 	}
 
 	id := middleware.IdentityFrom(r.Context())
-	meta := resolver.CallerMeta{
+	meta := CallerMeta{
 		CallerRef:   id.Subject, // 身份来自已验证 token；请求体同名字段不得覆盖（specs §2）
 		TenantRef:   id.TenantRef,
 		Environment: r.Header.Get("X-Saoaf-Environment"),
@@ -98,18 +102,18 @@ func (cfg *ResolverMountConfig) handleResolve(w http.ResponseWriter, r *http.Req
 	}
 	plan, _, err := cfg.Service.Resolve(r.Context(), &req, meta, idemKey)
 	if err != nil {
-		var re *resolver.ResolveError
+		var re *ResolveError
 		if errors.As(err, &re) {
 			writeResolverError(w, re, rid)
 			return
 		}
-		writeResolverError(w, &resolver.ResolveError{
-			Code: resolver.CodeResolverUnavailable, Status: http.StatusServiceUnavailable,
+		writeResolverError(w, &ResolveError{
+			Code: CodeResolverUnavailable, Status: http.StatusServiceUnavailable,
 			Msg: "resolve failed",
 		}, rid)
 		return
 	}
-	writeJSON(w, http.StatusOK, planResponse(plan))
+	httpapi.WriteJSON(w, http.StatusOK, planResponse(plan))
 }
 
 // handleGetPlan: 只允许原 caller、受信审计角色读取（specs §3.2）。
@@ -119,37 +123,37 @@ func (cfg *ResolverMountConfig) handleGetPlan(w http.ResponseWriter, r *http.Req
 	planID := chi.URLParam(r, "id")
 	plan, err := cfg.Service.Plans.GetPlan(r.Context(), planID)
 	if err != nil {
-		if errors.Is(err, resolver.ErrNotFound) {
-			writeResolverError(w, &resolver.ResolveError{
-				Code: resolver.CodePlanNotFound, Status: http.StatusNotFound,
+		if errors.Is(err, ErrNotFound) {
+			writeResolverError(w, &ResolveError{
+				Code: CodePlanNotFound, Status: http.StatusNotFound,
 				Msg: "resource plan not found",
 			}, rid)
 			return
 		}
-		writeResolverError(w, &resolver.ResolveError{
-			Code: resolver.CodeResolverUnavailable, Status: http.StatusServiceUnavailable,
+		writeResolverError(w, &ResolveError{
+			Code: CodeResolverUnavailable, Status: http.StatusServiceUnavailable,
 			Msg: "plan store unavailable",
 		}, rid)
 		return
 	}
 	if plan.CallerRef != id.Subject && !id.HasScope("resolver.audit") {
-		writeResolverError(w, &resolver.ResolveError{
-			Code: resolver.CodeCallerNotAllowed, Status: http.StatusForbidden,
+		writeResolverError(w, &ResolveError{
+			Code: CodeCallerNotAllowed, Status: http.StatusForbidden,
 			Msg: "plan belongs to another caller",
 		}, rid)
 		return
 	}
-	writeJSON(w, http.StatusOK, planResponse(plan))
+	httpapi.WriteJSON(w, http.StatusOK, planResponse(plan))
 }
 
 // planResponse maps the stored plan to the spec §3.1 response shape.
-func planResponse(p *resolver.Plan) map[string]any {
+func planResponse(p *Plan) map[string]any {
 	// 审计保留期内可查：TTL 过期后报告派生状态（不删除已生成 Plan）
 	status := p.Status
-	if status == resolver.StatusResolved {
+	if status == StatusResolved {
 		if exp, err := time.Parse(time.RFC3339Nano, p.ExpiresAt); err == nil &&
 			time.Now().After(exp) {
-			status = resolver.StatusExpired
+			status = StatusExpired
 		}
 	}
 	items := make([]map[string]any, 0, len(p.Items))
@@ -196,17 +200,17 @@ func planResponse(p *resolver.Plan) map[string]any {
 
 // writeResolverError emits the unified error envelope (specs §3.1 错误信封
 // — messages never leak candidate resources, SQL, or caller payloads).
-func writeResolverError(w http.ResponseWriter, re *resolver.ResolveError, requestID string) {
+func writeResolverError(w http.ResponseWriter, re *ResolveError, requestID string) {
 	body := map[string]any{
 		"error": map[string]any{
 			"code":       re.Code,
 			"message":    re.Msg,
 			"request_id": requestID,
-			"retryable":  re.Status >= 500 || re.Code == resolver.CodeRateLimited,
+			"retryable":  re.Status >= 500 || re.Code == CodeRateLimited,
 		},
 	}
 	if len(re.Details) > 0 {
 		body["error"].(map[string]any)["details"] = re.Details
 	}
-	writeJSON(w, re.Status, body)
+	httpapi.WriteJSON(w, re.Status, body)
 }

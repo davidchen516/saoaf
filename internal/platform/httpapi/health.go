@@ -32,7 +32,7 @@ func NewHealth(ready func() bool) *Health {
 
 // LivenessHandler always returns 200 with process uptime.
 func (h *Health) LivenessHandler(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	WriteJSON(w, http.StatusOK, map[string]any{
 		"status": "alive",
 		"uptime": time.Since(ProcessStartedAt).String(),
 		"probe":  "healthz",
@@ -42,13 +42,13 @@ func (h *Health) LivenessHandler(w http.ResponseWriter, _ *http.Request) {
 // ReadinessHandler returns 200 when ready() is true, 503 otherwise.
 func (h *Health) ReadinessHandler(w http.ResponseWriter, _ *http.Request) {
 	if !h.ready() {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+		WriteJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"status": "not-ready",
 			"probe":  "readyz",
 		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	WriteJSON(w, http.StatusOK, map[string]any{
 		"status": "ready",
 		"probe":  "readyz",
 	})
@@ -64,15 +64,15 @@ func NewRouter(h *Health) http.Handler {
 	r.Get("/healthz", h.LivenessHandler)
 	r.Get("/readyz", h.ReadinessHandler)
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+		WriteJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
 	})
 	r.MethodNotAllowed(func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
+		WriteJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
 	})
 	return r
 }
 
-func writeJSON(w http.ResponseWriter, code int, body any) {
+func WriteJSON(w http.ResponseWriter, code int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(body)
