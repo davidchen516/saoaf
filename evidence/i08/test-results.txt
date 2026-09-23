@@ -1,61 +1,39 @@
-# I08 R1（审查整改后）binding 全套 verbose，真实 PG postgres:18.6
-=== RUN   TestScopeCanonicalGolden
+# I08 R2（复审整改后）binding 全套，真实 PG postgres:18.6，-race
 --- PASS: TestScopeCanonicalGolden (0.00s)
-=== RUN   TestScopeOverlap
 --- PASS: TestScopeOverlap (0.00s)
-=== RUN   TestTransitionMatrix
 --- PASS: TestTransitionMatrix (0.00s)
-=== RUN   TestPublishGate
 --- PASS: TestPublishGate (0.00s)
-=== RUN   TestScopeForbiddenFields
 --- PASS: TestScopeForbiddenFields (0.00s)
-=== RUN   TestBindingString
 --- PASS: TestBindingString (0.00s)
-=== RUN   TestDB50ConcurrentPublishSingleActive
---- PASS: TestDB50ConcurrentPublishSingleActive (0.36s)
-=== RUN   TestDBScopeConflictBlocked
---- PASS: TestDBScopeConflictBlocked (0.24s)
-=== RUN   TestDBSuspendResumeRetire
---- PASS: TestDBSuspendResumeRetire (0.15s)
-=== RUN   TestDBCASRevisionConflict
---- PASS: TestDBCASRevisionConflict (0.12s)
-=== RUN   TestDBRollbackCreatesNewRevision
---- PASS: TestDBRollbackCreatesNewRevision (0.24s)
-=== RUN   TestDBPublishIdempotentReplay
---- PASS: TestDBPublishIdempotentReplay (0.27s)
-=== RUN   TestDBPartialOverlapBlocked
---- PASS: TestDBPartialOverlapBlocked (0.26s)
-=== RUN   TestDBConcurrentOverlapSingleWinner
---- PASS: TestDBConcurrentOverlapSingleWinner (0.26s)
-=== RUN   TestDBTerminalStatesBlockPublish
---- PASS: TestDBTerminalStatesBlockPublish (0.32s)
-=== RUN   TestDBTransitionAuditsAndEvents
---- PASS: TestDBTransitionAuditsAndEvents (0.31s)
-=== RUN   TestDBResumeSlotConflictClassified
---- PASS: TestDBResumeSlotConflictClassified (0.14s)
-=== RUN   TestDBHistoricalContentImmutable
---- PASS: TestDBHistoricalContentImmutable (0.12s)
-=== RUN   TestDBCreateDeprecateImpactQuery
---- PASS: TestDBCreateDeprecateImpactQuery (0.17s)
-ok  	github.com/davidchen516/saoaf/internal/binding	3.172s
-
-# 并行 CREATE ROLE 竞态路径 ×3（migrations + binding 同集群并行 goose up）
-run 1: ok  	github.com/davidchen516/saoaf/migrations	3.879s / ok  	github.com/davidchen516/saoaf/internal/binding	3.397s
-run 2: ok  	github.com/davidchen516/saoaf/migrations	3.725s / ok  	github.com/davidchen516/saoaf/internal/binding	3.418s
-run 3: ok  	github.com/davidchen516/saoaf/migrations	6.536s / ok  	github.com/davidchen516/saoaf/internal/binding	6.220s
+--- PASS: TestDB50ConcurrentPublishSingleActive (0.56s)
+--- PASS: TestDBScopeConflictBlocked (0.18s)
+--- PASS: TestDBSuspendResumeRetire (0.25s)
+--- PASS: TestDBCASRevisionConflict (0.17s)
+--- PASS: TestDBRollbackCreatesNewRevision (0.30s)
+--- PASS: TestDBPublishIdempotentReplay (0.34s)
+--- PASS: TestDBPartialOverlapBlocked (0.23s)
+--- PASS: TestDBConcurrentOverlapSingleWinner (0.34s)
+--- PASS: TestDBResumeOverlapRejected (0.22s)
+--- PASS: TestDBConcurrentResumeVsPublishSingleWinner (0.29s)
+--- PASS: TestDBTerminalStatesBlockPublish (0.44s)
+--- PASS: TestDBTransitionAuditsAndEvents (0.19s)
+--- PASS: TestDBResumeSlotConflictClassified (0.19s)
+--- PASS: TestDBHistoricalContentImmutable (0.15s)
+--- PASS: TestDBCreateDeprecateImpactQuery (0.37s)
+ok  	github.com/davidchen516/saoaf/internal/binding	5.587s
 
 # Full repo -race
-ok  	github.com/davidchen516/saoaf/internal/binding	5.680s
-ok  	github.com/davidchen516/saoaf/internal/platform/approval	1.948s
-ok  	github.com/davidchen516/saoaf/internal/platform/authn	2.926s
-ok  	github.com/davidchen516/saoaf/internal/platform/authz	1.619s
-ok  	github.com/davidchen516/saoaf/internal/platform/httpapi	1.480s
-ok  	github.com/davidchen516/saoaf/internal/platform/middleware	3.104s
-ok  	github.com/davidchen516/saoaf/internal/platform/worker	2.727s
-ok  	github.com/davidchen516/saoaf/internal/platform/workload	2.787s
-ok  	github.com/davidchen516/saoaf/internal/policy	4.763s
-ok  	github.com/davidchen516/saoaf/internal/registry	5.131s
-ok  	github.com/davidchen516/saoaf/migrations	7.175s
-ok  	github.com/davidchen516/saoaf/tools/boundarycheck	2.679s
-ok  	github.com/davidchen516/saoaf/tools/contractlint	2.745s
-ok  	github.com/davidchen516/saoaf/tools/licensecheck	2.304s
+ok  	github.com/davidchen516/saoaf/internal/binding	6.098s
+ok  	github.com/davidchen516/saoaf/internal/platform/approval	1.522s
+ok  	github.com/davidchen516/saoaf/internal/platform/authn	2.623s
+ok  	github.com/davidchen516/saoaf/internal/platform/authz	2.457s
+ok  	github.com/davidchen516/saoaf/internal/platform/httpapi	2.718s
+ok  	github.com/davidchen516/saoaf/internal/platform/middleware	3.774s
+ok  	github.com/davidchen516/saoaf/internal/platform/worker	3.673s
+ok  	github.com/davidchen516/saoaf/internal/platform/workload	4.203s
+ok  	github.com/davidchen516/saoaf/internal/policy	6.462s
+ok  	github.com/davidchen516/saoaf/internal/registry	6.179s
+ok  	github.com/davidchen516/saoaf/migrations	9.163s
+ok  	github.com/davidchen516/saoaf/tools/boundarycheck	4.195s
+ok  	github.com/davidchen516/saoaf/tools/contractlint	4.272s
+ok  	github.com/davidchen516/saoaf/tools/licensecheck	3.106s

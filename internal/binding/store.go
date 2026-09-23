@@ -99,7 +99,53 @@ func (r PublishReq) requestFingerprint(b *Binding) string {
 	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 
-// Publish atomically: gate checks → idempotency ledger → advisory lock on
+// overlapGuard acquires the (environment, priority) advisory lock and
+// rejects when any OTHER live PUBLISHED binding in the same slot holds an
+// overlapping scope (R1 P1-1 + R2 N-P1: shared by Publish and Resume — the
+// two entries into the live set).
+//
+// Lock notes: hashtext() is a 32-bit key space shared cluster-wide with
+// other advisory-lock users (e.g. tools/migrator's fixed key); a collision
+// only causes spurious serialization (liveness, not correctness) — accepted.
+// Deviation from specs §3 ("advisory lock only after hotspot pressure
+// testing"): introduced early for correctness closure, documented in
+// evidence/i08.
+func overlapGuard(ctx context.Context, tx pgx.Tx, exceptKey, environment string, priority int, scope Scope) error {
+	lockKey := "saoaf:binding:conflict:" + environment + ":" + strconv.Itoa(priority)
+	if _, err := tx.Exec(ctx, `
+		SELECT pg_advisory_xact_lock(hashtext($1))`, lockKey); err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT binding_key, scope FROM registry.capability_binding
+		WHERE environment = $1 AND priority = $2
+		  AND state = 'PUBLISHED' AND is_active AND binding_key <> $3`,
+		environment, priority, exceptKey)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	q := scope.CanonicalScope()
+	for rows.Next() {
+		var otherKey string
+		var scopeJSON []byte
+		if err := rows.Scan(&otherKey, &scopeJSON); err != nil {
+			return err
+		}
+		var other Scope
+		if err := json.Unmarshal(scopeJSON, &other); err != nil {
+			return fmt.Errorf("stored scope for %s is not parseable: %w", otherKey, err)
+		}
+		if q.Overlaps(other.CanonicalScope()) {
+			return errS(ErrScopeConflict, ReasonScopeOverlap,
+				fmt.Sprintf("binding %s holds an overlapping scope at priority %d in %s",
+					otherKey, priority, environment))
+		}
+	}
+	return rows.Err()
+}
+
+// Publish atomically → idempotency ledger → advisory lock on
 // (environment, priority) → overlap-based conflict pre-check → deactivate
 // old PUBLISHED active (CAS, row keeps its revision as history) → insert
 // new PUBLISHED active revision → change record + outbox event → ledger
@@ -161,45 +207,9 @@ func (s Store) Publish(ctx context.Context, req PublishReq, b *Binding) error {
 		}
 	}
 
-	// serialize competing publishes at the same (environment, priority) so
-	// the overlap check below observes every committed sibling (R1 P1-1
-	// concurrency-closure; xact-scoped, released on commit/rollback).
-	lockKey := "saoaf:binding:conflict:" + req.Environment + ":" + strconv.Itoa(req.Priority)
-	if _, err := tx.Exec(ctx, `
-		SELECT pg_advisory_xact_lock(hashtext($1))`, lockKey); err != nil {
-		return err
-	}
-
-	// overlap conflict (R1 P1-1): any OTHER live PUBLISHED binding in the
-	// same environment at the same priority whose scope overlaps the
-	// request's scope is a conflict. Subsumes the previous exact-hash check.
-	rows, err := tx.Query(ctx, `
-		SELECT binding_key, scope FROM registry.capability_binding
-		WHERE environment = $1 AND priority = $2
-		  AND state = 'PUBLISHED' AND is_active AND binding_key <> $3`,
-		req.Environment, req.Priority, req.BindingKey)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	reqScope := req.Scope.CanonicalScope()
-	for rows.Next() {
-		var otherKey string
-		var scopeJSON []byte
-		if err := rows.Scan(&otherKey, &scopeJSON); err != nil {
-			return err
-		}
-		var other Scope
-		if err := json.Unmarshal(scopeJSON, &other); err != nil {
-			return fmt.Errorf("stored scope for %s is not parseable: %w", otherKey, err)
-		}
-		if reqScope.Overlaps(other.CanonicalScope()) {
-			return errS(ErrScopeConflict, ReasonScopeOverlap,
-				fmt.Sprintf("binding %s holds an overlapping scope at priority %d in %s",
-					otherKey, req.Priority, req.Environment))
-		}
-	}
-	if err := rows.Err(); err != nil {
+	// overlap conflict detection shared with Resume (review R2 N-P1: the
+	// invariant must hold at EVERY entry into the live set)
+	if err := overlapGuard(ctx, tx, req.BindingKey, req.Environment, req.Priority, req.Scope); err != nil {
 		return err
 	}
 
@@ -399,7 +409,7 @@ func (s Store) Deprecate(ctx context.Context, req TransitionReq) error {
 
 // Retire transitions SUSPENDED/DEPRECATED → RETIRED (rev CAS).
 func (s Store) Retire(ctx context.Context, req TransitionReq, from State) error {
-	return s.transition(ctx, req, from, StateRetired, "RETIRED", "binding.retired")
+	return s.transition(ctx, req, from, StateRetired, "RETIRE", "binding.retired")
 }
 
 // transition applies a lifecycle change to the CURRENT (active) row only,
@@ -423,6 +433,36 @@ func (s Store) transition(ctx context.Context, req TransitionReq, from, to State
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// R2 N-P1: Resume (SUSPENDED → PUBLISHED) is the only transition that
+	// re-enters the live set — it must pass the same overlap arbitration
+	// Publish goes through, under the same (env, priority) advisory lock
+	// (a bare pre-check would still race a concurrent Publish).
+	if to == StatePublished {
+		var curRev, curPrio int
+		var env string
+		var scopeJSON []byte
+		qerr := tx.QueryRow(ctx, `
+			SELECT revision, environment, priority, scope FROM registry.capability_binding
+			WHERE binding_key = $1 AND is_active`, req.BindingKey).Scan(&curRev, &env, &curPrio, &scopeJSON)
+		if qerr == nil {
+			if curRev != req.ExpectedRev {
+				return errS(ErrRevisionConflict, ReasonRevisionConflict,
+					fmt.Sprintf("expected %d, current %d", req.ExpectedRev, curRev))
+			}
+			var stored Scope
+			if err := json.Unmarshal(scopeJSON, &stored); err != nil {
+				return fmt.Errorf("stored scope for %s is not parseable: %w", req.BindingKey, err)
+			}
+			if err := overlapGuard(ctx, tx, req.BindingKey, env, curPrio, stored); err != nil {
+				return err
+			}
+		} else if qerr != pgx.ErrNoRows {
+			return qerr
+		}
+		// ErrNoRows: no active row — the UPDATE below misses and the
+		// fallback diagnoses NotFound/invalid-transition.
+	}
 
 	tag, err := tx.Exec(ctx, `
 		UPDATE registry.capability_binding

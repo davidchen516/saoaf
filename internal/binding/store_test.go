@@ -294,6 +294,15 @@ func TestDBSuspendResumeRetire(t *testing.T) {
 		if crCount < 1 {
 			t.Fatal("no change records linked for binding publishes")
 		}
+		// R2 N-P3.4：retire 事件 topic 显式断言
+		var evRetired int
+		if err := conn.QueryRow(ctx,
+			`SELECT count(*) FROM saoaf.outbox_event WHERE aggregate_id = 'bind-lc' AND topic = 'binding.retired'`).Scan(&evRetired); err != nil {
+			t.Fatal(err)
+		}
+		if evRetired != 1 {
+			t.Fatalf("binding.retired outbox events = %d, want 1", evRetired)
+		}
 	})
 }
 
@@ -605,6 +614,128 @@ func TestDBConcurrentOverlapSingleWinner(t *testing.T) {
 		}
 		if successes.Load()+conflicts.Load() != N {
 			t.Fatalf("unclassified failures: successes=%d conflicts=%d want total %d", successes.Load(), conflicts.Load(), N)
+		}
+		var live int
+		if err := conn.QueryRow(ctx, `
+			SELECT count(*) FROM registry.capability_binding
+			WHERE environment = 'production' AND priority = 100
+			  AND state = 'PUBLISHED' AND is_active`).Scan(&live); err != nil {
+			t.Fatal(err)
+		}
+		if live != 1 {
+			t.Fatalf("live bindings at (production, 100) = %d, want 1", live)
+		}
+	})
+}
+
+// —— R2 N-P1 回归：Resume 重入 live 集合必须过 overlap 裁决 ——
+// 复审探针：B={tenant-a}@100 发布→暂停（释放槽位）→ A={tenant-a,tenant-b}@100
+// 发布（合法）→ B Resume 旧实现成功 → 双活。修复后 Resume 必须拒绝。
+func TestDBResumeOverlapRejected(t *testing.T) {
+	withDBB(t, func(db string) {
+		conn := mustConnB(t, db)
+		ctx := context.Background()
+		seedBinding(t, conn, "bind-rg-b")
+		seedBinding(t, conn, "bind-rg-a")
+		store := Store{DSN: db}
+		b := &Binding{CapabilityID: 1, ProviderID: 1, SnapshotID: 1, Profile: "p1"}
+
+		pub := func(key string, scope Scope) error {
+			return store.Publish(ctx, PublishReq{
+				BindingKey: key, Revision: 1, Scope: scope, Priority: 100,
+				Environment: "production", ApprovalRef: "appr:rg",
+				ChangeReason: "resume gap test", TenantRef: "t",
+				Actor: "user:admin", TraceID: "trace-test",
+			}, b)
+		}
+		// B 发布 → 暂停
+		if err := pub("bind-rg-b", Scope{TenantRefs: []string{"tenant-a"}, Regions: []string{"cn-east"}}); err != nil {
+			t.Fatalf("publish B: %v", err)
+		}
+		if err := store.Suspend(ctx, TransitionReq{BindingKey: "bind-rg-b", ExpectedRev: 2,
+			Actor: "user:admin", TraceID: "trace-test"}); err != nil {
+			t.Fatalf("suspend B: %v", err)
+		}
+		// A 部分重叠 scope 占用同槽位（合法：B 已暂停释放）
+		if err := pub("bind-rg-a", Scope{TenantRefs: []string{"tenant-a", "tenant-b"}, Regions: []string{"cn-east"}}); err != nil {
+			t.Fatalf("publish A into released slot: %v", err)
+		}
+		// B Resume → 必须被 overlap 裁决拒绝（不得双活）
+		err := store.Resume(ctx, TransitionReq{BindingKey: "bind-rg-b", ExpectedRev: 3,
+			Actor: "user:admin", TraceID: "trace-test"})
+		if !isErr(err, ErrScopeConflict) {
+			t.Fatalf("resume into overlapping live slot must be ErrScopeConflict, got %v", err)
+		}
+		// 无漂移：B 仍 SUSPENDED，槽位唯一 live（A）
+		if s := mustState(t, conn, "bind-rg-b"); s != "SUSPENDED" {
+			t.Fatalf("B drifted after rejected resume: %s", s)
+		}
+		var live int
+		if err := conn.QueryRow(ctx, `
+			SELECT count(*) FROM registry.capability_binding
+			WHERE environment = 'production' AND priority = 100
+			  AND state = 'PUBLISHED' AND is_active`).Scan(&live); err != nil {
+			t.Fatal(err)
+		}
+		if live != 1 {
+			t.Fatalf("live bindings at (production, 100) = %d, want 1", live)
+		}
+	})
+}
+
+// —— R2 N-P1 并发闭包：Resume vs Publish 争同一重叠槽位，恰一胜出 ——
+func TestDBConcurrentResumeVsPublishSingleWinner(t *testing.T) {
+	withDBB(t, func(db string) {
+		conn := mustConnB(t, db)
+		ctx := context.Background()
+		seedBinding(t, conn, "bind-rv-b")
+		seedBinding(t, conn, "bind-rv-a")
+		store := Store{DSN: db}
+		b := &Binding{CapabilityID: 1, ProviderID: 1, SnapshotID: 1, Profile: "p1"}
+
+		if err := store.Publish(ctx, PublishReq{
+			BindingKey: "bind-rv-b", Revision: 1,
+			Scope:    Scope{TenantRefs: []string{"tenant-a"}, Regions: []string{"cn-east"}},
+			Priority: 100, Environment: "production",
+			ApprovalRef: "appr:rv", ChangeReason: "race", TenantRef: "t",
+			Actor: "user:admin", TraceID: "trace-test",
+		}, b); err != nil {
+			t.Fatalf("publish B: %v", err)
+		}
+		if err := store.Suspend(ctx, TransitionReq{BindingKey: "bind-rv-b", ExpectedRev: 2,
+			Actor: "user:admin", TraceID: "trace-test"}); err != nil {
+			t.Fatalf("suspend B: %v", err)
+		}
+
+		var successes, conflicts atomic.Int64
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if err := store.Resume(ctx, TransitionReq{BindingKey: "bind-rv-b", ExpectedRev: 3,
+				Actor: "user:admin", TraceID: "trace-test"}); err == nil {
+				successes.Add(1)
+			} else if isErr(err, ErrScopeConflict) {
+				conflicts.Add(1)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if err := store.Publish(ctx, PublishReq{
+				BindingKey: "bind-rv-a", Revision: 1,
+				Scope:    Scope{TenantRefs: []string{"tenant-a", "tenant-b"}, Regions: []string{"cn-east"}},
+				Priority: 100, Environment: "production",
+				ApprovalRef: "appr:rv", ChangeReason: "race", TenantRef: "t",
+				Actor: "user:admin", TraceID: "trace-test",
+			}, b); err == nil {
+				successes.Add(1)
+			} else if isErr(err, ErrScopeConflict) {
+				conflicts.Add(1)
+			}
+		}()
+		wg.Wait()
+		if successes.Load() != 1 || conflicts.Load() != 1 {
+			t.Fatalf("resume-vs-publish: successes=%d conflicts=%d, want 1/1", successes.Load(), conflicts.Load())
 		}
 		var live int
 		if err := conn.QueryRow(ctx, `
@@ -1008,6 +1139,15 @@ func TestDBCreateDeprecateImpactQuery(t *testing.T) {
 		}
 		if s := mustState(t, conn, "bind-wild"); s != "DEPRECATED" {
 			t.Fatalf("bind-wild state = %s, want DEPRECATED", s)
+		}
+		// R2 N-P3.4：deprecated 事件 topic 显式断言
+		var evDep int
+		if err := conn.QueryRow(ctx,
+			`SELECT count(*) FROM saoaf.outbox_event WHERE aggregate_id = 'bind-wild' AND topic = 'binding.deprecated'`).Scan(&evDep); err != nil {
+			t.Fatal(err)
+		}
+		if evDep != 1 {
+			t.Fatalf("binding.deprecated outbox events = %d, want 1", evDep)
 		}
 		// DEPRECATED 不再在役：影响查询不再返回它
 		got, err = store.FindOverlapping(ctx, "production",
