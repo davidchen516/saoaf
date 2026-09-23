@@ -118,7 +118,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, r *Revision, in EligibilityInp
 		return Evaluation{}, ReasonCELInvalid, iss.Err()
 	}
 	prg, err := celEnv.Program(checked,
-		cel.InterruptCheckFrequency(100),
+		cel.InterruptCheckFrequency(1),
 	)
 	if err != nil {
 		return Evaluation{}, ReasonCELInvalid, err
@@ -126,7 +126,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, r *Revision, in EligibilityInp
 
 	ctx, cancel := context.WithTimeout(ctx, CELTimeout)
 	defer cancel()
-	out, _, err := prg.Eval(map[string]any{
+	out, _, err := prg.ContextEval(ctx, map[string]any{
 		"region":      in.Region,
 		"data_class":  in.DataClass,
 		"vendor":      in.Vendor,

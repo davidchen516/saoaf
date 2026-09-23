@@ -1,8 +1,6 @@
 package policy
 
 import (
-	"strings"
-
 	"github.com/google/cel-go/common/ast"
 )
 
@@ -67,13 +65,26 @@ func checkCalls(e ast.Expr, src *ast.SourceInfo) error {
 	return nil
 }
 
-// isInternalName reports whether fn is a CEL internal operator encoding:
-// "_&&_"-style operator wrappers or "@"-prefixed fused/inline operators.
+// celOperators is the EXACT set of cel-go v0.26 internal operator names
+// (see cel/common/operators/operators.go). Anything not here and not on
+// the function allowlist is rejected — no shape heuristics.
+var celOperators = map[string]bool{
+	"_||_": true, "_&&_": true, "!_": true, "_-_-": true, "_==_": true,
+	"_!=_": true, "_<_": true, "_<=_": true, "_>_": true, "_>=_": true,
+	"_+_": true, "_-_": true, "_*_": true, "_/_": true, "_%_": true,
+	"_in_": true, "_[_": true, "_?_:_": true, "@not_strictly_false": true,
+	"@not_strictly_true": true, "@type": true, "@range": true,
+	"@list": true, "@map": true, "@struct": true, "@in": true,
+	// macro internal plumbing
+	"@filter": true, "@map_macro": true, "@exists": true, "@all": true,
+	"@exists_one": true, "has": true,
+}
+
+// isInternalName reports whether fn is a cel-go internal operator/macro
+// name (exact table, not pattern matching — prevents user-crafted
+// lookalike identifiers from slipping through).
 func isInternalName(fn string) bool {
-	if strings.HasPrefix(fn, "@") {
-		return true
-	}
-	return strings.HasPrefix(fn, "_") && strings.HasSuffix(fn, "_") && len(fn) > 2
+	return celOperators[fn]
 }
 
 func isMacro(fn string) bool {

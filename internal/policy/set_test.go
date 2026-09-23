@@ -274,3 +274,39 @@ func TestNonBoolResultRejectedAtEvaluate(t *testing.T) {
 		t.Fatalf("reason = %s, want POLICY_CEL_INVALID", reason)
 	}
 }
+
+// P1-1 回归：超时通过 ContextEval 真实生效（白名单语言内的重表达式被截断）。
+func TestCELTimeoutActuallyEnforced(t *testing.T) {
+	e := NewEvaluator()
+	// 7-level nested all() (10^7 iterations, tautology inner — never
+	// short-circuits); frequency=1 makes ContextEval interrupt within
+	// one evaluation step of the 500ms budget
+	expr := `[1,2,3,4,5,6,7,8,9,10].all(a, [1,2,3,4,5,6,7,8,9,10].all(b, ` +
+		`[1,2,3,4,5,6,7,8,9,10].all(c, [1,2,3,4,5,6,7,8,9,10].all(d, ` +
+		`[1,2,3,4,5,6,7,8,9,10].all(e, [1,2,3,4,5,6,7,8,9,10].all(f, ` +
+		`[1,2,3,4,5,6,7,8,9,10].all(g, a >= b || b >= a)))))))`
+	_, r, _ := NewSet("pol-to", draftContent(expr))
+	_, reason, err := e.Evaluate(context.Background(), r, EligibilityInput{Region: "cn-east"})
+	if err == nil {
+		t.Fatal("heavy expression completed within budget — timeout not enforced")
+	}
+	if reason != ReasonCELTimeout {
+		t.Fatalf("reason = %s, want POLICY_CEL_TIMEOUT (err %v)", reason, err)
+	}
+}
+
+// P2-1 回归：一元否定与 exists 宏（含 !_ 的展开）不再被误杀。
+func TestUnaryNotAndExistsAllowed(t *testing.T) {
+	e := NewEvaluator()
+	for _, expr := range []string{
+		`!(region == "us-east")`,
+		`!region.startsWith("us")`,
+		`["a","b"].exists(x, x == "a")`,
+		`["a","b"].exists_one(x, x == "a")`,
+		`region != "us-west"`,
+	} {
+		if reason, err := e.ValidateExpression(expr); err != nil {
+			t.Fatalf("expression %q rejected: %v (reason %s)", expr, err, reason)
+		}
+	}
+}

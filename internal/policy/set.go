@@ -14,9 +14,9 @@ package policy
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -63,24 +63,28 @@ type Content struct {
 	EligibilityCEL     string   `json:"eligibility_cel"`
 }
 
-// CanonicalDigest hashes the canonical (sorted, stable) form of content —
-// identical content yields identical digests regardless of map ordering.
+// CanonicalDigest hashes the canonical JSON encoding of content —
+// identical content yields identical digests; JSON encoding has no
+// separator ambiguity (a list ["a","b"] is distinct from ["a,b"]).
 func (c Content) CanonicalDigest() string {
-	parts := []string{
-		"regions:" + joinSorted(c.Regions),
-		"data_class:" + c.DataClassMax,
-		"vendors:" + joinSorted(c.VendorRestrictions),
-		"exports:" + joinSorted(c.ExportRequirements),
-		"eligibility:" + c.EligibilityCEL,
+	// sort slice fields for stability
+	sorted := c
+	sorted.Regions = sortedCopy(c.Regions)
+	sorted.VendorRestrictions = sortedCopy(c.VendorRestrictions)
+	sorted.ExportRequirements = sortedCopy(c.ExportRequirements)
+	b, err := json.Marshal(sorted)
+	if err != nil {
+		// Content is a plain struct — marshal cannot fail
+		panic("policy: content marshal: " + err.Error())
 	}
-	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
+	sum := sha256.Sum256(b)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func joinSorted(s []string) string {
+func sortedCopy(s []string) []string {
 	out := append([]string(nil), s...)
 	sort.Strings(out)
-	return strings.Join(out, ",")
+	return out
 }
 
 // Set aggregates revisions of one policy set with its activation pointer.
@@ -129,6 +133,10 @@ func (s *Set) Publish(version int) (*Revision, error) {
 	case StatePublished:
 		return r, nil // idempotent no-op
 	case StateDraft:
+		// publish-side CEL validation (issue GWT#2: 发布或求值时拒绝)
+		if reason, err := defaultEvaluator.ValidateExpression(r.Content.EligibilityCEL); err != nil {
+			return nil, fmt.Errorf("publish rejected (%s): %w", reason, err)
+		}
 		now := time.Now().UTC()
 		r.State = StatePublished
 		r.PublishedAt = &now
@@ -187,3 +195,7 @@ func ValidateTransition(from, to State) bool {
 	}
 	return false
 }
+
+// defaultEvaluator is the package-level CEL evaluator used for
+// publish-side validation.
+var defaultEvaluator = NewEvaluator()
