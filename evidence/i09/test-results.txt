@@ -39,5 +39,7 @@ ok  	github.com/davidchen516/saoaf/internal/resolver	36.595s
 #（见 PR CI 与本地跑批：binding/approval/authn/authz/httpapi/middleware/worker/workload/policy/registry/resolver/migrations/boundarycheck/contractlint/licensecheck 全 ok）
 
 # 完整负载跑批（15 分钟 @100 QPS，MVP 数据集 100 Cap/50 Prov/500 Binding，本地独占 PG）
-LOAD REPORT: duration=15m0s target_qps=100 requests=89978 actual_qps=100.0 errors=0 (0.0000%) p50=3.647625ms p95=5.170958ms p99=6.559333ms max=326.994458ms
-# 判定：P99 6.56ms ≤ 100ms；错误率 0.0000% < 0.1% —— AC 达标（完整日志 load-full.log）
+# 首录（b27d6a1）：requests=89978 errors=0 (0.0000%) p99=6.56ms —— 已被最终 HEAD 重录替换（审查 P3-7）
+# 重录（10ba1dc，最终 HEAD，R1 整改含 P1 修复后）：
+LOAD REPORT: duration=15m0s target_qps=100 requests=89997 actual_qps=100.0 errors=0 (0.0000%) p50=3.804458ms p95=5.529083ms p99=12.750084ms max=149.011792ms
+# 判定：P99 ≤ 100ms；错误率 0.0000% < 0.1% —— AC 达标（完整日志 load-full.log）
