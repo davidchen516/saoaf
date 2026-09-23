@@ -48,3 +48,13 @@ github.com/golang-jwt/jwt/v5
 github.com/google/cel-go
 # github.com/antlr4-go/antlr/v4 — BSD-3 (cel-go transitive)
 github.com/antlr4-go/antlr/v4
+# cel.dev/expr — Apache-2.0 (cel-go transitive: CEL AST protos)
+cel.dev/expr
+# github.com/golang/protobuf — BSD-3 (cel-go transitive)
+github.com/golang/protobuf
+# github.com/google/go-cmp — BSD-3 (cel-go test transitive)
+github.com/google/go-cmp
+# github.com/stoewer/go-strcase — MIT (cel-go transitive)
+github.com/stoewer/go-strcase
+# golang.org/x/exp — BSD-3 (cel-go transitive)
+golang.org/x/exp
