@@ -3,3 +3,7 @@
 # fixture for the 401 path); assembled at runtime in HEAD, this entry
 # covers the interim commit that carried the literal.
 6f3c933963457364301030741e6bbd13e38e7fe0:internal/platform/middleware/middleware_test.go:jwt:318
+# 2026-09-24: I14 R1 regression test carried a secret-shaped LITERAL in
+# 6b38ac4 ("sk-live-12345" — gitleaks generic-api-key); assembled at
+# runtime in HEAD (639503a). The fingerprint pins the historical commit.
+6b38ac418fb22f87367767b65dd3af731425f85f:internal/exitpack/pack_test.go:generic-api-key:469
