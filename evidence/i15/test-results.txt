@@ -1,0 +1,8 @@
+# I15 exitdrill 全套（9 项 PASS，真实 PG 18.6，含两窗口 kill -9）
+# TestFullTransitionMatrix（显式全矩阵：9×8 对合法+非法断言）
+# TestHappyPathFullCycle（审批人≠发起人 + Finding 整改 + CLOSED 前置 + 审计轨迹）
+# TestDuplicateApprovalIdempotent / TestAbortVsProgressRace（合法序列一致性 + 零未分类错误）
+# TestCloseRequiresResultEvidence（缺证据负向）/ TestCrashWindowsKill9（窗口一/二真实 SIGKILL + 恢复收敛）
+# TestRetryBudgetExhaustion（重试上限→FAILED）/ TestTimeoutSweepRequeue / TestRecoverableDrills
+
+# 全仓 -race：22/22 包 ok（新增 internal/exitdrill）；migration v12；BOUNDARY 27 包 PASS
