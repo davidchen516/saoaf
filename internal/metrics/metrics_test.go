@@ -672,3 +672,84 @@ func seedMetricChain(t *testing.T, store Store, capKey, provKey, bindKey string,
 		t.Fatal(err)
 	}
 }
+
+// R3-P1 回归（审查探针 TestR3SnapshotExpiryFingerprintBlindness 正名）：
+// snapshot valid_until 越界是零写入的时钟事件——提取分类翻转（active→issue）
+// 而指纹必须随之 bump，否则同 revision DO UPDATE 改写 OK 历史。
+func TestSnapshotExpiryBumpsRevision(t *testing.T) {
+	withDBM(t, func(dsn string, store Store) {
+		ctx := context.Background()
+		seedMetricChain(t, store, "cap-exp", "prov-exp", "bind-exp", true)
+		d1, err := store.ExtractDataset(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rev1 := d1.Revision
+
+		// zero-write clock passage: expire the snapshot in place
+		// (the freeze trigger allows valid_until changes)
+		if _, err := store.Pool.Exec(ctx, `
+			UPDATE registry.provider_snapshot
+			SET valid_until = now() - interval '1 hour'
+			WHERE provider_id = (SELECT id FROM registry.resource_provider WHERE provider_key = 'prov-exp')`); err != nil {
+			t.Fatal(err)
+		}
+		d2, err := store.ExtractDataset(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d2.Revision == rev1 {
+			t.Fatalf("snapshot expiry (clock passage) did NOT bump revision (%d) — history rewrite window", rev1)
+		}
+		// the classification flip must be visible in the extracted rows
+		var flipped bool
+		for _, r := range d2.Rows {
+			if r.Capability == "cap-exp" && r.ActiveBindings == 0 && r.BindingIssues == 1 {
+				flipped = true
+			}
+		}
+		if !flipped {
+			t.Fatal("expiry classification not reflected in extraction")
+		}
+		// both revisions' results coexist — history preserved
+		if err := store.PersistResults(ctx, ComputeV1(d1)); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.PersistResults(ctx, ComputeV1(d2)); err != nil {
+			t.Fatal(err)
+		}
+		var rows int
+		_ = store.Pool.QueryRow(ctx, `
+			SELECT count(DISTINCT dataset_revision) FROM saoaf.metric_result
+			WHERE metric_key = 'protocol_compatibility'`).Scan(&rows)
+		if rows != 2 {
+			t.Fatalf("distinct protocol revisions = %d, want 2 (history preserved)", rows)
+		}
+	})
+}
+
+// R3-P1 回归（探针 TestR3SnapshotStateFlipFingerprintBlindness 正名）：
+// snapshot state 原地翻转（freeze trigger 放行 state 变更）→ revision bump。
+func TestSnapshotStateFlipBumpsRevision(t *testing.T) {
+	withDBM(t, func(dsn string, store Store) {
+		ctx := context.Background()
+		seedMetricChain(t, store, "cap-flip", "prov-flip", "bind-flip", true)
+		d1, err := store.ExtractDataset(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Pool.Exec(ctx, `
+			UPDATE registry.provider_snapshot
+			SET state = 'SUSPENDED'
+			WHERE provider_id = (SELECT id FROM registry.resource_provider WHERE provider_key = 'prov-flip')`); err != nil {
+			t.Fatal(err)
+		}
+		d2, err := store.ExtractDataset(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d2.Revision == d1.Revision {
+			t.Fatalf("snapshot state flip did NOT bump revision (%d)", d1.Revision)
+		}
+	})
+}

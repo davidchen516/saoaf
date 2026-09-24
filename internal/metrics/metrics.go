@@ -18,6 +18,8 @@ package metrics
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -68,8 +70,9 @@ type MetricResult struct {
 	EvidenceRef     string
 }
 
-// Dataset is the snapshot of input data the metrics compute over.
-// It carries a monotonic revision; fixed datasets recompute identically.
+// Dataset is the snapshot of input data the metrics compute over. The
+// revision is a CONTENT-ADDRESSED hash (not monotonic — it changes iff
+// the extracted inputs change); identical inputs recompute identically.
 type Dataset struct {
 	Revision int64
 	// Rows is the raw per-dimension input extracted from the live tables
@@ -142,23 +145,44 @@ func (s Store) ExtractDataset(ctx context.Context) (*Dataset, error) {
 			d.Rows[i].DupProviderRows = capProvSeen[key] - 1
 		}
 	}
-	// dataset revision: content-addressed fingerprint over the binding
-	// columns the extraction reads + migration version. R2-P1: the previous
-	// SUM(cb.id) was blind to in-place UPDATEs (suspend/retire keep row
-	// ids) — a routine suspension silently recomputed at the SAME revision
-	// and rewrote history in place. hashtext over (id, state, is_active,
-	// revision) makes any in-place change bump the revision; unchanged
-	// inputs recompute identically.
-	var fingerprint int64
-	if err := s.Pool.QueryRow(ctx, `
-		SELECT (SELECT COALESCE(MAX(version_id), 0) FROM goose_db_version) * 1000000000
-		     + COALESCE(SUM(hashtext(cb.id::text || '|' || cb.state || '|'
-		                             || cb.is_active::text || '|' || cb.revision::text)), 0)
-		FROM registry.capability_binding cb`).Scan(&fingerprint); err != nil {
+	// dataset revision: content-addressed hash over the EXTRACTED rows +
+	// migration version (R3-P1: single-table SQL fingerprints failed twice
+	// — binding-only was blind to snapshot state flips and, worse, to the
+	// zero-write clock passage of valid_until crossing now(), which flips
+	// the extraction classification while the fingerprint stood still and
+	// the same-revision DO UPDATE rewrote OK history in place). Hashing
+	// the extraction OUTPUT covers every input source by construction —
+	// binding in-place updates, snapshot expiry/state flips, and any
+	// future dimension — identical inputs recompute identically.
+	var migrationVersion int64
+	if err := s.Pool.QueryRow(ctx,
+		`SELECT COALESCE(MAX(version_id), 0) FROM goose_db_version`).Scan(&migrationVersion); err != nil {
 		return nil, err
 	}
-	d.Revision = fingerprint
+	d.Revision = contentRevision(migrationVersion, d.Rows)
 	return d, nil
+}
+
+// contentRevision folds the deterministic serialization of the extracted
+// rows (sorted for stability) plus the migration version into a
+// non-negative revision hash.
+func contentRevision(migrationVersion int64, rows []DimRow) int64 {
+	strs := make([]string, len(rows))
+	for i, r := range rows {
+		strs[i] = fmt.Sprintf("%s|%s|%s|%s|%s|%d|%d|%d|%d|%v",
+			r.Capability, r.Provider, r.Vendor, r.Environment, r.Tenant,
+			r.ActiveBindings, r.BindingsWithSubstitute, r.BindingIssues,
+			r.DupProviderRows, r.UnknownVendor)
+	}
+	sort.Strings(strs)
+	h := sha256.New()
+	fmt.Fprintf(h, "mv=%d;", migrationVersion)
+	for _, s := range strs {
+		h.Write([]byte(s))
+		h.Write([]byte{';'})
+	}
+	sum := h.Sum(nil)
+	return int64(binary.BigEndian.Uint64(sum[:8]) &^ (1 << 63)) // non-negative
 }
 
 // DimRow is one aggregation input row.
@@ -478,7 +502,7 @@ func (s Store) History(ctx context.Context, metricKey string, dims map[string]st
 		       dataset_revision, formula_version, evidence_ref, computed_at
 		FROM saoaf.metric_result
 		WHERE metric_key = $1 AND dimensions = $2::jsonb
-		ORDER BY dataset_revision, formula_version`, metricKey, dimsJSON)
+		ORDER BY computed_at, formula_version`, metricKey, dimsJSON)
 	if err != nil {
 		return nil, err
 	}

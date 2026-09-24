@@ -46,7 +46,14 @@
 | R2-P3-2 维度过滤对 tenant/vendor 恒空 | 如实修正：公式当前只发射 {capability} 与 {} 维度——README 表述降为「公式发射的维度（capability；全局）」；tenant/vendor/provider/environment 维度发射挂证据完整率批次（I14/I17） | 文档修正 |
 | R2-P3-3 README 陈旧「DO NOTHING」文案 | 更正为 DO UPDATE SET last_seen_at | 文档修正 |
 
-## 已知限制（挂账，审查 R1/R2 裁决口径）
+## 审查 R3 整改（终轮复审新发现）
+
+| Finding | 修复 | 回归 |
+|---|---|---|
+| R3-P1 指纹对 snapshot 维度失明（R2-P2 接线后暴露：valid_until 越界是零写入时钟事件——分类翻转指纹不变，同 revision DO UPDATE 改写 OK 历史；探针两条路径端到端复现） | 指纹改为**提取输出的内容寻址哈希**（Go 侧：行序列化稳定排序 + 迁移版本 → sha256 → 非负折叠）——按构造覆盖所有输入源（binding 原地变更、snapshot 过期/状态翻转、未来新增维度），杜绝第三次复发（审查员方案 b） | `TestSnapshotExpiryBumpsRevision`（零写入时钟越界 → bump + 双 revision 并存）、`TestSnapshotStateFlipBumpsRevision` |
+| R3-P3 revision「monotonic」注释失实 + History 按哈希排序无时间语义 | 注释改「content-addressed hash — NOT monotonic」；History 改 ORDER BY computed_at | — |
+
+## 已知限制（挂账，审查 R1/R2/R3 裁决口径）
 
 - **真实运行记录与监控导出**（关闭判定第 3 项的运行面）：提取器已交付使管道闭环可行，但**生产数据集的一次完整聚合运行 + 监控曲线导出**需调度器接线与生产数据——挂 I17 批次；按审查口径，Issue 关闭在补齐前为 **NOT PROVEN 保留 OPEN**（与 #5/#11 同先例）。
 - 证据完整率/Exit Pack 完整率的完整聚合（依赖 I14 Exit Pack Registry 数据面）→ 挂 I14 就绪后接入（表结构与 ComputeV1 框架已就位）。
