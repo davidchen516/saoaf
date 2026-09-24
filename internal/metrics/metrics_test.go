@@ -470,3 +470,205 @@ func TestProtocolCompatibilityIsARatio(t *testing.T) {
 	}
 	t.Fatal("protocol ratio row missing")
 }
+
+// R2-P1 回归（审查探针 TestR2SuspendPathCollision + TestR2HistoryRewriteEndToEnd
+// 正名）：生产 suspend（原地 UPDATE）必须 bump revision——同 revision 静默改写
+// 历史曾端到端复现，击穿「固定数据集可重复」根基。
+func TestRevisionBumpsOnInPlaceUpdate(t *testing.T) {
+	withDBM(t, func(dsn string, store Store) {
+		ctx := context.Background()
+		// seed one live binding chain
+		seedMetricChain(t, store, "cap-r", "prov-r", "bind-r", true)
+		d1, err := store.ExtractDataset(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rev1 := d1.Revision
+
+		// PRODUCTION suspend path: in-place UPDATE (binding/store.go's own
+		// statement) — row id unchanged
+		if _, err := store.Pool.Exec(ctx, `
+			UPDATE registry.capability_binding
+			SET state = 'SUSPENDED', revision = revision + 1
+			WHERE binding_key = 'bind-r' AND state = 'PUBLISHED' AND is_active`); err != nil {
+			t.Fatal(err)
+		}
+		d2, err := store.ExtractDataset(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d2.Revision == rev1 {
+			t.Fatalf("in-place suspend did NOT bump revision (%d == %d) — history rewrite window", rev1, d2.Revision)
+		}
+		// the pipeline result at the new revision must NOT overwrite the
+		// old revision's rows (separate revision → separate rows)
+		if err := store.PersistResults(ctx, ComputeV1(d1)); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.PersistResults(ctx, ComputeV1(d2)); err != nil {
+			t.Fatal(err)
+		}
+		var rows int
+		if err := store.Pool.QueryRow(ctx, `
+			SELECT count(*) FROM saoaf.metric_result
+			WHERE metric_key = 'protocol_compatibility'`).Scan(&rows); err != nil {
+			t.Fatal(err)
+		}
+		if rows != 2 {
+			t.Fatalf("protocol rows = %d, want 2 (one per revision — history preserved)", rows)
+		}
+	})
+}
+
+// R2-P2 回归：过期 Snapshot 在真实管道可达——binding 钉住的 snapshot 过期
+// → 提取为 issue 行（此前仅 fixture 语义）。
+func TestExpiredSnapshotReachableInPipeline(t *testing.T) {
+	withDBM(t, func(dsn string, store Store) {
+		ctx := context.Background()
+		// healthy chain
+		seedMetricChain(t, store, "cap-h", "prov-h", "bind-h", true)
+		// expired-snapshot chain
+		seedMetricChain(t, store, "cap-s", "prov-s", "bind-s", false)
+		d, err := store.ExtractDataset(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var staleFound bool
+		for _, r := range d.Rows {
+			if r.Capability == "cap-s" {
+				staleFound = true
+				if r.ActiveBindings != 0 || r.BindingIssues != 1 {
+					t.Fatalf("expired-snapshot row = %+v, want issues=1 active=0 (pipeline-reachable)", r)
+				}
+			}
+		}
+		if !staleFound {
+			t.Fatal("expired-snapshot binding not extracted at all")
+		}
+	})
+}
+
+// R2-P3-1 回归：同一 provider 服务多个 capability 不再误报 duplicate。
+func TestCrossCapabilityProviderNotDuplicate(t *testing.T) {
+	withDBM(t, func(dsn string, store Store) {
+		ctx := context.Background()
+		// one provider serving two capabilities (legitimate)
+		if _, err := store.Pool.Exec(ctx, `
+			INSERT INTO registry.resource_provider
+				(provider_key, provider_type, endpoint_ref, owner_ref, workload_identity, state, revision, active_revision)
+			VALUES ('prov-multi', 'MODEL', 'svc://m', 'vendor-m', 'spiffe://saoaf.test/m', 'PUBLISHED', 1, 1)`); err != nil {
+			t.Fatal(err)
+		}
+		var pid int
+		if err := store.Pool.QueryRow(ctx,
+			`SELECT id FROM registry.resource_provider WHERE provider_key='prov-multi'`).Scan(&pid); err != nil {
+			t.Fatal(err)
+		}
+		var snapID int64
+		if err := store.Pool.QueryRow(ctx, `
+			INSERT INTO registry.provider_snapshot
+				(provider_id, snapshot_version, contract_version, digest, signature, workload_identity,
+				 profiles, generated_at, valid_until, state)
+			VALUES ($1, 1, '2026.09', 'sha256:4444444444444444444444444444444444444444444444444444444444444444', 's',
+			       'spiffe://saoaf.test/m', '[]'::jsonb, now(), now() + interval '1 day', 'PUBLISHED')
+			RETURNING id`, pid).Scan(&snapID); err != nil {
+			t.Fatal(err)
+		}
+		for ci, cap := range []string{"cap-m1", "cap-m2"} {
+			if _, err := store.Pool.Exec(ctx, `
+				INSERT INTO registry.capability_definition
+					(capability_key, major_version, revision, resource_type, requirement_schema, state, owner_ref)
+				VALUES ($1, 1, 1, 'MODEL', '{}', 'PUBLISHED', 'u')`, cap); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Pool.Exec(ctx, `
+				INSERT INTO registry.capability_binding
+					(binding_key, capability_id, provider_id, snapshot_id, profile_or_action,
+					 environment, scope, scope_hash, priority, state, revision, is_active)
+				SELECT $1, cd.id, $2, $3, 'p', 'production', '{}'::jsonb, 'sha256:x', $5, 'PUBLISHED', 1, TRUE
+				FROM registry.capability_definition cd WHERE cd.capability_key = $4`,
+				"bind-"+cap, pid, snapID, cap, 100+ci); err != nil {
+				t.Fatal(err)
+			}
+		}
+		d, err := store.ExtractDataset(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range d.Rows {
+			if r.DupProviderRows > 0 {
+				t.Fatalf("cross-capability provider flagged as duplicate: %+v", r)
+			}
+		}
+		// a TRUE duplicate: same (cap, provider) on two rows
+		if _, err := store.Pool.Exec(ctx, `
+			INSERT INTO registry.capability_binding
+				(binding_key, capability_id, provider_id, snapshot_id, profile_or_action,
+				 environment, scope, scope_hash, priority, state, revision, is_active)
+			SELECT 'bind-m1-dup', cd.id, $1, $2, 'p', 'production', '{}'::jsonb, 'sha256:y', 200, 'PUBLISHED', 1, TRUE
+			FROM registry.capability_definition cd WHERE cd.capability_key = 'cap-m1'`,
+			pid, snapID); err != nil {
+			t.Fatal(err)
+		}
+		d2, err := store.ExtractDataset(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sawDup bool
+		for _, r := range d2.Rows {
+			if r.Capability == "cap-m1" && r.Provider == "prov-multi" && r.DupProviderRows > 0 {
+				sawDup = true
+			}
+		}
+		if !sawDup {
+			t.Fatal("true same-capability duplicate not detected")
+		}
+	})
+}
+
+// seedMetricChain seeds a capability/provider/snapshot/binding chain; the
+// snapshot is healthy or expired.
+func seedMetricChain(t *testing.T, store Store, capKey, provKey, bindKey string, healthy bool) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := store.Pool.Exec(ctx, `
+		INSERT INTO registry.capability_definition
+			(capability_key, major_version, revision, resource_type, requirement_schema, state, owner_ref)
+		VALUES ($1, 1, 1, 'MODEL', '{}', 'PUBLISHED', 'u')`, capKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Pool.Exec(ctx, `
+		INSERT INTO registry.resource_provider
+			(provider_key, provider_type, endpoint_ref, owner_ref, workload_identity, state, revision, active_revision)
+		VALUES ($1, 'MODEL', 'svc://x', 'vendor-r', 'spiffe://saoaf.test/x', 'PUBLISHED', 1, 1)`, provKey); err != nil {
+		t.Fatal(err)
+	}
+	var pid int
+	if err := store.Pool.QueryRow(ctx,
+		`SELECT id FROM registry.resource_provider WHERE provider_key = $1`, provKey).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	validity := "now() + interval '1 day'"
+	if !healthy {
+		validity = "now() - interval '1 hour'"
+	}
+	var snapID int64
+	if err := store.Pool.QueryRow(ctx, fmt.Sprintf(`
+		INSERT INTO registry.provider_snapshot
+			(provider_id, snapshot_version, contract_version, digest, signature, workload_identity,
+			 profiles, generated_at, valid_until, state)
+		VALUES (%d, 1, '2026.09', 'sha256:5555555555555555555555555555555555555555555555555555555555555555', 's',
+		       'spiffe://saoaf.test/x', '[]'::jsonb, now() - interval '2 hour', %s, 'PUBLISHED')
+		RETURNING id`, pid, validity)).Scan(&snapID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Pool.Exec(ctx, `
+		INSERT INTO registry.capability_binding
+			(binding_key, capability_id, provider_id, snapshot_id, profile_or_action,
+			 environment, scope, scope_hash, priority, state, revision, is_active)
+		SELECT $1, cd.id, $2, $3, 'p', 'production', '{}'::jsonb, 'sha256:x', $5, 'PUBLISHED', 1, TRUE
+		FROM registry.capability_definition cd WHERE cd.capability_key = $4`,
+		bindKey, pid, snapID, capKey, 100+int(bindKey[len(bindKey)-1])); err != nil {
+		t.Fatal(err)
+	}
+}

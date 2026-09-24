@@ -36,7 +36,17 @@
 | P3-1/4 | 并发测试错误显式传播（atomic.CAS）；死代码清除 | 既有套件 |
 | P3-2/5 | Latest 语义（最近计算时间序）文档化；「当前生效公式」为调用方约定——挂 I17 管理面批次给系统状态 | — |
 
-## 已知限制（挂账，审查 R1 裁决口径）
+## 审查 R2 整改（复审新发现）
+
+| Finding | 修复 | 回归 |
+|---|---|---|
+| R2-P1 指纹对原地 UPDATE 失明（生产 suspend 原句 SQL 下同 revision 静默改写历史——审查探针端到端复现） | revision 改为**内容寻址指纹**：`SUM(hashtext(id \| state \| is_active \| revision))`——任何原地变更 bump revision；未变输入同 revision | `TestRevisionBumpsOnInPlaceUpdate`（生产 suspend 原句 → revision 变化 + 双 revision 行并存历史保留） |
+| R2-P2 过期 Snapshot 管道不可达（仅 fixture 语义） | 提取器 JOIN `provider_snapshot`：binding 钉住的 snapshot 过期/未发布 → 提取为 issue 行（active=0, issues=1） | `TestExpiredSnapshotReachableInPipeline` |
+| R2-P3-1 跨 capability 复用 provider 误报 duplicate | duplicate 语义改为同 (capability, provider) 多行（真重复）；跨 capability 服务合法 | `TestCrossCapabilityProviderNotDuplicate`（正负双向） |
+| R2-P3-2 维度过滤对 tenant/vendor 恒空 | 如实修正：公式当前只发射 {capability} 与 {} 维度——README 表述降为「公式发射的维度（capability；全局）」；tenant/vendor/provider/environment 维度发射挂证据完整率批次（I14/I17） | 文档修正 |
+| R2-P3-3 README 陈旧「DO NOTHING」文案 | 更正为 DO UPDATE SET last_seen_at | 文档修正 |
+
+## 已知限制（挂账，审查 R1/R2 裁决口径）
 
 - **真实运行记录与监控导出**（关闭判定第 3 项的运行面）：提取器已交付使管道闭环可行，但**生产数据集的一次完整聚合运行 + 监控曲线导出**需调度器接线与生产数据——挂 I17 批次；按审查口径，Issue 关闭在补齐前为 **NOT PROVEN 保留 OPEN**（与 #5/#11 同先例）。
 - 证据完整率/Exit Pack 完整率的完整聚合（依赖 I14 Exit Pack Registry 数据面）→ 挂 I14 就绪后接入（表结构与 ComputeV1 框架已就位）。

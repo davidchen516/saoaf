@@ -86,27 +86,30 @@ func (s Store) ExtractDataset(ctx context.Context) (*Dataset, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT cd.capability_key, rp.provider_key, rp.owner_ref,
 		       cb.environment,
-		       CASE WHEN cb.state = 'PUBLISHED' AND cb.is_active THEN 1 ELSE 0 END,
+		       CASE WHEN cb.state = 'PUBLISHED' AND cb.is_active
+		            AND ps.state = 'PUBLISHED' AND ps.valid_until > now() THEN 1 ELSE 0 END,
 		       CASE WHEN cb.state = 'PUBLISHED' AND cb.is_active
 		            AND EXISTS (SELECT 1 FROM registry.capability_binding cb2
 		                        WHERE cb2.capability_id = cb.capability_id
 		                          AND cb2.state = 'PUBLISHED' AND cb2.is_active
 		                          AND cb2.provider_id <> cb.provider_id)
 		            THEN 1 ELSE 0 END,
-		       CASE WHEN cb.state <> 'PUBLISHED' OR NOT cb.is_active THEN 1 ELSE 0 END,
+		       CASE WHEN cb.state <> 'PUBLISHED' OR NOT cb.is_active
+		             OR ps.state <> 'PUBLISHED' OR ps.valid_until <= now()
+		            THEN 1 ELSE 0 END,
 		       0,  -- dup provider rows: computed below
 		       CASE WHEN rp.owner_ref = '' THEN TRUE ELSE FALSE END,
 		       cb.tenant_ref
 		FROM registry.capability_definition cd
 		JOIN registry.capability_binding cb ON cb.capability_id = cd.id
 		JOIN registry.resource_provider rp ON rp.id = cb.provider_id
+		JOIN registry.provider_snapshot ps ON ps.id = cb.snapshot_id
 		ORDER BY cd.capability_key, rp.provider_key, cb.environment, cb.revision`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	d := &Dataset{}
-	var providerSeen = map[string]int{}
 	for rows.Next() {
 		var r DimRow
 		var active, withSub, issues int
@@ -121,24 +124,36 @@ func (s Store) ExtractDataset(ctx context.Context) (*Dataset, error) {
 		r.BindingIssues = issues
 		r.UnknownVendor = unknownVendor
 		r.DupProviderRows = dup
-		providerSeen[r.Provider]++
 		d.Rows = append(d.Rows, r)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// duplicate providers: a provider key spanning multiple rows
+	// duplicate providers: the same (capability, provider) pair spanning
+	// multiple rows is a genuine duplicate signal. A provider legitimately
+	// serving several capabilities is NOT a duplicate (review R2 P3-1).
+	type capProv struct{ cap, prov string }
+	capProvSeen := map[capProv]int{}
+	for _, r := range d.Rows {
+		capProvSeen[capProv{r.Capability, r.Provider}]++
+	}
 	for i := range d.Rows {
-		if providerSeen[d.Rows[i].Provider] > 1 {
-			d.Rows[i].DupProviderRows = providerSeen[d.Rows[i].Provider] - 1
+		if key := (capProv{d.Rows[i].Capability, d.Rows[i].Provider}); capProvSeen[key] > 1 {
+			d.Rows[i].DupProviderRows = capProvSeen[key] - 1
 		}
 	}
-	// dataset revision: migration version + input fingerprint (a fixed
-	// snapshot recomputes identically; a changed input bumps the revision)
+	// dataset revision: content-addressed fingerprint over the binding
+	// columns the extraction reads + migration version. R2-P1: the previous
+	// SUM(cb.id) was blind to in-place UPDATEs (suspend/retire keep row
+	// ids) — a routine suspension silently recomputed at the SAME revision
+	// and rewrote history in place. hashtext over (id, state, is_active,
+	// revision) makes any in-place change bump the revision; unchanged
+	// inputs recompute identically.
 	var fingerprint int64
 	if err := s.Pool.QueryRow(ctx, `
 		SELECT (SELECT COALESCE(MAX(version_id), 0) FROM goose_db_version) * 1000000000
-		     + COALESCE(SUM(cb.id), 0)
+		     + COALESCE(SUM(hashtext(cb.id::text || '|' || cb.state || '|'
+		                             || cb.is_active::text || '|' || cb.revision::text)), 0)
 		FROM registry.capability_binding cb`).Scan(&fingerprint); err != nil {
 		return nil, err
 	}
