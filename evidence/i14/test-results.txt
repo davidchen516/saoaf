@@ -1,0 +1,7 @@
+# I14 exitpack 全套（8 项 PASS，真实 PG 18.6，-race）
+# TestCompletenessNegatives（四类缺失逐项 reason code）/ TestValidateActivateIdempotent（含导出 digest 往返校验）
+# TestExportTamperDetection（红→绿：单字节翻转检测）/ TestExportForbiddenScan（密钥红线）
+# TestConcurrentActivateSingleActive（部分唯一索引恰一 ACTIVE）/ TestVerifiedRevisionImmutable（trigger 23514）
+# TestExpirySweepAndRiskView（EXPIRED + 风险视图）/ TestRollbackToPreviousValidated（SUPERSEDED→ACTIVE 回滚）
+
+# 全仓 -race：21/21 包 ok（新增 internal/exitpack）；migration v11；BOUNDARY 26 包 PASS
