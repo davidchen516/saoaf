@@ -145,8 +145,8 @@ func (s Store) ExtractDataset(ctx context.Context) (*Dataset, error) {
 			d.Rows[i].DupProviderRows = capProvSeen[key] - 1
 		}
 	}
-	// dataset revision: content-addressed hash over the EXTRACTED rows +
-	// migration version (R3-P1: single-table SQL fingerprints failed twice
+	// dataset revision: content-addressed hash over the EXTRACTED rows and
+	// the migration version (R3-P1: single-table SQL fingerprints failed twice
 	// — binding-only was blind to snapshot state flips and, worse, to the
 	// zero-write clock passage of valid_until crossing now(), which flips
 	// the extraction classification while the fingerprint stood still and
@@ -167,9 +167,11 @@ func (s Store) ExtractDataset(ctx context.Context) (*Dataset, error) {
 // rows (sorted for stability) plus the migration version into a
 // non-negative revision hash.
 func contentRevision(migrationVersion int64, rows []DimRow) int64 {
+	// %q quoting per field removes the separator-ambiguity collision the
+	// R4 probe demonstrated for raw '|'-joins ("a|b","c") ≡ ("a","b|c")
 	strs := make([]string, len(rows))
 	for i, r := range rows {
-		strs[i] = fmt.Sprintf("%s|%s|%s|%s|%s|%d|%d|%d|%d|%v",
+		strs[i] = fmt.Sprintf("%q,%q,%q,%q,%q,%d,%d,%d,%d,%v",
 			r.Capability, r.Provider, r.Vendor, r.Environment, r.Tenant,
 			r.ActiveBindings, r.BindingsWithSubstitute, r.BindingIssues,
 			r.DupProviderRows, r.UnknownVendor)
@@ -449,8 +451,10 @@ func upsertAlert(ctx context.Context, tx pgx.Tx, rule, entityKind, entityID stri
 
 // Latest returns the newest result per (metric, dims) for the given
 // formula version — the query API surface (GWT#1: 与上次运行完全一致 + 下钻三元组).
-// dimsFilter narrows by dimension keys (capability / provider / vendor /
-// environment / tenant — the dims the formulas emit); since/computedUntil
+// dimsFilter narrows by dimension containment — in practice the dims the
+// formulas currently emit are {capability} and the global {} (tenant /
+// vendor emission is ledgered to the evidence-completeness batch);
+// since/computedUntil
 // bound the computation time (review R1 P2-1: the previous surface had
 // only formula+metric filters).
 func (s Store) Latest(ctx context.Context, formulaVersion, metricKey string, dimsFilter map[string]string, since, computedUntil time.Time, limit int) ([]MetricResult, error) {
