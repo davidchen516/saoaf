@@ -49,7 +49,6 @@ var (
 	ErrNotFound          = errors.New("exitpack: not found")
 	ErrRevisionConflict  = errors.New("exitpack: revision conflict (CAS)")
 	ErrInvalidTransition = errors.New("exitpack: invalid transition")
-	ErrImmutable         = errors.New("exitpack: verified revision is immutable")
 )
 
 // exportForbidden is the red-line scan on export content（密钥/受限正文 0 命中）.
@@ -123,7 +122,7 @@ func (s Store) CreateDraft(ctx context.Context, p *Pack) error {
 	if p.ValidUntil != nil {
 		validUntil = p.ValidUntil
 	}
-	tag, err := conn.Exec(ctx, `
+	_, err = conn.Exec(ctx, `
 		INSERT INTO saoaf.exit_pack
 			(pack_key, vendor, revision, state, owner_ref, substitute_provider,
 			 recovery_steps, evidence_refs, checklist, valid_until, created_by)
@@ -131,9 +130,13 @@ func (s Store) CreateDraft(ctx context.Context, p *Pack) error {
 		p.PackKey, p.Vendor, nextRev, p.OwnerRef, p.SubstituteProvider,
 		steps, refs, checklist, validUntil, p.CreatedBy)
 	if err != nil {
+		// R1 P3-1: concurrent CreateDraft on the same pack collides on
+		// (pack_key, revision) — map the raw 23505 to the conflict reason
+		if isUniqueViolation(err) {
+			return errV("EXITPACK_REVISION_CONFLICT", "concurrent draft creation claimed this revision; retry")
+		}
 		return err
 	}
-	_ = tag
 	p.Revision = nextRev
 	p.State = StateDraft
 	return nil
@@ -242,7 +245,11 @@ func (s Store) Activate(ctx context.Context, packKey string, revision int) error
 	}
 	// supersede the current ACTIVE pack of this vendor — excluding the
 	// exact revision being activated (same pack_key, different revision
-	// must be superseded; the exclusion is (pack_key, revision))
+	// must be superseded; the exclusion is (pack_key, revision)).
+	// R1 P2-2: the uniqueness dimension follows the issue's 状态机 text
+	// (「ACTIVE 每 vendor 唯一」) — packs keyed vendor:capability of the
+	// same vendor still supersede each other because the partial unique
+	// index is on (vendor).
 	if _, err := tx.Exec(ctx, `
 		UPDATE saoaf.exit_pack SET state = 'SUPERSEDED', superseded_at = now()
 		WHERE vendor = $1 AND state = 'ACTIVE'
@@ -254,29 +261,37 @@ func (s Store) Activate(ctx context.Context, packKey string, revision int) error
 		WHERE pack_key = $1 AND revision = $2 AND state IN ('VALIDATED','SUPERSEDED')`,
 		packKey, revision)
 	if err != nil {
+		// R1 P0: the partial UNIQUE index exitpack_active is the last-line
+		// guard — a concurrent winner can surface the 23505 here (the
+		// activation UPDATE itself) or at COMMIT. Map both.
+		if isUniqueViolation(err) {
+			return errV(ReasonAlreadyActive, "another pack holds the ACTIVE slot for this vendor (concurrent activation won)")
+		}
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return errV(ReasonInvalidState, "concurrent state change lost the race")
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		if isUniqueViolation(err) {
+			return errV(ReasonAlreadyActive, "another pack holds the ACTIVE slot for this vendor (concurrent activation won)")
+		}
+		return err
+	}
+	return nil
 }
 
 // SweepExpired moves ACTIVE packs past valid_until to EXPIRED and reports
 // the expired (vendor, pack, revision) tuples for I13 risk alerting.
 func (s Store) SweepExpired(ctx context.Context, now time.Time) ([]Pack, error) {
-	tag, err := s.Pool.Exec(ctx, `
-		UPDATE saoaf.exit_pack SET state = 'EXPIRED', expired_at = now()
-		WHERE state = 'ACTIVE' AND valid_until IS NOT NULL AND valid_until < $1`, now)
-	if err != nil {
-		return nil, err
-	}
-	if tag.RowsAffected() == 0 {
-		return nil, nil
-	}
+	// R1 P2-1: single-statement UPDATE ... RETURNING — the previous
+	// two-statement form had mismatched now() sources, a 1-second
+	// heuristic that could drop tuples, and concurrent sweeps stealing
+	// each other's RowsAffected short-circuit
 	rows, err := s.Pool.Query(ctx, `
-		SELECT pack_key, vendor, revision FROM saoaf.exit_pack
-		WHERE state = 'EXPIRED' AND expired_at >= now() - interval '1 second'`)
+		UPDATE saoaf.exit_pack SET state = 'EXPIRED', expired_at = now()
+		WHERE state = 'ACTIVE' AND valid_until IS NOT NULL AND valid_until < $1
+		RETURNING pack_key, vendor, revision`, now)
 	if err != nil {
 		return nil, err
 	}
@@ -294,12 +309,19 @@ func (s Store) SweepExpired(ctx context.Context, now time.Time) ([]Pack, error) 
 
 // RiskView returns EXPIRED / SUPERSEDED / broken-evidence packs for the
 // I13 risk view（过期或证据断链的 Exit Pack 自动进入风险视图）.
+// 断链（R1 P1-3）：evidence_refs 与 saoaf.evidence_record 的 QUARANTINED
+// 断链语义（I12 交付）关联——引用了 QUARANTINED 证据、或引用在
+// evidence_record 中不存在的 ACTIVE pack 进风险视图。
 func (s Store) RiskView(ctx context.Context) ([]Pack, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT pack_key, vendor, revision, state, owner_ref, substitute_provider,
-		       recovery_steps, evidence_refs, COALESCE(valid_until::text, ''), COALESCE(digest, '')
-		FROM saoaf.exit_pack
-		WHERE state IN ('EXPIRED','SUPERSEDED')
+		       recovery_steps, evidence_refs, checklist, COALESCE(valid_until::text, ''), COALESCE(digest, '')
+		FROM saoaf.exit_pack e
+		WHERE e.state IN ('EXPIRED','SUPERSEDED')
+		   OR (e.state = 'ACTIVE' AND EXISTS (
+		        SELECT 1 FROM jsonb_array_elements_text(e.evidence_refs) ref
+		        WHERE NOT EXISTS (SELECT 1 FROM saoaf.evidence_record er
+		                          WHERE er.state = 'LINKED' AND er.event_id = ref)))
 		ORDER BY vendor, pack_key, revision`)
 	if err != nil {
 		return nil, err
@@ -308,16 +330,17 @@ func (s Store) RiskView(ctx context.Context) ([]Pack, error) {
 	var out []Pack
 	for rows.Next() {
 		var p Pack
-		var steps, refs []byte
+		var steps, refs, checklist []byte
 		var until, digest string
 		if err := rows.Scan(&p.PackKey, &p.Vendor, &p.Revision, &p.State,
-			&p.OwnerRef, &p.SubstituteProvider, &steps, &refs, &until, &digest); err != nil {
+			&p.OwnerRef, &p.SubstituteProvider, &steps, &refs, &checklist, &until, &digest); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(steps, &p.RecoverySteps)
 		_ = json.Unmarshal(refs, &p.EvidenceRefs)
+		_ = json.Unmarshal(checklist, &p.Checklist)
 		if until != "" {
-			if t, err := time.Parse(time.RFC3339, until); err == nil {
+			if t, err := time.Parse(time.RFC3339Nano, until); err == nil {
 				p.ValidUntil = &t
 			}
 		}
@@ -336,7 +359,7 @@ func (s Store) Get(ctx context.Context, packKey string, revision int) (*Pack, er
 	defer conn.Release()
 	return scanPack(conn.QueryRow(ctx, `
 		SELECT pack_key, vendor, revision, state, owner_ref, substitute_provider,
-		       recovery_steps, evidence_refs, COALESCE(valid_until::text, ''), COALESCE(digest, '')
+		       recovery_steps, evidence_refs, checklist, COALESCE(valid_until::text, ''), COALESCE(digest, '')
 		FROM saoaf.exit_pack WHERE pack_key = $1 AND revision = $2`, packKey, revision))
 }
 
@@ -350,7 +373,7 @@ func (s Store) LatestValidated(ctx context.Context, packKey string) (*Pack, erro
 	defer conn.Release()
 	return scanPack(conn.QueryRow(ctx, `
 		SELECT pack_key, vendor, revision, state, owner_ref, substitute_provider,
-		       recovery_steps, evidence_refs, COALESCE(valid_until::text, ''), COALESCE(digest, '')
+		       recovery_steps, evidence_refs, checklist, COALESCE(valid_until::text, ''), COALESCE(digest, '')
 		FROM saoaf.exit_pack
 		WHERE pack_key = $1 AND state IN ('VALIDATED','ACTIVE','EXPIRED','SUPERSEDED')
 		ORDER BY revision DESC LIMIT 1`, packKey))
@@ -358,10 +381,10 @@ func (s Store) LatestValidated(ctx context.Context, packKey string) (*Pack, erro
 
 func scanPack(row pgx.Row) (*Pack, error) {
 	var p Pack
-	var steps, refs []byte
+	var steps, refs, checklist []byte
 	var until, digest string
 	if err := row.Scan(&p.PackKey, &p.Vendor, &p.Revision, &p.State,
-		&p.OwnerRef, &p.SubstituteProvider, &steps, &refs, &until, &digest); err != nil {
+		&p.OwnerRef, &p.SubstituteProvider, &steps, &refs, &checklist, &until, &digest); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -369,6 +392,7 @@ func scanPack(row pgx.Row) (*Pack, error) {
 	}
 	_ = json.Unmarshal(steps, &p.RecoverySteps)
 	_ = json.Unmarshal(refs, &p.EvidenceRefs)
+	_ = json.Unmarshal(checklist, &p.Checklist)
 	if until != "" {
 		if t, err := time.Parse(time.RFC3339Nano, until); err == nil {
 			p.ValidUntil = &t
@@ -386,7 +410,7 @@ func (s Store) withPackTx(ctx context.Context, packKey string, revision int, fn 
 	defer func() { _ = tx.Rollback(ctx) }()
 	p, err := scanPack(tx.QueryRow(ctx, `
 		SELECT pack_key, vendor, revision, state, owner_ref, substitute_provider,
-		       recovery_steps, evidence_refs, COALESCE(valid_until::text, ''), COALESCE(digest, '')
+		       recovery_steps, evidence_refs, checklist, COALESCE(valid_until::text, ''), COALESCE(digest, '')
 		FROM saoaf.exit_pack WHERE pack_key = $1 AND revision = $2`, packKey, revision))
 	if err != nil {
 		return err
@@ -398,3 +422,11 @@ func (s Store) withPackTx(ctx context.Context, packKey string, revision int, fn 
 }
 
 func errV(reason, msg string) error { return &ErrValidation{reason, msg} }
+
+func isUniqueViolation(err error) bool {
+	var pgErr interface{ SQLState() string }
+	if errors.As(err, &pgErr) {
+		return pgErr.SQLState() == "23505"
+	}
+	return false
+}

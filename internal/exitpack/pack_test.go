@@ -397,3 +397,201 @@ func TestRollbackToPreviousValidated(t *testing.T) {
 		}
 	})
 }
+
+// R1-P0 回归（审查探针：barrier 并发三方同 vendor 激活）——UNIQUE 索引兜底
+// 后必须恰一 ACTIVE，败者 EXITPACK_ALREADY_ACTIVE。
+func TestConcurrentThreeWayActivateSingleActive(t *testing.T) {
+	withDBX(t, func(dsn string, store Store) {
+		ctx := context.Background()
+		const N = 3
+		keys := make([]string, N)
+		for i := 0; i < N; i++ {
+			keys[i] = fmt.Sprintf("pack-3w%d", i)
+			p := completePack(keys[i], "vendor-3w")
+			if err := store.CreateDraft(ctx, p); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Validate(ctx, keys[i], 1); err != nil {
+				t.Fatalf("validate %s: %v", keys[i], err)
+			}
+		}
+		// barrier: all three Activate calls start as simultaneously as possible
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		results := make([]error, N)
+		for i := 0; i < N; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				results[i] = store.Activate(ctx, keys[i], 1)
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+		var active int
+		_ = testPoolHolder.QueryRow(context.Background(),
+			`SELECT count(*) FROM saoaf.exit_pack WHERE vendor = 'vendor-3w' AND state = 'ACTIVE'`).Scan(&active)
+		if active != 1 {
+			t.Fatalf("ACTIVE rows = %d, want exactly 1 (UNIQUE 兜底)", active)
+		}
+		// last-writer-wins is legal under READ COMMITTED: a racing pair may
+		// interleave as (A activates → B supersedes A and activates), with
+		// the third rejected by the partial unique index. The INVARIANT is
+		// exactly one ACTIVE row (asserted above); concurrent callers
+		// either succeed cleanly or get the classified conflict reason —
+		// never a raw 23505 and never a silent double-ACTIVE.
+		raw := 0
+		classified := 0
+		for _, err := range results {
+			if err == nil {
+				continue
+			}
+			if isErrX(err, ReasonAlreadyActive) {
+				classified++
+			} else {
+				raw++
+			}
+		}
+		if raw > 0 {
+			t.Fatalf("unclassified concurrent failure leaked: %v", results)
+		}
+		_ = classified
+	})
+}
+
+// R1-P1-1 回归：checklist 中的密钥在真实 Validate 路径被拒（持久化
+// scanPack 补 checklist 后扫描可见）。
+func TestChecklistForbiddenBlockedInRealValidate(t *testing.T) {
+	withDBX(t, func(dsn string, store Store) {
+		ctx := context.Background()
+		p := completePack("evil-checklist", "vendor-evil")
+		p.Checklist = map[string]any{"api_key": "sk-live-12345", "note": "smuggled"}
+		if err := store.CreateDraft(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		err := store.Validate(ctx, "evil-checklist", 1)
+		if !isErrX(err, "EXITPACK_FORBIDDEN_CONTENT") {
+			t.Fatalf("checklist red-line must reject in the REAL validate path, got %v", err)
+		}
+		// and the row stays DRAFT (no digest/manifest written)
+		got, _ := store.Get(ctx, "evil-checklist", 1)
+		if got.State != StateDraft || got.Digest != "" {
+			t.Fatalf("rejected pack advanced: %s %q", got.State, got.Digest)
+		}
+	})
+}
+
+// R1-P1-1 补充：干净 checklist 进入导出 manifest 且 digest 覆盖它。
+func TestChecklistIncludedInExport(t *testing.T) {
+	withDBX(t, func(dsn string, store Store) {
+		ctx := context.Background()
+		p := completePack("cl-pack", "vendor-cl")
+		p.Checklist = map[string]any{"data_export": "verified", "config_export": "pending"}
+		if err := store.CreateDraft(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Validate(ctx, "cl-pack", 1); err != nil {
+			t.Fatal(err)
+		}
+		var manifest string
+		if err := testPoolHolder.QueryRow(ctx,
+			`SELECT export_manifest FROM saoaf.exit_pack WHERE pack_key = 'cl-pack'`).Scan(&manifest); err != nil {
+			t.Fatal(err)
+		}
+		if !contains(manifest, "data_export") || contains(manifest, "null") {
+			t.Fatalf("checklist missing or null in manifest: %s", manifest)
+		}
+		var digest string
+		_ = testPoolHolder.QueryRow(ctx,
+			`SELECT digest FROM saoaf.exit_pack WHERE pack_key = 'cl-pack'`).Scan(&digest)
+		if err := VerifyExport([]byte(manifest), digest); err != nil {
+			t.Fatalf("digest must cover checklist bytes: %v", err)
+		}
+	})
+}
+
+// R1-P1-2 回归：VALIDATED→DRAFT 降级 + 改写 + 升回的绕过路径被封死；
+// valid_until 静默延长被封死；DELETE 不再是静默 no-op。
+func TestImmutabilityBypassPathsClosed(t *testing.T) {
+	withDBX(t, func(dsn string, store Store) {
+		ctx := context.Background()
+		p := completePack("bypass-pack", "vendor-bp")
+		if err := store.CreateDraft(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Validate(ctx, "bypass-pack", 1); err != nil {
+			t.Fatal(err)
+		}
+		// 1) state regression VALIDATED → DRAFT
+		if _, err := testPoolHolder.Exec(ctx, `
+			UPDATE saoaf.exit_pack SET state = 'DRAFT' WHERE pack_key = 'bypass-pack'`); !isCheckViolation(err) {
+			t.Fatalf("VALIDATED→DRAFT regression must be rejected, got %v", err)
+		}
+		// 2) valid_until silent extension
+		if _, err := testPoolHolder.Exec(ctx, `
+			UPDATE saoaf.exit_pack SET valid_until = now() + interval '10 years'
+			WHERE pack_key = 'bypass-pack'`); !isCheckViolation(err) {
+			t.Fatalf("valid_until rewrite must be rejected, got %v", err)
+		}
+		// 3) vendor rewrite
+		if _, err := testPoolHolder.Exec(ctx, `
+			UPDATE saoaf.exit_pack SET vendor = 'vendor-forged' WHERE pack_key = 'bypass-pack'`); !isCheckViolation(err) {
+			t.Fatalf("vendor rewrite must be rejected, got %v", err)
+		}
+		// 4) DELETE on a verified revision
+		if _, err := testPoolHolder.Exec(ctx, `
+			DELETE FROM saoaf.exit_pack WHERE pack_key = 'bypass-pack'`); !isCheckViolation(err) {
+			t.Fatalf("DELETE must raise, got %v", err)
+		}
+		// DRAFT rows may still be deleted (nothing verified yet)
+		p2 := completePack("draft-del", "vendor-dd")
+		if err := store.CreateDraft(ctx, p2); err != nil {
+			t.Fatal(err)
+		}
+		tag, err := testPoolHolder.Exec(ctx, `DELETE FROM saoaf.exit_pack WHERE pack_key = 'draft-del'`)
+		if err != nil || tag.RowsAffected() != 1 {
+			t.Fatalf("DRAFT delete = err %v rows %d", err, tag.RowsAffected())
+		}
+	})
+}
+
+// R1-P1-3 回归：引用不存在/断链证据的 ACTIVE pack 进风险视图。
+func TestBrokenEvidenceRiskView(t *testing.T) {
+	withDBX(t, func(dsn string, store Store) {
+		ctx := context.Background()
+		p := completePack("broken-ev", "vendor-bev")
+		p.EvidenceRefs = []string{"evidence:nonexistent-42"}
+		if err := store.CreateDraft(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Validate(ctx, "broken-ev", 1); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Activate(ctx, "broken-ev", 1); err != nil {
+			t.Fatal(err)
+		}
+		risks, err := store.RiskView(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, r := range risks {
+			if r.PackKey == "broken-ev" && r.State == StateActive {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("ACTIVE pack with broken evidence refs must appear in risk view: %+v", risks)
+		}
+	})
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}

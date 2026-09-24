@@ -28,7 +28,9 @@ CREATE TABLE IF NOT EXISTS saoaf.exit_pack (
   expired_at      TIMESTAMPTZ,
   UNIQUE (pack_key, revision)
 );
-CREATE INDEX IF NOT EXISTS exitpack_active
+-- 每 vendor 唯一 ACTIVE（R1 P0：普通索引无唯一性兜底——并发三方激活
+-- 15/15 轮双活。UNIQUE + 应用层 23505 映射，照 binding_single_active 范式）
+CREATE UNIQUE INDEX IF NOT EXISTS exitpack_active
   ON saoaf.exit_pack (vendor)
   WHERE state = 'ACTIVE';
 CREATE INDEX IF NOT EXISTS exitpack_risk
@@ -40,15 +42,35 @@ CREATE INDEX IF NOT EXISTS exitpack_risk
 CREATE OR REPLACE FUNCTION saoaf.freeze_exitpack_content()
 RETURNS TRIGGER AS $$
 BEGIN
+  IF TG_OP = 'DELETE' THEN
+    -- 历史不可删除（R1 P1-2：DELETE 时 NEW 为 NULL 的 RETURN NEW 是静默
+    -- no-op）。DRAFT 行仍可删（未验证、无审计价值）。
+    IF OLD.state IN ('VALIDATED','ACTIVE','EXPIRED','SUPERSEDED') THEN
+      RAISE EXCEPTION 'verified exit pack rows are never deleted (audit red line)' USING ERRCODE = '23514';
+    END IF;
+    RETURN OLD;
+  END IF;
   IF OLD.state IN ('VALIDATED','ACTIVE','EXPIRED','SUPERSEDED') THEN
-    IF NEW.owner_ref IS DISTINCT FROM OLD.owner_ref
+    -- 内容列全冻结（R1 P1-2：vendor/pack_key/revision/valid_until 此前漏在
+    -- 冻结集外——valid_until 静默延长即绕过有效期且不破坏 digest）
+    IF NEW.vendor IS DISTINCT FROM OLD.vendor
+       OR NEW.pack_key IS DISTINCT FROM OLD.pack_key
+       OR NEW.revision IS DISTINCT FROM OLD.revision
+       OR NEW.owner_ref IS DISTINCT FROM OLD.owner_ref
        OR NEW.substitute_provider IS DISTINCT FROM OLD.substitute_provider
        OR NEW.recovery_steps IS DISTINCT FROM OLD.recovery_steps
        OR NEW.evidence_refs IS DISTINCT FROM OLD.evidence_refs
        OR NEW.checklist IS DISTINCT FROM OLD.checklist
+       OR NEW.valid_until IS DISTINCT FROM OLD.valid_until
        OR NEW.digest IS DISTINCT FROM OLD.digest
-       OR NEW.export_manifest IS DISTINCT FROM OLD.export_manifest THEN
+       OR NEW.export_manifest IS DISTINCT FROM OLD.export_manifest
+       OR NEW.created_by IS DISTINCT FROM OLD.created_by THEN
       RAISE EXCEPTION 'verified exit pack revision is immutable' USING ERRCODE = '23514';
+    END IF;
+    -- 状态只允许合法前进/回滚（R1 P1-2：VALIDATED→DRAFT 降级曾被用于
+    -- 绕过内容冻结改写后升回）
+    IF NEW.state NOT IN ('VALIDATED','ACTIVE','EXPIRED','SUPERSEDED') THEN
+      RAISE EXCEPTION 'verified exit pack cannot regress to %', NEW.state USING ERRCODE = '23514';
     END IF;
   END IF;
   RETURN NEW;
