@@ -537,6 +537,98 @@ func TestOpsEnvironmentsClaimParsed(t *testing.T) {
 	})
 }
 
+// R1 P1-1 regression: the environments claim MUST confine history and
+// broken views (the review probe leaked staging rows through both) and
+// the explicit environment filter must apply on history.
+func TestOpsEnvironmentConfinementHistoryAndBroken(t *testing.T) {
+	withDBO(t, func(dsn string) {
+		seedOps(t, dsn)
+		h := newOpsHarness(t, dsn)
+		tok := h.iss.token(t, "ops.read ops.all-tenants", "tenant-a", []string{"production"})
+
+		// history: staging rows must be invisible to a production-scoped caller
+		code, body := h.get(t, "/admin/v1/ops/metrics/history?metric=substitution_coverage", tok)
+		if code != http.StatusOK {
+			t.Fatalf("history = %d %s", code, body)
+		}
+		if strings.Contains(body, "staging") {
+			t.Fatalf("R1 P1-1 regression: production-scoped caller sees staging rows in history: %s", body)
+		}
+		// explicit in-scope filter still works
+		code, body = h.get(t, "/admin/v1/ops/metrics/history?metric=substitution_coverage&environment=production", tok)
+		if code != http.StatusOK || !strings.Contains(body, "production") {
+			t.Fatalf("history with explicit in-scope environment = %d %s", code, body)
+		}
+		// off-scope explicit filter rejected (existing behavior preserved)
+		code, _ = h.get(t, "/admin/v1/ops/metrics/history?metric=substitution_coverage&environment=staging", tok)
+		if code != http.StatusForbidden {
+			t.Fatalf("off-scope explicit environment on history = %d, want 403", code)
+		}
+
+		// broken: staging broken rows must be invisible
+		code, body = h.get(t, "/admin/v1/ops/metrics/broken", tok)
+		if code != http.StatusOK {
+			t.Fatalf("broken = %d %s", code, body)
+		}
+		if strings.Contains(body, "staging") {
+			t.Fatalf("R1 P1-1 regression: production-scoped caller sees staging rows in broken: %s", body)
+		}
+		// the production broken row (tenant-a INSUFFICIENT_DATA, unresolved
+		// ref) is still visible — confinement, not blanking
+		if !strings.Contains(body, "ev-missing-9") {
+			t.Fatalf("in-scope broken row must remain visible: %s", body)
+		}
+
+		// unrestricted caller sees staging in both (control group)
+		tokFree := h.iss.token(t, "ops.read ops.all-tenants", "tenant-a", nil)
+		code, body = h.get(t, "/admin/v1/ops/metrics/history?metric=substitution_coverage", tokFree)
+		if code != http.StatusOK || !strings.Contains(body, "staging") {
+			t.Fatalf("unrestricted caller must see staging history rows: %d %s", code, body)
+		}
+	})
+}
+
+// P3-1: drill log for a missing drill is 404 (consistent with getDrill).
+func TestOpsDrillLogNotFound(t *testing.T) {
+	withDBO(t, func(dsn string) {
+		seedOps(t, dsn)
+		h := newOpsHarness(t, dsn)
+		tok := h.iss.token(t, "ops.read ops.all-tenants", "tenant-a", nil)
+		code, body := h.get(t, "/admin/v1/ops/drills/no-such-drill/log", tok)
+		if code != http.StatusNotFound || !strings.Contains(body, `"error_code":"NOT_FOUND"`) {
+			t.Fatalf("missing drill log = %d %s, want 404 envelope", code, body)
+		}
+	})
+}
+
+// P2-1: overview unknown_metrics is a JSON number when computable and
+// unknown_fields is always a list — the explicit-unknown wire shape.
+func TestOpsOverviewUnknownSemantics(t *testing.T) {
+	withDBO(t, func(dsn string) {
+		seedOps(t, dsn)
+		h := newOpsHarness(t, dsn)
+		tok := h.iss.token(t, "ops.read ops.all-tenants", "tenant-a", nil)
+		code, body := h.get(t, "/admin/v1/ops/overview", tok)
+		if code != http.StatusOK {
+			t.Fatalf("overview = %d %s", code, body)
+		}
+		var out map[string]any
+		if err := json.Unmarshal([]byte(body), &out); err != nil {
+			t.Fatal(err)
+		}
+		um, ok := out["unknown_metrics"].(float64)
+		if !ok {
+			t.Fatalf("unknown_metrics must be a number, got %T (%v)", out["unknown_metrics"], out["unknown_metrics"])
+		}
+		if um < 1 {
+			t.Fatalf("seeded UNKNOWN rows must count: %v", um)
+		}
+		if _, ok := out["unknown_fields"].([]any); !ok {
+			t.Fatalf("unknown_fields must be a list: %v", out["unknown_fields"])
+		}
+	})
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

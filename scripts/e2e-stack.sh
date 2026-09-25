@@ -46,9 +46,11 @@ cleanup() {
   [ -n "${APPR_PID:-}" ] && kill "$APPR_PID" 2>/dev/null
   sleep 1
   psql_exec -c "DROP DATABASE IF EXISTS $DB WITH (FORCE)" >/dev/null 2>&1
-  rm -rf "$ISS_DIR" /tmp/e2e-tok-*.txt 2>/dev/null
+  rm -rf "$ISS_DIR" /tmp/e2e-tok-*.txt /tmp/e2e-api-bin /tmp/e2e-api.log /tmp/e2e-vite.log /tmp/e2e-vite.pid 2>/dev/null
+  # vite runs under an npx wrapper — kill the port listener tree too
+  pkill -f "vite --host 127.0.0.1 --port $VITE_PORT" 2>/dev/null
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 # 1) fresh DB + migrations (create/drop via psql; the goose run uses the
 # DSN over the wire)
@@ -61,7 +63,7 @@ fi
 # 2) seed the ops views (metrics incl. UNKNOWN + broken ref, evidence,
 # alert, expired pack, drill + finding + transitions — same shape as
 # internal/ops/ops_test.go)
-psql_exec -d "$DB" <<'SQL'
+psql_exec -d "$DB" -v ON_ERROR_STOP=1 <<'SQL'
 INSERT INTO saoaf.metric_result (metric_key, dimensions, value, status, status_reason, dataset_revision, formula_version, evidence_ref) VALUES
  ('substitution_coverage', '{"tenant":"tenant-a","environment":"production","capability":"cap-1"}', 0.75, 'OK', '', 42, 'v1', 'ev-resolved-1'),
  ('substitution_coverage', '{"tenant":"tenant-a","environment":"staging","capability":"cap-1"}', NULL, 'UNKNOWN', 'no active binding for capability', 42, 'v1', ''),
@@ -75,20 +77,12 @@ INSERT INTO saoaf.exit_drill_finding (drill_key, finding_key, description, sever
 INSERT INTO saoaf.exit_drill_transition (drill_key, from_state, to_state, actor) VALUES ('drill-1', 'DRAFT', 'APPROVED', 'user:approver'), ('drill-1', 'APPROVED', 'SUCCEEDED', 'user:worker');
 SQL
 
-# 3) stubs (PDP allow, approval APPROVED, OIDC with JWKS)
+# 3) stubs (PDP allow, approval APPROVED, OIDC with JWKS) — background
+# python servers reading their port from argv
 PDP_PORT=$((25000 + RANDOM % 4000)); APPR_PORT=$((PDP_PORT + 1)); ISS_PORT=$((APPR_PORT + 1))
-python3 - "$PDP_PORT" &>/dev/null & PDP_PID=$!
-python3 - "$APPR_PORT" &>/dev/null & APPR_PID=$!
 ISS_DIR=$(mktemp -d)
 openssl genrsa -out "$ISS_DIR/jwt.pem" 2048 2>/dev/null
 N=$(openssl rsa -in "$ISS_DIR/jwt.pem" -noout -modulus 2>/dev/null | cut -d'=' -f2 | xxd -r -p | base64 | tr '+/' '-_' | tr -d '=' | tr -d '\n')
-python3 - "$ISS_PORT" "$N" &>/dev/null & ISS_PID=$!
-sleep 1
-# (stub servers read their port from argv; the heredoc-free form keeps the
-# trap-based cleanup simple — see the python one-liners below)
-
-# stub server implementations (kept as background python processes)
-kill $PDP_PID $APPR_PID $ISS_PID 2>/dev/null
 python3 /dev/stdin "$PDP_PORT" <<'EOF' & PDP_PID=$!
 import sys, http.server, json
 class H(http.server.BaseHTTPRequestHandler):
@@ -156,7 +150,10 @@ CONTROL_PLANE_API_ADDR="127.0.0.1:$API_PORT" \
 /tmp/e2e-api-bin >/tmp/e2e-api.log 2>&1 & API_PID=$!
 
 # 6) the UI dev server (proxy → API)
-(cd web && SAOAF_API_TARGET="http://127.0.0.1:$API_PORT" nohup npx vite --host 127.0.0.1 --port "$VITE_PORT" --strictPort >/tmp/e2e-vite.log 2>&1 & echo $! > /tmp/e2e-vite.pid)
+# setsid: the npx wrapper spawns a node child; killing the session id
+# takes the whole tree down (a bare wrapper kill orphans the vite server
+# and --strictPort fails the NEXT run's readiness)
+(cd web && SAOAF_API_TARGET="http://127.0.0.1:$API_PORT" nohup setsid npx vite --host 127.0.0.1 --port "$VITE_PORT" --strictPort >/tmp/e2e-vite.log 2>&1 & echo $! > /tmp/e2e-vite.pid)
 VITE_PID=$(cat /tmp/e2e-vite.pid)
 
 # 7) wait for readiness (hard-fail when the loops time out — a silent
@@ -182,7 +179,13 @@ code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 [ "$(code "$B/admin/v1/ops/overview")" = "401" ] || { echo "E2E-STACK: anonymous not 401"; exit 1; }
 
 # 8) run the browser suite (local: system Chrome; CI: bundled chromium —
-# the suite auto-falls-back when channel:'chrome' is unavailable)
+# the suite auto-falls-back when channel:'chrome' is unavailable).
+# E2E_HOLD=1 keeps the stack up (debugging) without running the suite.
+if [ "${E2E_HOLD:-0}" = "1" ]; then
+  echo "E2E-HOLD: stack live (API :$API_PORT, vite :$VITE_PORT, tokens /tmp/e2e-tok-*.txt); Ctrl-C tears down"
+  wait
+  exit 0
+fi
 cd web
 E2E_UI_URL="http://127.0.0.1:$VITE_PORT" node --test test/ops.e2e.mjs
 RC=$?

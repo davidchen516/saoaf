@@ -95,6 +95,9 @@ test('E2E: ops console renders every view with authoritative data', { timeout: 6
     await page.waitForSelector('[data-testid="ops-drills"]', { timeout: 15000 })
     await page.getByRole('button', { name: '详情' }).first().click()
     await page.waitForSelector('[data-testid="drill-detail"]', { timeout: 15000 })
+    // the audit trail is a SECOND async load — wait for its content, not
+    // just the container (the detail renders before the log response)
+    await page.waitForSelector('[data-testid="drill-detail"] ol li', { timeout: 15000 })
     const detail = await page.getByTestId('drill-detail').textContent()
     assert.ok(detail.includes('fallback too slow'), 'finding must render')
     assert.ok(detail.includes('APPROVED'), 'audit trail must render')

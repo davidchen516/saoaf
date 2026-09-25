@@ -54,3 +54,22 @@
 
 - **真实浏览器 E2E**：✅ 本 PR 交付（Playwright + 系统 Chrome 3/3；I16 hub 视图在同一 App 内，导航与 api() 基座不变）
 - routeRecorder `Group()` 覆盖：非阻塞观察（当前无使用方），随下次 admin 面变更处理
+
+## 审查 R1 整改（CHANGES REQUESTED → 全项修复）
+
+| Finding | 修复 | 回归 |
+|---|---|---|
+| P1-1 history/broken 未应用 environments 收窄（production-scoped token 可读 staging 行；显式 environment 过滤被静默忽略） | 两 handler 接住 `envs` 追加 `dimensions->>'environment' IN (...)`（与 listMetrics 同构）；history 同时应用显式 environment 过滤 | `TestOpsEnvironmentConfinementHistoryAndBroken`（staging 不可见 + in-scope 可见 + off-scope 403 + 无 claim 对照组） |
+| P2-1 overview unknown_metrics 查询失败静默折 0 | 失败进 `unknown_fields` + 输出 null（与 quarantine_depth 语义对齐：显式未知，绝不当 0） | `TestOpsOverviewUnknownSemantics`（wire shape：number/list 断言）+ UI `UnknownBadge` |
+| P3-1 drills/{missing}/log 200 空列表 | 先查存在性 → 404 NOT_FOUND（与 getDrill 一致） | `TestOpsDrillLogNotFound` |
+| P3-2 getDrill findings 查询失败静默空成功 | 失败 → 500 INTERNAL（部分失败不呈现为成功空态） | 代码路径 |
+| P3-3 e2e-stack.sh 卫生成组 | trap 覆盖 EXIT/INT/TERM；删除死代码 stub 启动；cleanup 覆盖全部临时文件 + vite 进程树（setsid + pkill）；种子 SQL `-v ON_ERROR_STOP=1`；E2E_HOLD 调试模式 | 运行后孤儿/残留检查通过 |
+| P3-4 /ops/evidence?since= 非法值静默忽略 | 与 metrics 一致 → 400 VALIDATION_INVALID_ENUM | 代码路径 |
+| P3-5 跨租户/环境 403 错误码 FORBIDDEN_FIELD | 统一为 `FORBIDDEN`（与 RequireScope 同码；FORBIDDEN_FIELD 保留原写面语义） | 4 处替换 |
+| P3-6 UI overview unknown_fields 命中字段渲染 0 | `UnknownBadge` 显式「未知」徽标 | UI 代码 |
+| P3-7 risk_alert 无租户维度 | 挂观察（当前全平台级规则；租户实体告警出现时需补收窄）——审查员同判 |
+| P3-8 ValueCell 将 NOT_APPLICABLE 误标「数据不足」 | 三态：未知/不适用/数据不足 | UI 代码 |
+
+**E2E 断言竞态修复**（整改过程中暴露）：drill-detail 容器渲染先于 log 响应——E2E 改为等待审计轨迹内容（`ol li`）而非容器。drillLog 的存在性检查使该竞态必现，属测试缺陷非产品缺陷。
+
+整改后：ops 11/11（真 PG -race，含 3 个新回归）、web 24/24、E2E 3/3、payload 1243B。

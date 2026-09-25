@@ -161,15 +161,19 @@ func (c Config) overview(w http.ResponseWriter, r *http.Request) {
 		// a deployment inconsistency, surfaced honestly
 		unknown = append(unknown, "quarantine_depth")
 	}
-	// explicit unknown metrics: NULL-valued metric results must NOT read as 0
-	var unknownMetrics int64
+	// explicit unknown metrics: non-OK latest rows must NOT read as healthy.
+	// A query failure surfaces as an unknown field (null count) — never as 0
+	// (review R1 P2-1: this dashboard's own 未知≠0 rule applies to itself).
+	unknownMetrics := any(nil)
+	var um int64
 	if err := c.Pool.QueryRow(r.Context(),
 		`SELECT count(*) FROM saoaf.metric_result m
 		 WHERE m.computed_at = (SELECT MAX(computed_at) FROM saoaf.metric_result m2
 		                        WHERE m2.metric_key = m.metric_key AND m2.dimensions = m.dimensions)
-		   AND m.status <> 'OK'`).Scan(&unknownMetrics); err == nil {
-		// included below
-		_ = unknownMetrics
+		   AND m.status <> 'OK'`).Scan(&um); err == nil {
+		unknownMetrics = um
+	} else {
+		unknown = append(unknown, "unknown_metrics")
 	}
 	httpapi.WriteJSON(w, http.StatusOK, map[string]any{
 		"open_alerts":      openAlerts,
@@ -192,7 +196,7 @@ func (c Config) listMetrics(w http.ResponseWriter, r *http.Request) {
 	limit, offset := parseLimit(q), parseOffset(q)
 	tenantFilter, envs, rejected := scope(r, q)
 	if rejected {
-		httpapi.WriteErr(w, r, http.StatusForbidden, "FORBIDDEN_FIELD",
+		httpapi.WriteErr(w, r, http.StatusForbidden, "FORBIDDEN",
 			"request crosses the caller's tenant/environment scope")
 		return
 	}
@@ -287,9 +291,9 @@ func (c Config) metricHistory(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteErr(w, r, http.StatusBadRequest, "VALIDATION_MISSING_REQUIRED", "metric required")
 		return
 	}
-	tenantFilter, _, rejected := scope(r, q)
+	tenantFilter, envs, rejected := scope(r, q)
 	if rejected {
-		httpapi.WriteErr(w, r, http.StatusForbidden, "FORBIDDEN_FIELD",
+		httpapi.WriteErr(w, r, http.StatusForbidden, "FORBIDDEN",
 			"request crosses the caller's tenant/environment scope")
 		return
 	}
@@ -299,6 +303,22 @@ func (c Config) metricHistory(w http.ResponseWriter, r *http.Request) {
 	if tenantFilter != "" {
 		args = append(args, tenantFilter)
 		where += ` AND dimensions->>'tenant' = $` + strconv.Itoa(len(args))
+	}
+	// environment confinement (review R1 P1-1: history previously dropped
+	// the envs claim — a production-scoped operator could read staging rows)
+	if len(envs) > 0 {
+		ph := make([]string, 0, len(envs))
+		for _, e := range envs {
+			args = append(args, e)
+			ph = append(ph, "$"+strconv.Itoa(len(args)))
+		}
+		where += ` AND dimensions->>'environment' IN (` + joinComma(ph) + `)`
+	}
+	// the explicit environment filter must also apply (it was silently
+	// ignored before — same finding)
+	if v := q.Get("environment"); v != "" {
+		args = append(args, v)
+		where += ` AND dimensions->>'environment' = $` + strconv.Itoa(len(args))
 	}
 	rows, err := c.Pool.Query(r.Context(), `
 		SELECT dimensions, value, status, status_reason, dataset_revision,
@@ -342,9 +362,9 @@ func (c Config) metricHistory(w http.ResponseWriter, r *http.Request) {
 func (c Config) brokenEvidence(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, offset := parseLimit(q), parseOffset(q)
-	tenantFilter, _, rejected := scope(r, q)
+	tenantFilter, envs, rejected := scope(r, q)
 	if rejected {
-		httpapi.WriteErr(w, r, http.StatusForbidden, "FORBIDDEN_FIELD",
+		httpapi.WriteErr(w, r, http.StatusForbidden, "FORBIDDEN",
 			"request crosses the caller's tenant/environment scope")
 		return
 	}
@@ -356,6 +376,16 @@ func (c Config) brokenEvidence(w http.ResponseWriter, r *http.Request) {
 	if tenantFilter != "" {
 		args = append(args, tenantFilter)
 		where += ` AND m.dimensions->>'tenant' = $` + strconv.Itoa(len(args))
+	}
+	// environment confinement (review R1 P1-1: broken previously dropped the
+	// envs claim — a production-scoped operator could read staging rows)
+	if len(envs) > 0 {
+		ph := make([]string, 0, len(envs))
+		for _, e := range envs {
+			args = append(args, e)
+			ph = append(ph, "$"+strconv.Itoa(len(args)))
+		}
+		where += ` AND m.dimensions->>'environment' IN (` + joinComma(ph) + `)`
 	}
 	rows, err := c.Pool.Query(r.Context(), `
 		SELECT metric_key, dimensions, value, status, status_reason,
@@ -411,7 +441,7 @@ func (c Config) listEvidence(w http.ResponseWriter, r *http.Request) {
 	limit, offset := parseLimit(q), parseOffset(q)
 	tenantFilter, _, rejected := scope(r, q)
 	if rejected {
-		httpapi.WriteErr(w, r, http.StatusForbidden, "FORBIDDEN_FIELD",
+		httpapi.WriteErr(w, r, http.StatusForbidden, "FORBIDDEN",
 			"request crosses the caller's tenant/environment scope")
 		return
 	}
@@ -427,9 +457,11 @@ func (c Config) listEvidence(w http.ResponseWriter, r *http.Request) {
 		where += ` AND er.plan_id = $` + arg(v)
 	}
 	if v := q.Get("since"); v != "" {
-		if _, err := time.Parse(time.RFC3339, v); err == nil {
-			where += ` AND er.occurred_at >= $` + arg(v)
+		if _, err := time.Parse(time.RFC3339, v); err != nil {
+			httpapi.WriteErr(w, r, http.StatusBadRequest, "VALIDATION_INVALID_ENUM", "since must be RFC3339")
+			return
 		}
+		where += ` AND er.occurred_at >= $` + arg(v)
 	}
 	rows, err := c.Pool.Query(r.Context(), `
 		SELECT event_id, source_topic, aggregate_kind, aggregate_id,
@@ -673,6 +705,17 @@ func (c Config) getDrill(w http.ResponseWriter, r *http.Request) {
 // the id tiebreaker.
 func (c Config) drillLog(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "id")
+	// consistency with getDrill: an unknown drill is 404, never an empty log
+	var exists bool
+	if err := c.Pool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM saoaf.exit_drill WHERE drill_key = $1)`, key).Scan(&exists); err != nil {
+		httpapi.WriteErr(w, r, http.StatusInternalServerError, "INTERNAL", "store error")
+		return
+	}
+	if !exists {
+		httpapi.WriteErr(w, r, http.StatusNotFound, "NOT_FOUND", "drill not found")
+		return
+	}
 	rows, err := c.Pool.Query(r.Context(), `
 		SELECT from_state, to_state, actor, at
 		FROM saoaf.exit_drill_transition

@@ -110,13 +110,24 @@ function ValueCell({ row }: { row: MetricRow }) {
   if (row.value !== null) {
     return <span data-testid="metric-value">{row.value.toFixed(2)}</span>
   }
+  const label =
+    row.status === 'UNKNOWN' ? '未知' : row.status === 'NOT_APPLICABLE' ? '不适用' : '数据不足'
   return (
     <span
       data-testid="metric-unknown"
       style={{ color: '#950', fontWeight: 600 }}
       title={row.status_reason}
     >
-      {row.status === 'UNKNOWN' ? '未知' : '数据不足'}
+      {label}
+    </span>
+  )
+}
+
+// an overview field whose query failed renders unknown — never 0
+function UnknownBadge() {
+  return (
+    <span data-testid="overview-unknown" style={{ color: '#950', fontWeight: 600 }}>
+      未知
     </span>
   )
 }
@@ -237,8 +248,18 @@ export function Ops() {
               <strong>{overview.active_drills}</strong> · 未闭环整改 <strong>{overview.open_findings}</strong>
             </p>
             <p>
-              隔离区待处置 <strong>{overview.quarantine_depth}</strong> · 显式未知指标{' '}
-              <strong data-testid="unknown-metrics">{overview.unknown_metrics}</strong>
+              隔离区待处置{' '}
+              {overview.unknown_fields.includes('quarantine_depth') ? (
+                <UnknownBadge />
+              ) : (
+                <strong>{overview.quarantine_depth}</strong>
+              )}{' '}
+              · 显式未知指标{' '}
+              {overview.unknown_fields.includes('unknown_metrics') ? (
+                <UnknownBadge />
+              ) : (
+                <strong data-testid="unknown-metrics">{overview.unknown_metrics}</strong>
+              )}
               {overview.unknown_fields.length > 0 && (
                 <em>（不可用字段：{overview.unknown_fields.join(', ')}）</em>
               )}
