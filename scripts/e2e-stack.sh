@@ -156,7 +156,7 @@ CONTROL_PLANE_API_ADDR="127.0.0.1:$API_PORT" \
 /tmp/e2e-api-bin >/tmp/e2e-api.log 2>&1 & API_PID=$!
 
 # 6) the UI dev server (proxy → API)
-(cd web && SAOAF_API_TARGET="http://127.0.0.1:$API_PORT" nohup npx vite --port "$VITE_PORT" --strictPort >/tmp/e2e-vite.log 2>&1 & echo $! > /tmp/e2e-vite.pid)
+(cd web && SAOAF_API_TARGET="http://127.0.0.1:$API_PORT" nohup npx vite --host 127.0.0.1 --port "$VITE_PORT" --strictPort >/tmp/e2e-vite.log 2>&1 & echo $! > /tmp/e2e-vite.pid)
 VITE_PID=$(cat /tmp/e2e-vite.pid)
 
 # 7) wait for readiness (hard-fail when the loops time out — a silent
@@ -169,7 +169,7 @@ done
 [ "$ready" = "1" ] || { echo "E2E-STACK: API did not become ready"; tail -5 /tmp/e2e-api.log; exit 1; }
 ready=0
 for i in $(seq 1 60); do
-  if curl -sf "http://127.0.0.1:$VITE_PORT/" >/dev/null 2>&1; then ready=1; break; fi
+  if curl -sf "http://127.0.0.1:$VITE_PORT/" >/dev/null 2>&1 || curl -sf "http://localhost:$VITE_PORT/" >/dev/null 2>&1; then ready=1; break; fi
   sleep 1
 done
 [ "$ready" = "1" ] || { echo "E2E-STACK: vite did not become ready"; tail -5 /tmp/e2e-vite.log; exit 1; }
