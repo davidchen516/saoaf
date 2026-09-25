@@ -9,6 +9,14 @@
 //	contractlint breaking [base]    — breaking-change detection between a
 //	                                  base ref and the working tree (omit
 //	                                  base to compare against HEAD).
+//	contractlint deployable-scan    — no deployable units for contract-only
+//	                                  modules: Dockerfiles / k8s manifests /
+//	                                  deploy targets under contract-only
+//	                                  module paths (03.5/03.6/03.7, I18+)
+//	                                  fail the gate. Mocks are NOT deployable
+//	                                  units (compose files under mocks/ are
+//	                                  dev-time fixtures, not production
+//	                                  deployments).
 //
 // Validation routing order (issue acceptance logic): payload size → payload
 // depth → JSON Schema validation → semantic/forbidden scan → compatibility.
@@ -50,6 +58,8 @@ func main() {
 	switch os.Args[1] {
 	case "validate":
 		err = cmdValidate()
+	case "deployable-scan":
+		err = cmdDeployableScan()
 	case "breaking":
 		base := ""
 		if len(os.Args) > 2 {
@@ -66,8 +76,102 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: contractlint validate | contractlint breaking [base-ref]")
+	fmt.Fprintln(os.Stderr, "usage: contractlint validate | contractlint breaking [base-ref] | contractlint deployable-scan")
 	os.Exit(2)
+}
+
+// cmdDeployableScan enforces the contract-only invariant (I18+): the repo
+// must contain NO deployable production units for contract-only modules
+// (03.5 MCP Fabric, 03.6 A2A Fabric, 03.7 Placement Fabric — until their
+// runtime issues land). A "deployable unit" is any runtime artifact that
+// could run the fabric as production code:
+//
+//   - a Go module package under internal/ for the fabric runtime
+//   - a binary target under cmd/
+//   - a container image build (build/*/Dockerfile) for the fabric
+//   - any Dockerfile or kubernetes manifest anywhere that references a
+//     fabric binary path
+//
+// Contracts (contracts/protocols/*) and dev mocks (mocks/*/compose.yaml)
+// are NOT deployable units — mocks are dev-time fixtures with no image
+// build of repo code.
+func cmdDeployableScan() error {
+	// runtime artifact name markers per contract-only module
+	fabricMarkers := []string{"mcpfabric", "a2afabric", "placementfabric", "mcp-gateway", "a2a-gateway", "placement-fabric"}
+	var hits []string
+
+	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // unreadable entries are not deployable evidence
+		}
+		if info.IsDir() {
+			switch info.Name() {
+			case ".git", "node_modules", "dist":
+				return filepath.SkipDir
+			}
+			// fabric runtime packages/binaries/build targets are red
+			if matchesFabricMarker(info.Name(), fabricMarkers) {
+				rel, _ := filepath.Rel(".", path)
+				hits = append(hits, rel+"/ (contract-only module runtime directory)")
+			}
+			return nil
+		}
+		rel, _ := filepath.Rel(".", path)
+		base := strings.ToLower(info.Name())
+		// any Dockerfile / k8s manifest referencing a fabric binary path
+		if strings.Contains(base, "dockerfile") || strings.Contains(base, "containerfile") || strings.HasSuffix(base, ".yaml") || strings.HasSuffix(base, ".yml") {
+			if referencesFabricBinary(path, fabricMarkers) {
+				hits = append(hits, rel+" (deployable unit referencing a contract-only fabric)")
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if len(hits) > 0 {
+		sort.Strings(hits)
+		return fmt.Errorf("deployable units found for contract-only modules:\n    %s", strings.Join(hits, "\n    "))
+	}
+	fmt.Println("DEPLOYABLE SCAN: PASS (0 deployable units for contract-only modules)")
+	return nil
+}
+
+// matchesFabricMarker reports whether a path segment (directory or binary
+// name) identifies a contract-only fabric runtime artifact.
+func matchesFabricMarker(name string, markers []string) bool {
+	n := strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name)))
+	n = strings.NewReplacer("_", "-", ".", "-").Replace(n)
+	for _, m := range markers {
+		if strings.Contains(n, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// referencesFabricBinary reports whether a build/deploy file mentions a
+// fabric binary or package path (e.g. ./cmd/control-plane-mcp-gateway or
+// internal/mcpfabric).
+func referencesFabricBinary(path string, markers []string) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	s := strings.ToLower(string(raw))
+	for _, m := range markers {
+		if strings.Contains(s, m) {
+			// k8s manifests must also look like resources to avoid matching
+			// random YAML that merely mentions the word
+			if strings.HasSuffix(strings.ToLower(path), ".yaml") || strings.HasSuffix(strings.ToLower(path), ".yml") {
+				if !strings.Contains(s, "apiversion:") && !strings.Contains(s, "kind:") {
+					continue
+				}
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------
@@ -83,10 +187,11 @@ func cmdValidate() error {
 	compiler := jsonschema.NewCompiler()
 	compiler.AssertFormat() // format assertions (date-time etc.)
 
-	// Load every v1 schema.
-	schemaFiles, err := filepath.Glob(filepath.Join(contractsDir, "schemas", "v1", "*.json"))
-	if err != nil || len(schemaFiles) == 0 {
-		return fmt.Errorf("no schemas found under %s/schemas/v1", contractsDir)
+	// Load every v1 schema (recursive: top level + module subdirectories
+	// like schemas/v1/mcp/ from I18).
+	schemaFiles, err := schemaGlob()
+	if err != nil {
+		return err
 	}
 	for _, f := range schemaFiles {
 		if err := loadJSONorYAML(compiler, f); err != nil {
@@ -192,22 +297,63 @@ func exampleSchemaFor(name string) string {
 	if m, ok := exampleSchemaOverrides[base]; ok {
 		return m
 	}
+	try := func(rel string) bool {
+		_, err := os.Stat(filepath.Join(contractsDir, "schemas", "v1", rel))
+		return err == nil
+	}
 	for _, candidate := range []string{
 		base + ".json",
 		strings.SplitN(base, "-", 2)[0] + ".json", // error-envelope-variant → error-envelope.json
 	} {
-		if _, err := os.Stat(filepath.Join(contractsDir, "schemas", "v1", candidate)); err == nil {
+		if try(candidate) {
 			return candidate
 		}
 	}
-	// explicit stem prefix before first "-" (e.g. cloudevents-published)
+	// subdirectory schemas (I18): "mcp-tool-snapshot.json" → mcp/tool-snapshot.json
 	if i := strings.Index(base, "-"); i > 0 {
+		dir, rest := base[:i], base[i+1:]
+		if dir == "mcp" {
+			for _, candidate := range []string{rest + ".json", rest} {
+				if try(filepath.Join("mcp", candidate)) {
+					return filepath.Join("mcp", candidate)
+				}
+			}
+			// mcp-<sub>-…: mcp-tool-snapshot-variant → mcp/tool-snapshot.json
+			if j := strings.Index(rest, "-"); j > 0 {
+				if try(filepath.Join("mcp", rest[:j]+".json")) {
+					return filepath.Join("mcp", rest[:j]+".json")
+				}
+			}
+		}
+		// top-level stem prefix (e.g. cloudevents-published)
 		stem := base[:i] + ".json"
-		if _, err := os.Stat(filepath.Join(contractsDir, "schemas", "v1", stem)); err == nil {
+		if try(stem) {
 			return stem
 		}
 	}
 	return ""
+}
+
+// schemaGlob returns every v1 schema file: the top level plus module
+// subdirectories (e.g. schemas/v1/mcp/tool-snapshot.json).
+func schemaGlob() ([]string, error) {
+	top, err := filepath.Glob(filepath.Join(contractsDir, "schemas", "v1", "*.json"))
+	if err != nil || len(top) == 0 {
+		return nil, fmt.Errorf("no schemas found under %s/schemas/v1", contractsDir)
+	}
+	all := append([]string{}, top...)
+	sub, _ := filepath.Glob(filepath.Join(contractsDir, "schemas", "v1", "*", "*.json"))
+	return append(all, sub...), nil
+}
+
+// schemaRelPath resolves a schema file path relative to schemas/v1
+// (e.g. mcp/tool-snapshot.json) for example-name matching.
+func schemaRelPath(path string) string {
+	rel, err := filepath.Rel(filepath.Join(contractsDir, "schemas", "v1"), path)
+	if err != nil {
+		return filepath.Base(path)
+	}
+	return rel
 }
 
 func loadJSONorYAML(c *jsonschema.Compiler, path string) error {
@@ -223,7 +369,7 @@ func loadJSONorYAML(c *jsonschema.Compiler, path string) error {
 	} else if err := json.Unmarshal(raw, &doc); err != nil {
 		return err
 	}
-	return c.AddResource("https://contracts.saoaf.dev/schemas/v1/"+filepath.Base(path), doc)
+	return c.AddResource("https://contracts.saoaf.dev/schemas/v1/"+schemaRelPath(path), doc)
 }
 
 func schemaFor(c *jsonschema.Compiler, stem string) (*jsonschema.Schema, error) {

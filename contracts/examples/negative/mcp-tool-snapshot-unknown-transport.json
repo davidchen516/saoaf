@@ -1,0 +1,26 @@
+{
+  "case": "mcp-tool-snapshot-unknown-transport",
+  "schema": "mcp/tool-snapshot.json",
+  "input": {
+    "provider_id": "enterprise-mcp-gateway",
+    "snapshot_version": "mock-1",
+    "contract_version": "2026-09",
+    "generated_at": "2026-09-22T00:00:00Z",
+    "valid_until": "2099-01-01T00:00:00Z",
+    "actions": [
+      {
+        "action_id": "tool.erp.work-order.read",
+        "capability_key": "tool.erp.work-order.read",
+        "server_ref": "erp-mcp-server",
+        "transport": "grpc",
+        "risk_level": "LOW",
+        "idempotency": {"supported": true, "key_scope": "action"},
+        "approval_required": false,
+        "parameter_schema_ref": "schema://capabilities/tool.erp.work-order.read/v1",
+        "status": "AVAILABLE"
+      }
+    ],
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "expected_error_code": "VALIDATION_INVALID_ENUM"
+}

@@ -1,0 +1,15 @@
+{
+  "case": "mcp-execution-evidence-missing-plan",
+  "schema": "mcp/execution-evidence.json",
+  "input": {
+    "tool_execution_id": "te-mock-001",
+    "action_id": "tool.erp.work-order.write",
+    "resource_plan_item_id": "item-mock-001",
+    "tenant_ref": "tenant-a",
+    "state": "SUCCEEDED",
+    "policy_decision_ref": "pd-mock-001",
+    "started_at": "2026-09-22T00:00:00Z",
+    "finished_at": "2026-09-22T00:00:01Z"
+  },
+  "expected_error_code": "VALIDATION_MISSING_REQUIRED"
+}

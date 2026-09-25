@@ -1,0 +1,477 @@
+# SAOAF MCP Fabric (03.5) contract — Tool/MCP boundary mock.
+# Scope: preview/approve/execute/status/cancel contract semantics with
+# risk-gated approvals and idempotent executes. NO runtime: this mock does
+# not implement an MCP Gateway/Registry/Server/proxy or call real tools.
+openapi: 3.1.0
+info:
+  title: SAOAF MCP Fabric Mock
+  version: 1.0.0
+  description: >-
+    Contract mock for the Tool/MCP boundary. The Gateway validates
+    risk/approval/idempotency contract semantics; business execution stays
+    with Domain MCP Servers (mocked as deterministic responses). Sensitive
+    results return by reference + digest, never inline.
+servers:
+  - url: http://127.0.0.1:4030
+paths:
+  /control/v1/tool-snapshots/current:
+    get:
+      operationId: getCurrentToolSnapshot
+      responses:
+        '200':
+          description: Current logical action snapshot (ARR-facing)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ToolSnapshot'}
+              example:
+                provider_id: enterprise-mcp-gateway
+                snapshot_version: mock-1
+                contract_version: '2026-09'
+                generated_at: '2026-09-22T00:00:00Z'
+                valid_until: '2099-01-01T00:00:00Z'
+                actions:
+                  - action_id: tool.erp.work-order.read
+                    capability_key: tool.erp.work-order.read
+                    server_ref: erp-mcp-server
+                    transport: http-streamable
+                    risk_level: LOW
+                    idempotency: {supported: true, key_scope: action+parameter-digest, ttl_seconds: 600}
+                    approval_required: false
+                    parameter_schema_ref: schema://capabilities/tool.erp.work-order.read/v1
+                    status: AVAILABLE
+                  - action_id: tool.erp.work-order.write
+                    capability_key: tool.erp.work-order.write
+                    server_ref: erp-mcp-server
+                    transport: http-streamable
+                    risk_level: HIGH
+                    idempotency: {supported: true, key_scope: action+parameter-digest, ttl_seconds: 600}
+                    approval_required: true
+                    parameter_schema_ref: schema://capabilities/tool.erp.work-order.write/v1
+                    status: AVAILABLE
+                digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+                signature: mock-only-not-cryptographic
+  /v1/tools/{actionId}/preview:
+    post:
+      operationId: previewToolAction
+      description: >-
+        Dry-run validation (parameters against the action contract, risk
+        classification, authorization reference). HIGH-risk write actions
+        MUST pass preview before approve/execute. No business side effects.
+      parameters:
+        - {$ref: '#/components/parameters/ActionId'}
+        - {$ref: '#/components/parameters/ResourcePlanId'}
+        - {$ref: '#/components/parameters/ResourcePlanItemId'}
+        - {$ref: '#/components/parameters/TenantRef'}
+        - {$ref: '#/components/parameters/Traceparent'}
+        - {$ref: '#/components/parameters/PolicyDecisionRef'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PreviewRequest'}
+            example:
+              parameters: {work_order_id: WO-mock-001}
+      responses:
+        '200':
+          description: Preview accepted (no side effects)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PreviewResponse'}
+              example:
+                preview_id: tp-mock-001
+                action_id: tool.erp.work-order.write
+                risk_level: HIGH
+                approval_required: true
+                validated_parameters_digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+                next_step: approve
+        '400': {$ref: '#/components/responses/ParameterValidationFailed'}
+        '403': {$ref: '#/components/responses/AuthorizationDenied'}
+        '404': {$ref: '#/components/responses/ActionNotFound'}
+  /v1/tools/{actionId}/approve:
+    post:
+      operationId: approveToolAction
+      description: >-
+        Attach the approval reference to a previewed HIGH-risk action.
+        Requires the preview to exist and the approval reference to be
+        valid; the approval binds to the preview's parameter digest.
+      parameters:
+        - {$ref: '#/components/parameters/ActionId'}
+        - {$ref: '#/components/parameters/ResourcePlanId'}
+        - {$ref: '#/components/parameters/TenantRef'}
+        - {$ref: '#/components/parameters/Traceparent'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ApproveRequest'}
+            example:
+              preview_id: tp-mock-001
+              approval_ref: approval:mock-erp-write
+      responses:
+        '200':
+          description: Approval attached (execute now allowed once)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ApproveResponse'}
+              example:
+                approval_id: ta-mock-001
+                action_id: tool.erp.work-order.write
+                approval_ref: approval:mock-erp-write
+                approved_parameters_digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+                next_step: execute
+        '403': {$ref: '#/components/responses/ApprovalRequired'}
+        '404': {$ref: '#/components/responses/PreviewNotFound'}
+  /v1/tools/{actionId}/execute:
+    post:
+      operationId: executeToolAction
+      description: >-
+        Execute the action. Idempotency: a repeated execute with the same
+        Idempotency-Key returns the original execution result. HIGH-risk
+        actions REQUIRE the approval reference from approve; a missing or
+        mismatched reference is rejected (contract-level negative fixture).
+      parameters:
+        - {$ref: '#/components/parameters/ActionId'}
+        - {$ref: '#/components/parameters/ResourcePlanId'}
+        - {$ref: '#/components/parameters/ResourcePlanItemId'}
+        - {$ref: '#/components/parameters/TenantRef'}
+        - {$ref: '#/components/parameters/Traceparent'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {$ref: '#/components/parameters/PolicyDecisionRef'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ExecuteRequest'}
+            example:
+              approval_ref: approval:mock-erp-write
+              parameters: {work_order_id: WO-mock-001, quantity: 5}
+      responses:
+        '200':
+          description: Execution accepted (or idempotent replay)
+          headers:
+            X-Tool-Execution-ID:
+              required: true
+              schema: {type: string}
+              example: te-mock-001
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExecutionResult'}
+              example:
+                tool_execution_id: te-mock-001
+                action_id: tool.erp.work-order.write
+                resource_plan_id: plan-mock-001
+                resource_plan_item_id: item-mock-001
+                tenant_ref: tenant-a
+                state: SUCCEEDED
+                policy_decision_ref: pd-mock-001
+                approval_ref: approval:mock-erp-write
+                idempotency_key: idem-mock-001
+                result_ref:
+                  uri: evidence://tool-executions/te-mock-001/result
+                  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+                started_at: '2026-09-22T00:00:00Z'
+                finished_at: '2026-09-22T00:00:01Z'
+                trace_id: 00-00000000000000000000000000000000-0000000000000000-01
+        '400': {$ref: '#/components/responses/ParameterValidationFailed'}
+        '403': {$ref: '#/components/responses/ApprovalRequired'}
+        '404': {$ref: '#/components/responses/ActionNotFound'}
+        '409': {$ref: '#/components/responses/ExecutionConflict'}
+        '503': {$ref: '#/components/responses/ToolServerUnavailable'}
+  /v1/tool-executions/{executionId}:
+    get:
+      operationId: getToolExecutionStatus
+      description: >-
+        Status query — the crash-recovery convergence point: after a
+        disconnect/timeout the consumer polls status and converges on the
+        authoritative state.
+      parameters:
+        - {$ref: '#/components/parameters/ExecutionId'}
+        - {$ref: '#/components/parameters/TenantRef'}
+        - {$ref: '#/components/parameters/Traceparent'}
+      responses:
+        '200':
+          description: Execution evidence (authoritative state)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExecutionResult'}
+              example:
+                tool_execution_id: te-mock-001
+                action_id: tool.erp.work-order.write
+                resource_plan_id: plan-mock-001
+                resource_plan_item_id: item-mock-001
+                tenant_ref: tenant-a
+                state: SUCCEEDED
+                policy_decision_ref: pd-mock-001
+                approval_ref: approval:mock-erp-write
+                started_at: '2026-09-22T00:00:00Z'
+                finished_at: '2026-09-22T00:00:01Z'
+        '404': {$ref: '#/components/responses/ExecutionNotFound'}
+    delete:
+      operationId: cancelToolExecution
+      description: >-
+        Cancel competes with execute in a race window; the Gateway
+        arbitrates the terminal state (SUCCEEDED vs CANCELLED) and the
+        consumer learns the outcome via the returned evidence.
+      parameters:
+        - {$ref: '#/components/parameters/ExecutionId'}
+        - {$ref: '#/components/parameters/TenantRef'}
+        - {$ref: '#/components/parameters/Traceparent'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      responses:
+        '200':
+          description: Cancellation outcome (terminal state after arbitration)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExecutionResult'}
+              example:
+                tool_execution_id: te-mock-001
+                action_id: tool.erp.work-order.write
+                resource_plan_id: plan-mock-001
+                resource_plan_item_id: item-mock-001
+                tenant_ref: tenant-a
+                state: CANCELLED
+                policy_decision_ref: pd-mock-001
+                error:
+                  error_code: CANCELLED
+                  message: execution cancelled by consumer
+                  request_id: req-mock-001
+                started_at: '2026-09-22T00:00:00Z'
+                finished_at: '2026-09-22T00:00:00Z'
+        '404': {$ref: '#/components/responses/ExecutionNotFound'}
+        '409': {$ref: '#/components/responses/CancelRaceLost'}
+components:
+  parameters:
+    ActionId:
+      name: actionId
+      in: path
+      required: true
+      schema: {type: string, pattern: '^tool\.[a-z0-9-]+(\.[a-z0-9-]+)*\.(read|write|execute)$'}
+    ExecutionId:
+      name: executionId
+      in: path
+      required: true
+      schema: {type: string, pattern: '^te-[a-z0-9-]+$'}
+    ResourcePlanId:
+      name: X-Resource-Plan-ID
+      in: header
+      required: true
+      schema: {type: string, minLength: 1}
+    ResourcePlanItemId:
+      name: X-Resource-Plan-Item-ID
+      in: header
+      required: true
+      schema: {type: string, minLength: 1}
+    TenantRef:
+      name: X-Tenant-Ref
+      in: header
+      required: true
+      description: Injected by a trusted gateway in production.
+      schema: {type: string, minLength: 1}
+    Traceparent:
+      name: traceparent
+      in: header
+      required: true
+      schema: {type: string, pattern: '^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$'}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: {type: string, minLength: 1}
+    PolicyDecisionRef:
+      name: X-Policy-Decision-Ref
+      in: header
+      required: true
+      description: Data-plane authorization decision reference (re-checked per execution).
+      schema: {type: string, minLength: 1}
+  schemas:
+    ErrorEnvelope:
+      # FROZEN contract: flat {error_code, message, request_id}
+      # (contracts/schemas/v1/error-envelope.json)
+      type: object
+      additionalProperties: false
+      required: [error_code, message, request_id]
+      properties:
+        error_code:
+          type: string
+          enum: [VALIDATION_UNKNOWN_FIELD, VALIDATION_INVALID_ENUM, VALIDATION_PAYLOAD_TOO_LARGE,
+                 VALIDATION_PAYLOAD_TOO_DEEP, VALIDATION_MISSING_REQUIRED, SEMANTIC_INVALID,
+                 COMPATIBILITY_BREAKING_CHANGE, FORBIDDEN_FIELD, NOT_FOUND, METHOD_NOT_ALLOWED,
+                 CONFLICT, INTERNAL]
+        message: {type: string, maxLength: 512}
+        request_id: {type: string, minLength: 1, maxLength: 128}
+    PreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [parameters]
+      properties:
+        parameters:
+          type: object
+          additionalProperties: true
+          description: Action parameters (validated against parameter_schema_ref; mock accepts the documented shape).
+    PreviewResponse:
+      type: object
+      additionalProperties: false
+      required: [preview_id, action_id, risk_level, approval_required, validated_parameters_digest, next_step]
+      properties:
+        preview_id: {type: string, pattern: '^tp-[a-z0-9-]+$'}
+        action_id: {type: string}
+        risk_level: {type: string, enum: [LOW, MEDIUM, HIGH]}
+        approval_required: {type: boolean}
+        validated_parameters_digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        next_step: {type: string, enum: [approve, execute]}
+    ApproveRequest:
+      type: object
+      additionalProperties: false
+      required: [preview_id, approval_ref]
+      properties:
+        preview_id: {type: string, pattern: '^tp-[a-z0-9-]+$'}
+        approval_ref: {type: string, minLength: 1}
+    ApproveResponse:
+      type: object
+      additionalProperties: false
+      required: [approval_id, action_id, approval_ref, approved_parameters_digest, next_step]
+      properties:
+        approval_id: {type: string, pattern: '^ta-[a-z0-9-]+$'}
+        action_id: {type: string}
+        approval_ref: {type: string}
+        approved_parameters_digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        next_step: {type: string, const: execute}
+    ExecuteRequest:
+      type: object
+      additionalProperties: false
+      required: [parameters]
+      properties:
+        approval_ref:
+          type: string
+          description: Required for HIGH-risk actions (bound to the approved preview digest); omitted for LOW.
+        parameters:
+          type: object
+          additionalProperties: true
+    ExecutionResult:
+      type: object
+      additionalProperties: false
+      required: [tool_execution_id, action_id, resource_plan_id, resource_plan_item_id, tenant_ref, state, policy_decision_ref, started_at, finished_at]
+      properties:
+        tool_execution_id: {type: string, pattern: '^te-[a-z0-9-]+$'}
+        action_id: {type: string}
+        resource_plan_id: {type: string}
+        resource_plan_item_id: {type: string}
+        tenant_ref: {type: string}
+        state: {type: string, enum: [PREVIEWED, APPROVED, RUNNING, SUCCEEDED, FAILED, CANCELLED]}
+        policy_decision_ref: {type: string}
+        approval_ref: {type: string}
+        idempotency_key: {type: string}
+        result_ref:
+          type: object
+          additionalProperties: false
+          required: [uri, digest]
+          properties:
+            uri: {type: string, pattern: '^evidence://'}
+            digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        error:
+          type: object
+          additionalProperties: false
+          required: [error_code, message, request_id]
+          properties:
+            error_code: {type: string}
+            message: {type: string, maxLength: 512}
+            request_id: {type: string, minLength: 1, maxLength: 128}
+        started_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+        trace_id: {type: string}
+    ToolSnapshot:
+      type: object
+      additionalProperties: false
+      required: [provider_id, snapshot_version, contract_version, generated_at, valid_until, actions, digest]
+      properties:
+        provider_id: {type: string}
+        snapshot_version: {type: string}
+        contract_version: {type: string}
+        generated_at: {type: string, format: date-time}
+        valid_until: {type: string, format: date-time}
+        actions:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [action_id, capability_key, server_ref, transport, risk_level, idempotency, approval_required, parameter_schema_ref, status]
+            properties:
+              action_id: {type: string}
+              capability_key: {type: string}
+              server_ref: {type: string}
+              transport: {type: string, enum: [stdio, http-sse, http-streamable]}
+              risk_level: {type: string, enum: [LOW, MEDIUM, HIGH]}
+              idempotency:
+                type: object
+                additionalProperties: false
+                required: [supported, key_scope]
+                properties:
+                  supported: {type: boolean}
+                  key_scope: {type: string, enum: [action, action+parameter-digest]}
+                  ttl_seconds: {type: integer, minimum: 1}
+              approval_required: {type: boolean}
+              parameter_schema_ref: {type: string}
+              rate_limit:
+                type: object
+                additionalProperties: false
+                properties:
+                  requests_per_minute: {type: integer, minimum: 1}
+              status: {type: string, enum: [AVAILABLE, DEPRECATED, RETIRED]}
+        digest: {type: string}
+        signature: {type: string}
+  responses:
+    ActionNotFound:
+      description: Action not in the current snapshot
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: NOT_FOUND, message: action not found in current snapshot, request_id: req-mock-001}
+    PreviewNotFound:
+      description: Preview does not exist or expired
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: NOT_FOUND, message: preview not found or expired, request_id: req-mock-001}
+    ExecutionNotFound:
+      description: Execution does not exist
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: NOT_FOUND, message: tool execution not found, request_id: req-mock-001}
+    ParameterValidationFailed:
+      description: Parameters failed the action contract validation
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: VALIDATION_MISSING_REQUIRED, message: parameters fail the action parameter schema, request_id: req-mock-001}
+    AuthorizationDenied:
+      description: PDP denied the data-plane authorization
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: SEMANTIC_INVALID, message: policy decision denies this action, request_id: req-mock-001}
+    ApprovalRequired:
+      description: HIGH-risk action executed without a valid approval reference
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: SEMANTIC_INVALID, message: high-risk action requires an approval reference, request_id: req-mock-001}
+    ExecutionConflict:
+      description: Idempotency key reused for a different parameter set
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: CONFLICT, message: idempotency key bound to a different parameter digest, request_id: req-mock-001}
+    CancelRaceLost:
+      description: Execute won the race — terminal state is SUCCEEDED
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: CONFLICT, message: execution already terminal, request_id: req-mock-001}
+    ToolServerUnavailable:
+      description: Domain MCP Server transport failure
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: INTERNAL, message: tool server transport failure, request_id: req-mock-001}
