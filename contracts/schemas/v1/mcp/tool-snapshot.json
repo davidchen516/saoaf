@@ -5,7 +5,15 @@
   "description": "MCP Fabric 向 ARR/Registry 发布的逻辑 action 快照：risk、idempotency、approval requirement。快照是发布事实（不可变 revision），Tool Server 迁移只更新 MCP Fabric，action contract 稳定时 ARR 与 Agent 不变。",
   "type": "object",
   "additionalProperties": false,
-  "required": ["provider_id", "snapshot_version", "contract_version", "generated_at", "valid_until", "actions", "digest"],
+  "required": [
+    "provider_id",
+    "snapshot_version",
+    "contract_version",
+    "generated_at",
+    "valid_until",
+    "actions",
+    "digest"
+  ],
   "properties": {
     "provider_id": {
       "type": "string",
@@ -21,12 +29,20 @@
       "pattern": "^[0-9]{4}-[0-9]{2}$",
       "description": "契约月度版本（与 contracts/ 目录冻结版本对应）。"
     },
-    "generated_at": { "type": "string", "format": "date-time" },
-    "valid_until": { "type": "string", "format": "date-time" },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "valid_until": {
+      "type": "string",
+      "format": "date-time"
+    },
     "actions": {
       "type": "array",
       "minItems": 1,
-      "items": { "$ref": "#/$defs/ToolAction" }
+      "items": {
+        "$ref": "#/$defs/ToolAction"
+      }
     },
     "digest": {
       "type": "string",
@@ -42,7 +58,17 @@
     "ToolAction": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["action_id", "capability_key", "server_ref", "transport", "risk_level", "idempotency", "approval_required", "parameter_schema_ref", "status"],
+      "required": [
+        "action_id",
+        "capability_key",
+        "server_ref",
+        "transport",
+        "risk_level",
+        "idempotency",
+        "approval_required",
+        "parameter_schema_ref",
+        "status"
+      ],
       "properties": {
         "action_id": {
           "type": "string",
@@ -61,23 +87,39 @@
         },
         "transport": {
           "type": "string",
-          "enum": ["stdio", "http-sse", "http-streamable"],
+          "enum": [
+            "stdio",
+            "http-sse",
+            "http-streamable"
+          ],
           "description": "MCP 传输形态。"
         },
         "risk_level": {
           "type": "string",
-          "enum": ["LOW", "MEDIUM", "HIGH"],
+          "enum": [
+            "LOW",
+            "MEDIUM",
+            "HIGH"
+          ],
           "description": "风险等级：HIGH 写操作必须 preview → approve → execute 且每次执行携带审批引用。"
         },
         "idempotency": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["supported", "key_scope"],
+          "required": [
+            "supported",
+            "key_scope"
+          ],
           "properties": {
-            "supported": { "type": "boolean" },
+            "supported": {
+              "type": "boolean"
+            },
             "key_scope": {
               "type": "string",
-              "enum": ["action", "action+parameter-digest"],
+              "enum": [
+                "action",
+                "action+parameter-digest"
+              ],
               "description": "幂等键作用域：action 级或 action+参数摘要级。"
             },
             "ttl_seconds": {
@@ -100,15 +142,47 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "requests_per_minute": { "type": "integer", "minimum": 1 }
+            "requests_per_minute": {
+              "type": "integer",
+              "minimum": 1
+            }
           }
         },
         "status": {
           "type": "string",
-          "enum": ["AVAILABLE", "DEPRECATED", "RETIRED"],
+          "enum": [
+            "AVAILABLE",
+            "DEPRECATED",
+            "RETIRED"
+          ],
           "description": "action 协议状态（RETIRED 后不再出现在新快照）。"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "risk_level": {
+                "const": "HIGH"
+              }
+            },
+            "required": [
+              "risk_level"
+            ]
+          },
+          "then": {
+            "properties": {
+              "approval_required": {
+                "const": true
+              }
+            },
+            "required": [
+              "approval_required"
+            ]
+          },
+          "$comment": "核心不变量（冻结）：HIGH 风险 action 必须 approval_required=true——违反经 contractlint classify 映射为 VALIDATION_INVALID_ENUM（const 违反与枚举违反同消息形——审查 R1 P2-1：冻结后加约束属破坏性，必须在 freeze 前落地）"
+        }
+      ]
     }
   }
 }

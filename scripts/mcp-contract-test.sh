@@ -7,11 +7,6 @@ B="${MCP_MOCK_URL:-http://127.0.0.1:4030}"
 PASS=0; FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "PASS $1"; else FAIL=$((FAIL+1)); echo "FAIL $1: got [$2] want [$3]"; fi }
 post() { curl -s -o /tmp/mcp-body.json -w '%{http_code}' -X POST "$B$1" -H 'Content-Type: application/json' "${@:3}" -d "$2"; }
-hdrs() {
-  echo -H 'X-Resource-Plan-ID: plan-mock-001' -H 'X-Resource-Plan-Item-ID: item-mock-001' \
-       -H 'X-Tenant-Ref: tenant-a' -H 'X-Policy-Decision-Ref: pd-mock-001' \
-       -H 'traceparent: 00-00000000000000000000000000000000-0000000000000000-01'
-}
 TP="00-00000000000000000000000000000000-0000000000000000-01"
 
 # ——— GWT#1 happy path: preview → approve → execute → status ———

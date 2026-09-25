@@ -350,14 +350,19 @@ components:
     ExecutionResult:
       type: object
       additionalProperties: false
-      required: [tool_execution_id, action_id, resource_plan_id, resource_plan_item_id, tenant_ref, state, policy_decision_ref, started_at, finished_at]
+      required: [tool_execution_id, action_id, resource_plan_id, resource_plan_item_id, tenant_ref, state, policy_decision_ref, started_at]
+      description: >-
+        te- evidence lifecycle starts at execute (preview/approve carry
+        their own tp-/ta- objects). Terminal states require finished_at;
+        FAILED/CANCELLED require the error envelope; RUNNING must not
+        carry a fabricated finished_at.
       properties:
         tool_execution_id: {type: string, pattern: '^te-[a-z0-9-]+$'}
         action_id: {type: string}
         resource_plan_id: {type: string}
         resource_plan_item_id: {type: string}
         tenant_ref: {type: string}
-        state: {type: string, enum: [PREVIEWED, APPROVED, RUNNING, SUCCEEDED, FAILED, CANCELLED]}
+        state: {type: string, enum: [RUNNING, SUCCEEDED, FAILED, CANCELLED]}
         policy_decision_ref: {type: string}
         approval_ref: {type: string}
         idempotency_key: {type: string}
@@ -371,6 +376,8 @@ components:
         error:
           type: object
           additionalProperties: false
+          description: flat envelope SHAPE; error_code is a domain
+            classification (e.g. CANCELLED), not the frozen HTTP enum.
           required: [error_code, message, request_id]
           properties:
             error_code: {type: string}
@@ -379,6 +386,17 @@ components:
         started_at: {type: string, format: date-time}
         finished_at: {type: string, format: date-time}
         trace_id: {type: string}
+      allOf:
+        - if:
+            properties: {state: {enum: [SUCCEEDED, FAILED, CANCELLED]}}
+            required: [state]
+          then:
+            required: [finished_at]
+        - if:
+            properties: {state: {enum: [FAILED, CANCELLED]}}
+            required: [state]
+          then:
+            required: [error]
     ToolSnapshot:
       type: object
       additionalProperties: false

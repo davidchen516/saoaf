@@ -14,6 +14,18 @@ fixtures (HIGH-risk without approval reference → 403, idempotency-key
 conflict → 409, parameter validation → 400, tool server transport
 failure → 503, cancel race lost → 409).
 
+**Semantics caveat (I18 review R1 P2-3, disclosed):** Prism is a
+stateless contract mock. The state-level negative responses (approval
+required → 403, idempotency conflict → 409, cancel race → 409, transport
+failure → 503) are CONTRACT EXAMPLES selected via Prism's `Prefer:
+code=…` example-selection; the mock does not statefully REJECT a
+high-risk execute that lacks an approval reference (an approval-less
+execute against the plain mock returns the 200 example). Request-side
+validation (required headers, path patterns, body shapes) IS enforced by
+Prism. Stateful enforcement — risk gating, idempotency ledger, cancel
+arbitration — is 03.5 runtime responsibility, out of contract-freeze
+scope (issue non-goals: no Gateway/Registry/Server).
+
 This mock validates the SAOAF/MCP boundary. It does not implement an MCP
 Gateway, Registry, Server, proxy, session, or any real Tool invocation —
 those remain owned by the professional fabric (03.5 runtime, out of

@@ -2,28 +2,50 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.saoaf.dev/schemas/v1/mcp/execution-evidence.json",
   "title": "MCP Tool Execution Evidence",
-  "description": "MCP Gateway 每次执行产生的最小执行证据：与 resource_plan_id 关联、携带授权/审批引用与终态。敏感结果按数据策略直接返回 Harness，不进入 ARR/Registry——证据只含最小元数据与结果引用。",
+  "description": "MCP Gateway 每次执行产生的最小执行证据：与 resource_plan_id 关联、携带授权/审批引用与终态。证据对象在 execute 时产生（te-）；preview/approve 有各自的 tp-/ta- 对象。敏感结果按数据策略直接返回 Harness，不进入 ARR/Registry——证据只含最小元数据与结果引用。",
   "type": "object",
   "additionalProperties": false,
-  "required": ["tool_execution_id", "action_id", "resource_plan_id", "resource_plan_item_id", "tenant_ref", "state", "policy_decision_ref", "started_at", "finished_at"],
+  "required": [
+    "tool_execution_id",
+    "action_id",
+    "resource_plan_id",
+    "resource_plan_item_id",
+    "tenant_ref",
+    "state",
+    "policy_decision_ref",
+    "started_at"
+  ],
   "properties": {
     "tool_execution_id": {
       "type": "string",
       "pattern": "^te-[a-z0-9-]+$",
       "description": "执行标识（幂等重放返回同一 ID）。"
     },
-    "action_id": { "type": "string" },
+    "action_id": {
+      "type": "string"
+    },
     "resource_plan_id": {
       "type": "string",
       "minLength": 1,
       "description": "关联键（非授权令牌——数据面每次执行重新鉴权）。"
     },
-    "resource_plan_item_id": { "type": "string", "minLength": 1 },
-    "tenant_ref": { "type": "string", "minLength": 1 },
+    "resource_plan_item_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tenant_ref": {
+      "type": "string",
+      "minLength": 1
+    },
     "state": {
       "type": "string",
-      "enum": ["PREVIEWED", "APPROVED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"],
-      "description": "执行状态机：preview → approve（高风险必经）→ execute → {succeeded|failed}；execute 与 cancel 存在竞争窗口，终态由 Gateway 仲裁。"
+      "enum": [
+        "RUNNING",
+        "SUCCEEDED",
+        "FAILED",
+        "CANCELLED"
+      ],
+      "description": "执行状态机：preview → approve（高风险必经，属 tp-/ta- 对象）→ execute 产生本证据 → {succeeded|failed}；execute 与 cancel 存在竞争窗口，终态由 Gateway 仲裁。PREVIEWED/APPROVED 不属于 te- 证据（preview/approve 响应自带 tp-/ta- 对象）。"
     },
     "policy_decision_ref": {
       "type": "string",
@@ -42,29 +64,104 @@
       "type": "object",
       "additionalProperties": false,
       "description": "结果引用（引用与完整性 digest，非结果正文）。",
-      "required": ["uri", "digest"],
+      "required": [
+        "uri",
+        "digest"
+      ],
       "properties": {
         "uri": {
           "type": "string",
           "pattern": "^evidence://[^\\s]+$",
           "description": "结果证据 URI（Harness 按数据策略取回）。"
         },
-        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
       }
     },
     "error": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["error_code", "message", "request_id"],
+      "required": [
+        "error_code",
+        "message",
+        "request_id"
+      ],
       "description": "失败/取消时的冻结错误信封（flat 三键）。",
       "properties": {
-        "error_code": { "type": "string", "minLength": 1 },
-        "message": { "type": "string", "maxLength": 512 },
-        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+        "error_code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
       }
     },
-    "started_at": { "type": "string", "format": "date-time" },
-    "finished_at": { "type": "string", "format": "date-time" },
-    "trace_id": { "type": "string", "description": "W3C trace 关联。" }
-  }
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "终态时间戳（终态必填；RUNNING 在途执行不得伪造）。"
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "W3C trace 关联。"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "SUCCEEDED",
+              "FAILED",
+              "CANCELLED"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "required": [
+          "finished_at"
+        ]
+      },
+      "$comment": "终态必须携带 finished_at（RUNNING 不得伪造终态时间——审查 R1 P2-2）"
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "FAILED",
+              "CANCELLED"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "required": [
+          "error"
+        ]
+      },
+      "$comment": "FAILED/CANCELLED 必须携带 error 信封（失败语义显式，不得无因失败）"
+    }
+  ]
 }

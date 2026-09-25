@@ -11,7 +11,11 @@
       "server_ref": "erp-mcp-server",
       "transport": "http-streamable",
       "risk_level": "LOW",
-      "idempotency": {"supported": true, "key_scope": "action+parameter-digest", "ttl_seconds": 600},
+      "idempotency": {
+        "supported": true,
+        "key_scope": "action+parameter-digest",
+        "ttl_seconds": 600
+      },
       "approval_required": false,
       "parameter_schema_ref": "schema://capabilities/tool.erp.work-order.read/v1",
       "status": "AVAILABLE"
@@ -22,7 +26,11 @@
       "server_ref": "erp-mcp-server",
       "transport": "http-streamable",
       "risk_level": "HIGH",
-      "idempotency": {"supported": true, "key_scope": "action+parameter-digest", "ttl_seconds": 600},
+      "idempotency": {
+        "supported": true,
+        "key_scope": "action+parameter-digest",
+        "ttl_seconds": 600
+      },
       "approval_required": true,
       "parameter_schema_ref": "schema://capabilities/tool.erp.work-order.write/v1",
       "status": "AVAILABLE"

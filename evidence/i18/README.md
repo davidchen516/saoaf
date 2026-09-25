@@ -49,3 +49,18 @@ contractlint validate 第 3 类：`compatibility/v1/consumer-fixtures/mcp-tool-s
 
 - 外部系统反馈（领域 Tool Owner / MCP 真实接口）：issue start rule 明确只阻塞**最终 freeze**，不阻塞 Schema/Mock/负向夹具/消费者样例——本 PR 交付全部仓库内可判定内容；外部反馈到达后如有调整走兼容变更或新 major。
 - Mock 与真实 MCP 协议的对齐审计：随 03.5 运行时批次。
+
+## 审查 R1 整改（CHANGES REQUESTED → 全项修复）
+
+| Finding | 修复 | 验证 |
+|---|---|---|
+| P1-1 valid/mcp golden 未被 validate 覆盖（examples=4 旁证；篡改 golden 门禁不红） | validate 递归发现 valid/**/*.json + 子目录路径映射（examples/valid/mcp/x.json → schemas/v1/mcp/x.json） | **红运行**：transport 改非法值 → 门禁红（enum 违反消息）；恢复绿。examples=6→7（含 RUNNING golden） |
+| P2-1 HIGH⇒approval_required=true 未冻结进 schema（HIGH+false 快照过校验） | ToolAction item 内 allOf if/then 约束（const true）；配负向夹具 mcp-tool-snapshot-high-no-approval | 夹具红（原快照过校验的证据被门禁拒绝）；分类映射对齐（const 违反 → VALIDATION_INVALID_ENUM，classify 关键字映射，schema $comment 如实记录） |
+| P2-2 execution-evidence 状态机矛盾（RUNNING 必填 finished_at 无法合规表达） | state 枚举收敛为 te- 生命周期 {RUNNING, SUCCEEDED, FAILED, CANCELLED}（PREVIEWED/APPROVED 归 tp-/ta- 对象，schema description 明示）；finished_at 降为可选 + if/then：终态必填 finished_at、FAILED/CANCELLED 必带 error 信封 | 负向夹具 ×2（terminal-no-finished→MISSING_REQUIRED / failed-no-error→MISSING_REQUIRED）+ RUNNING golden（无 finished_at 合法）；OpenAPI ExecutionResult 同步（allOf 镜像） |
+| P2-3 Mock「拒绝」仅为 Prefer 选例（AC 表述与实测不符） | mocks/mcp/README **显式披露**：状态级负向为 example-selection 非有状态拒绝；请求侧校验（头/路径/体）真实强制；有状态 enforcement（risk 门禁/幂等台账/cancel 仲裁）属 03.5 运行时（issue non-goals） | 披露文本（审查员最低修复口径） |
+| P3-1 protocols/ 未纳入 OpenAPI 结构 lint | 挂账（model-profile 同先例；扩 lint+响应命名约定随 I19 契约批次统一） | — |
+| P3-2 cancel 例 error_code=CANCELLED 不在冻结枚举 | 执行证据 error 字段措辞修正：**flat 信封形状，error_code 为域分类**（非冻结 HTTP 枚举）——OpenAPI description 如实 | 文本 |
+| P3-3 403 语义码跨模块分叉（FORBIDDEN 枚举外 vs SEMANTIC_INVALID 枚举内） | 挂账：信封 v2 收敛或运行时迁移（I18 守住冻结枚举自洽） | — |
+| P3-4 杂项 | hdrs() 死函数删除；CI mcp-contract 健康等待循环替代固定 sleep；RETIRED prose 明确「新快照不再出现」 | 文本/CI |
+
+整改后：`CONTRACT GATE: PASS (schemas=6 examples=7 negatives=11 consumers=4 forbidden-hits=0)`、`DEPLOYABLE SCAN: PASS`、消费者测试 13/13（Mock 重启实测）、breaking 对 main 纯加法。

@@ -200,13 +200,18 @@ func cmdValidate() error {
 	}
 
 	// 1. Golden examples must validate against their schema (match by stem).
+	// Recursive: module subdirectories like examples/valid/mcp/ (I18) are
+	// first-class goldens (review R1 P1-1: a top-level-only glob left the
+	// MCP goldens silently unvalidated).
 	examples, _ := filepath.Glob(filepath.Join(contractsDir, "examples", "valid", "*.json"))
+	subExamples, _ := filepath.Glob(filepath.Join(contractsDir, "examples", "valid", "*", "*.json"))
+	examples = append(examples, subExamples...)
 	validByStem := map[string]string{}
 	for _, f := range schemaFiles {
 		validByStem[filepath.Base(f)] = f
 	}
 	for _, ex := range examples {
-		stem := exampleSchemaFor(filepath.Base(ex))
+		stem := exampleSchemaForPath(ex)
 		if stem == "" {
 			add(ex, "no schema mapping for example (name must match <schema-stem>[-variant].json)")
 			continue
@@ -228,7 +233,7 @@ func cmdValidate() error {
 	// still validate against the CURRENT schemas (backward compatibility).
 	consumers, _ := filepath.Glob(filepath.Join(contractsDir, "compatibility", "*", "consumer-fixtures", "*.json"))
 	for _, cf := range consumers {
-		stem := exampleSchemaFor(filepath.Base(cf))
+		stem := exampleSchemaForPath(cf)
 		if stem == "" {
 			add(cf, "no schema mapping for consumer fixture")
 			continue
@@ -287,6 +292,35 @@ func cmdValidate() error {
 }
 
 // exampleSchemaFor maps an example filename to its schema file, e.g.
+// exampleSchemaForPath resolves the schema for an example/consumer-fixture
+// PATH: an example nested in a module subdirectory (examples/valid/mcp/
+// tool-snapshot.json) maps to schemas/v1/mcp/tool-snapshot.json directly;
+// top-level files fall back to the legacy name heuristics.
+func exampleSchemaForPath(path string) string {
+	rel, err := filepath.Rel(filepath.Join(contractsDir, "examples", "valid"), path)
+	if err == nil && rel != path && !strings.HasPrefix(rel, "..") {
+		parts := strings.SplitN(rel, string(filepath.Separator), 2)
+		if len(parts) == 2 {
+			// module subdirectory: <module>/<name>.json must map to
+			// schemas/v1/<module>/<name>.json or its stem-prefix variant
+			module, name := parts[0], strings.TrimSuffix(parts[1], ".json")
+			try := func(r string) bool {
+				_, err := os.Stat(filepath.Join(contractsDir, "schemas", "v1", r))
+				return err == nil
+			}
+			if try(filepath.Join(module, name+".json")) {
+				return filepath.Join(module, name+".json")
+			}
+			if i := strings.LastIndex(name, "-"); i > 0 {
+				if try(filepath.Join(module, name[:i]+".json")) {
+					return filepath.Join(module, name[:i]+".json")
+				}
+			}
+		}
+	}
+	return exampleSchemaFor(filepath.Base(path))
+}
+
 // "cloudevents-published.json" → "cloudevents-envelope.json".
 var exampleSchemaOverrides = map[string]string{
 	"cloudevents-published": "cloudevents-envelope.json",
