@@ -44,6 +44,16 @@
 | P2-3 启动门禁（#5 OPEN） | I05 挂账同 #11/#13 先例（Mock 范围已并入 main，真实 Identity 联调 ledger）；此前 8 个 Issue 同口径开工 | — |
 | P3-③ Scope 收窄 | 如实披露：交付 Binding 列表+发布 / Plan 列表+详情；创建/校验/影响分析 → I17 | — |
 
+## 审查 R2 整改（复审新发现）
+
+| Finding | 修复 | 证据 |
+|---|---|---|
+| R2-P1-1 admin+hub 双 Route("/admin/v1") 启动 panic（审查员构造共存配置实测 exit=2） | MountAdmin 增加 extend 钩子（路由挂入门控子树内）；hub.Mount 改收子路由 + 相对路径 | 冒烟：双面共存配置启动 ALIVE 无 panic |
+| R2-P1-2 hub 读端点零认证匿名可读（审查实测无头 200） | hub 路由挂入 RequireIdentity+RateLimit 子树内 | 冒烟：匿名 GET /admin/v1/bindings → 401 UNAUTHENTICATED 信封 |
+| R2-P1-3 发布链路 404（handlePublish 全仓零调用方——死代码） | handlePublish 真实接线（subrouter POST /bindings/{id}/publish）；**真实发布实现**：deactivate CAS + 新 PUBLISHED revision 插入（镜像 binding 模块 SQL）；幂等重发布 no-op | 代码 + 契约测试 |
+| R2-P2 request_id 空串违 schema minLength | writeErr 兜底生成非空 request_id | 冒烟 401 信封 request_id=UUID |
+| R2-P3-4 hub 零 Go 测试 | 如实披露（HTTP 面冒烟脚本 /tmp/hub-smoke.sh 记录于 evidence；Go 单测随 I17 管理面批次统一） | — |
+
 ## 已知限制（挂账）
 
 - **真实浏览器 E2E**：issue 要求 Playwright 或等价——当前交付为 node:test 源码/构建产物/契约断言（8/8）+ CI 的 `web build + npm audit` 门禁。真实浏览器 E2E 需要 Playwright/CDP 依赖引入与浏览器二进制——挂 I17 管理面批次（届时连带 I17 的管理界面一起做跨页面 E2E）。

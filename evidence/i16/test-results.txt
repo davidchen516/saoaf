@@ -4,3 +4,9 @@
 
 # 构建产物：dist/assets/index-*.js 226 KB（gzip 71 KB）——tsc --noEmit + vite build ✅
 # npm audit：本地 registry 不支持 audit 端点（CI 的 web build + npm audit gate 覆盖）
+
+# R2 冒烟（真实 PG + 真实 cmd/control-plane-api 实例 + curl）：
+# - admin+hub 双面共存配置（SAOAF_OIDC_ISSUER+SAOAF_PDP_URL+SAOAF_APPROVAL_URL+SAOAF_DB_DSN 全配）启动 ALIVE——无 chi panic
+# - 匿名 GET /admin/v1/bindings → 401 {"error_code":"UNAUTHENTICATED",...,"request_id":"<uuid>"}（门控子树内）
+# - request_id 非空（冻结 schema minLength 满足）
+# R2 后全仓 -race 22/22 ok；BOUNDARY PASS

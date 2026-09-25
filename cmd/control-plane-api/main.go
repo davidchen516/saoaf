@@ -43,25 +43,33 @@ func main() {
 
 	// I05 admin demo endpoints: enabled only when the full adapter config
 	// is present (issuer + PDP + approval); otherwise the admin API stays
-	// CLOSED rather than open (fail-closed by default).
+	// CLOSED rather than open (fail-closed by default). The I16 hub
+	// resource routes mount INSIDE the same identity-gated block — the
+	// management reads are authenticated (review R2 P1-2: anonymous reads
+	// are fail-open and forbidden) and register paths directly (review
+	// R2 P1-1: a second Route() on the same path panics chi at startup).
 	if cfg := adminConfigFromEnv(); cfg != nil {
-		httpapi.MountAdmin(router, *cfg)
+		// hub resource routes mount INSIDE the gated subtree (paths are
+		// RELATIVE to /admin/v1 — the subrouter prefixes them)
+		var hubExt func(admin chi.Router)
+		if dsn := os.Getenv("SAOAF_DB_DSN"); dsn != "" {
+			pool, err := pgxpool.New(context.Background(), dsn)
+			if err == nil {
+				hubCfg := hub.Config{Pool: pool, BindingsDSN: dsn}
+				hubExt = func(admin chi.Router) { hub.Mount(admin, hubCfg) }
+			}
+		}
+		if hubExt != nil {
+			httpapi.MountAdmin(router, *cfg, hubExt)
+		} else {
+			httpapi.MountAdmin(router, *cfg)
+		}
 	}
 
 	// I09 runtime resolver API: mounted only when identity + database are
 	// configured; otherwise the runtime surface stays CLOSED.
 	if cfg := resolverConfigFromEnv(logger); cfg != nil {
 		resolver.MountResolver(router, cfg)
-	}
-
-	// I16 resource hub read API (module 03.2): mounted when the database
-	// is configured; reads only (publish remains on the approval-gated
-	// admin chain from I05)
-	if dsn := os.Getenv("SAOAF_DB_DSN"); dsn != "" {
-		pool, err := pgxpool.New(context.Background(), dsn)
-		if err == nil {
-			hub.Mount(router, hub.Config{Pool: pool, BindingsDSN: dsn})
-		}
 	}
 
 	srv := &http.Server{

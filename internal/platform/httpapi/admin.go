@@ -26,7 +26,7 @@ type AdminConfig struct {
 }
 
 // MountAdmin wires /admin/v1 under the fixed auth chain.
-func MountAdmin(r chi.Router, cfg AdminConfig) {
+func MountAdmin(r chi.Router, cfg AdminConfig, extend ...func(admin chi.Router)) {
 	r.Route("/admin/v1", func(admin chi.Router) {
 		// identity FIRST so the rate limiter buckets per-subject (an
 		// anonymous flood must not starve authenticated admins; anonymous
@@ -77,5 +77,9 @@ func MountAdmin(r chi.Router, cfg AdminConfig) {
 				"request_id":   traceID,
 			})
 		})
+		// I16+ extension routes mount INSIDE the gated subtree
+		for _, ext := range extend {
+			ext(admin)
+		}
 	})
 }
