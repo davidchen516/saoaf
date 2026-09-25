@@ -132,7 +132,21 @@ func TestFullTransitionMatrix(t *testing.T) {
 						want = true
 					}
 				}
-				err := store.Transition(ctx, key, from, to, "user:matrix")
+				// The guarded edges go through their REAL commands (the
+				// guards are part of the matrix semantics); everything else
+				// exercises the raw transition CAS (unexported, same package).
+				var err error
+				switch {
+				case from == StateDraft && to == StateApproved:
+					err = store.Approve(ctx, key, "user:matrix") // initiator is user:i — guard test
+				case from == StateRemediationOpen && to == StateClosed:
+					// the COMMAND carries preconditions: resolve the open
+					// finding first, then Close enforces the evidence guard
+					_ = store.ResolveFinding(ctx, key, "f-drive", "fixed", "evidence:mx")
+					err = store.Close(ctx, key, "user:matrix")
+				default:
+					err = store.transition(ctx, key, from, to, nil, "user:matrix")
+				}
 				if want && err != nil {
 					t.Errorf("store matrix %s→%s (legal) rejected: %v", from, to, err)
 				}
@@ -718,6 +732,76 @@ func TestAddFindingWritesAuditRow(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("SUCCEEDED→REMEDIATION_OPEN audit row missing on AddFinding path: %+v", log)
+		}
+	})
+}
+
+// R2-P2-1 回归：AddFinding（REM 路径）与 Close 并发——CLOSED 不变量在
+// 任何交错下不可破坏（审查 200 轮 19 命中的 TOCTOU）。
+func TestAddFindingCloseTOCTOUInvariant(t *testing.T) {
+	withDBD(t, func(dsn string, store Store, pool *pgxpool.Pool) {
+		ctx := context.Background()
+		for round := 0; round < 20; round++ {
+			key := fmt.Sprintf("drill-toctou-%d", round)
+			_ = store.Create(ctx, newDrill(key, "v", "user:i"))
+			_ = driveTo(ctx, store, key, StateRemediationOpen) // has f-drive OPEN
+			var wg sync.WaitGroup
+			wg.Add(2)
+			var addErr, closeErr error
+			go func() {
+				defer wg.Done()
+				addErr = store.AddFinding(ctx, key, "f-race", "racy", "LOW", "user:a")
+			}()
+			go func() {
+				defer wg.Done()
+				// resolve the drive finding first so Close CAN proceed
+				_ = store.ResolveFinding(ctx, key, "f-drive", "fixed", "evidence:fx")
+				closeErr = store.Close(ctx, key, "user:a")
+			}()
+			wg.Wait()
+			d, _ := store.Get(ctx, key)
+			var openCount int
+			_ = pool.QueryRow(ctx, `
+				SELECT count(*) FROM saoaf.exit_drill_finding WHERE drill_key = $1 AND state = 'OPEN'`, key).Scan(&openCount)
+			// invariant: a CLOSED drill never carries an OPEN finding
+			if d.State == StateClosed && openCount > 0 {
+				t.Fatalf("round %d: CLOSED drill with %d OPEN findings (TOCTOU regression; addErr=%v closeErr=%v)",
+					round, openCount, addErr, closeErr)
+			}
+			_ = addErr
+			_ = closeErr
+		}
+	})
+}
+
+// R2-P2-2 回归：守卫边必须走真实命令——REM→CLOSED 的两个前置（open
+// finding / result evidence）在通用路径下同样强制（Transition 已去导出，
+// 此处以 Close 真命令断言守卫）。
+func TestGuardedEdgesEnforced(t *testing.T) {
+	withDBD(t, func(dsn string, store Store, pool *pgxpool.Pool) {
+		ctx := context.Background()
+		// REM with an open finding → Close rejected
+		_ = store.Create(ctx, newDrill("drill-g1", "v", "user:i"))
+		_ = driveTo(ctx, store, "drill-g1", StateRemediationOpen)
+		if err := store.Close(ctx, "drill-g1", "user:a"); !isReason(err, ReasonOpenFindings) {
+			t.Fatalf("close with open finding must be rejected, got %v", err)
+		}
+		// resolve findings but empty result evidence (SUCCEEDED via driveTo
+		// has evidence:s) — craft a no-evidence case:
+		_ = store.Create(ctx, newDrill("drill-g2", "v", "user:i"))
+		_ = store.Approve(ctx, "drill-g2", "user:a")
+		_ = store.Schedule(ctx, "drill-g2", "user:a")
+		_ = store.Start(ctx, "drill-g2", "w")
+		_ = store.Finish(ctx, "drill-g2", StateSucceeded, "w", "") // empty evidence
+		_ = store.AddFinding(ctx, "drill-g2", "f1", "x", "LOW", "user:a")
+		_ = store.ResolveFinding(ctx, "drill-g2", "f1", "fixed", "evidence:fx")
+		if err := store.Close(ctx, "drill-g2", "user:a"); !isReason(err, ReasonMissingEvidence) {
+			t.Fatalf("close without result evidence must be rejected, got %v", err)
+		}
+		// self-approval guard via the real Approve command
+		_ = store.Create(ctx, newDrill("drill-g3", "v", "user:same"))
+		if err := store.Approve(ctx, "drill-g3", "user:same"); !isReason(err, ReasonSelfApproval) {
+			t.Fatalf("self-approval must be rejected, got %v", err)
 		}
 	})
 }

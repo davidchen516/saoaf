@@ -277,12 +277,6 @@ func (s Store) transition(ctx context.Context, drillKey, from, to string, mutate
 	return tx.Commit(ctx)
 }
 
-// Transition applies any matrix-legal edge (CAS + audit) — the generic
-// command surface used by the store-level matrix test and future tooling.
-func (s Store) Transition(ctx context.Context, drillKey, from, to, actor string) error {
-	return s.transition(ctx, drillKey, from, to, nil, actor)
-}
-
 // txTransition performs a matrix-checked state transition INSIDE an
 // existing transaction with an audit row（the building block for compound
 // transitions like Finish and AddFinding）.
@@ -336,8 +330,11 @@ func (s Store) AddFinding(ctx context.Context, drillKey, findingKey, description
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var state string
+	// R2-P2-1: lock the drill row for the whole tx — a concurrent Close
+	// serializes against this read, so the CLOSED guard can never count
+	// a pre-commit finding (probe: 19/200 races broke the invariant)
 	if err := tx.QueryRow(ctx, `
-		SELECT state FROM saoaf.exit_drill WHERE drill_key = $1`, drillKey).Scan(&state); err != nil {
+		SELECT state FROM saoaf.exit_drill WHERE drill_key = $1 FOR UPDATE`, drillKey).Scan(&state); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -414,7 +411,7 @@ func (s Store) TransitionLog(ctx context.Context, drillKey string) ([]struct {
 }, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT from_state, to_state, actor, at FROM saoaf.exit_drill_transition
-		WHERE drill_key = $1 ORDER BY at`, drillKey)
+		WHERE drill_key = $1 ORDER BY at, id`, drillKey)
 	if err != nil {
 		return nil, err
 	}

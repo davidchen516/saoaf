@@ -37,6 +37,15 @@
 | P2-5 RUNNING→ABORTED 人工中断无确定性测试 | 新增确定性测试（含审计行 + 双 abort 拒绝） | `TestRunningAbortDeterministic` |
 | P3 顺带 | RunStep claimed_by 守卫；死列写入（scheduled_at/started_at 等）；A1 探针（直接 SQL 62/62 非法边放行）按全仓口径挂账——DB 层无转换 trigger 为既有模式（binding/policy 同），应用层唯一防线 | — |
 
+## 审查 R2 整改（复审新发现）
+
+| Finding | 修复 | 回归 |
+|---|---|---|
+| R2-P2-1 AddFinding/Close TOCTOU（200 轮 19 命中「CLOSED drill + OPEN finding」——AC4 直接违反） | AddFinding 的状态读加 `SELECT ... FOR UPDATE`——与 Close 的计数查询在行锁上串行化，任何交错下守卫可见全部已提交 Finding | `TestAddFindingCloseTOCTOUInvariant`（20 轮并发交错；不变量断言 CLOSED 永不带 OPEN finding） |
+| R2-P2-2 导出的 Transition 通用面绕过全部守卫（REM→CLOSED 带 OPEN finding 成功、自批成功、零 finding 开 REM） | **去导出**（transition 保持包内原语）；矩阵测试的守卫边改走真实命令（Approve/Close）——守卫语义成为矩阵断言的一部分 | `TestGuardedEdgesEnforced`（open-finding 拒 + 空证据拒 + 自批拒）+ TestFullTransitionMatrix 改造 |
+| R2-P3-2 审计排序无 tiebreaker | `ORDER BY at, id` | — |
+| R2-P3-1 ABORTED→REM 半闭环 | 挂账：ABORTED drill 的 result_evidence 无供给口（仅 Finish 从 RUNNING 可写）——tech-lead 裁决给证据供给口或接受 REM(aborted)→ABORTED 为唯一出口（后者为当前行为，已记录） | — |
+
 ## 已知限制（挂账）
 
 - GWT#7 HTTP 403 完整门禁（exit-admin scope）→ I17。
