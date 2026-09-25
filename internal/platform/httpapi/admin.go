@@ -130,9 +130,9 @@ func (cfg AdminConfig) publishBinding(w http.ResponseWriter, req *http.Request) 
 	// from the body
 	expected := req.Header.Get("If-Match")
 	var body struct {
-		ExpectedRevision *int    `json:"expected_revision"`
-		ChangeReason     string  `json:"change_reason"`
-		TicketRef        string  `json:"ticket_ref"`
+		ExpectedRevision *int   `json:"expected_revision"`
+		ChangeReason     string `json:"change_reason"`
+		TicketRef        string `json:"ticket_ref"`
 	}
 	if req.Body != nil {
 		_ = json.NewDecoder(http.MaxBytesReader(w, req.Body, 64*1024)).Decode(&body) //nolint:errcheck // absence handled by the field checks below
@@ -199,12 +199,12 @@ func (cfg AdminConfig) publishBinding(w http.ResponseWriter, req *http.Request) 
 		status = "already-published"
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{
-		"status":        status,
-		"binding_id":    bindingID,
-		"revision":      res.Revision,
-		"state":         res.State,
-		"decision_ref":  approvalRef,
-		"request_id":    traceID,
+		"status":       status,
+		"binding_id":   bindingID,
+		"revision":     res.Revision,
+		"state":        res.State,
+		"decision_ref": approvalRef,
+		"request_id":   traceID,
 	})
 }
 

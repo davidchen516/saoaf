@@ -52,8 +52,8 @@ func newStubIssuer(t *testing.T) *stubIssuer {
 		case "/keys":
 			_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{map[string]string{
 				"kty": "RSA", "kid": s.kid, "alg": "RS256",
-				"n":   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
-				"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes()),
+				"n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
+				"e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes()),
 			}}})
 		default:
 			http.NotFound(w, r)
