@@ -25,6 +25,18 @@
 5. **审批分离**：approver ≠ initiator 服务端强制。
 6. **审计**：每状态迁移一条 exit_drill_transition（监控导出 = TransitionLog）。
 
+## 审查 R1 整改（Findings → 修复 → 回归映射）
+
+| Finding | 修复 | 回归 |
+|---|---|---|
+| P1-1 审计断链（SUCCEEDED→REMEDIATION_OPEN 两条内联写路径绕 transition()——审计链 tail ≠ 实际状态；AddFinding 两语句非事务） | 提取 `txTransition`（CAS + 审计行的事务内构件）；Finish 的 mutate 钩子与 AddFinding 均改走矩阵转换带审计；AddFinding 整体单事务；transition() 审计行紧跟基础 CAS（日志序=边序） | `TestAddFindingWritesAuditRow` + `TestHappyPathFullCycle` 审计链 6 边逐位断言（软化断言已硬化） |
+| P2-1 ABORTED 后 worker 照常执行外部步骤 | `ClaimNext` 前置 drill 状态检查（非 RUNNING 不领取）——人工终止立即停止外部副作用 | `TestWorkerStopsOnAbortedDrill`（calls=0） |
+| P2-2 CLOSED 可事后加 Finding | AddFinding 状态守卫：CLOSED/未启动态拒绝（reason code） | `TestClosedDrillRejectsFindings` |
+| P2-3 矩阵收窄（FAILED/ABORTED 无整改闭环） | **按 issue 字面矩阵仲裁**：{SUCCEEDED\|FAILED\|ABORTED} → REMEDIATION_OPEN 全部开放（issue 原文即此；前实现的收窄是未记录的自行决定） | `TestFailedDrillOpensRemediation`（含审计行 + 闭环 + Close） |
+| P2-4 矩阵测试自证（纯函数测自己的副本） | 吸收审查探针 A2：store 层每对状态真实转换尝试（合法边成功+恰 1 审计行；非法边 reason+状态不变）——`Transition` 通用命令面导出 | `TestFullTransitionMatrix`（store 层 72 对） |
+| P2-5 RUNNING→ABORTED 人工中断无确定性测试 | 新增确定性测试（含审计行 + 双 abort 拒绝） | `TestRunningAbortDeterministic` |
+| P3 顺带 | RunStep claimed_by 守卫；死列写入（scheduled_at/started_at 等）；A1 探针（直接 SQL 62/62 非法边放行）按全仓口径挂账——DB 层无转换 trigger 为既有模式（binding/policy 同），应用层唯一防线 | — |
+
 ## 已知限制（挂账）
 
 - GWT#7 HTTP 403 完整门禁（exit-admin scope）→ I17。

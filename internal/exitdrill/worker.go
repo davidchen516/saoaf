@@ -45,13 +45,23 @@ type Worker struct {
 
 // ClaimNext claims the next runnable step: PENDING, or RUNNING with an
 // expired lease（visible-timeout re-claim）. SKIP LOCKED keeps multiple
-// workers from double-claiming.
+// workers from double-claiming. Terminal drills (ABORTED/FAILED/
+// SUCCEEDED/CLOSED) claim nothing — manual termination stops external
+// side effects immediately（review R1 P2-1）.
 func (w Worker) ClaimNext(ctx context.Context, drillKey string) (*Step, error) {
 	tx, err := w.Store.Pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	var drillState string
+	if err := tx.QueryRow(ctx, `
+		SELECT state FROM saoaf.exit_drill WHERE drill_key = $1`, drillKey).Scan(&drillState); err != nil {
+		return nil, err
+	}
+	if drillState != StateRunning {
+		return nil, nil // terminal or not yet running — nothing to claim
+	}
 	var s Step
 	var timeoutAt *time.Time
 	err = tx.QueryRow(ctx, `
@@ -113,8 +123,9 @@ func (w Worker) RunStep(ctx context.Context, s *Step) error {
 	tag, err := w.Store.Pool.Exec(ctx, `
 		UPDATE saoaf.exit_drill_step
 		SET state = 'DONE', result_evidence = $1, lease_expires_at = NULL
-		WHERE drill_key = $2 AND step_no = $3 AND state IN ('RUNNING','PENDING')`,
-		evidence, s.DrillKey, s.StepNo)
+		WHERE drill_key = $2 AND step_no = $3 AND state IN ('RUNNING','PENDING')
+		  AND (claimed_by = $4 OR claimed_by = '')`,
+		evidence, s.DrillKey, s.StepNo, w.WorkerID)
 	if err != nil {
 		return err
 	}

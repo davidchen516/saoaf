@@ -57,13 +57,16 @@ var (
 
 // legalTransitions is the explicit full matrix (issue 核心验收逻辑).
 var legalTransitions = map[string][]string{
-	StateDraft:           {StateApproved},
-	StateApproved:        {StateScheduled},
-	StateScheduled:       {StateRunning, StateAborted},
-	StateRunning:         {StateSucceeded, StateFailed, StateAborted},
+	StateDraft:     {StateApproved},
+	StateApproved:  {StateScheduled},
+	StateScheduled: {StateRunning, StateAborted},
+	StateRunning:   {StateSucceeded, StateFailed, StateAborted},
+	// issue 原文：{SUCCEEDED｜FAILED｜ABORTED} →（存在 Finding 时）
+	// REMEDIATION_OPEN——失败/中止的演练同样允许整改闭环（审查 R1 P2-3
+	// 仲裁：按 issue 字面矩阵执行，非实现自行收窄）
 	StateSucceeded:       {StateRemediationOpen},
-	StateFailed:          {},
-	StateAborted:         {},
+	StateFailed:          {StateRemediationOpen},
+	StateAborted:         {StateRemediationOpen},
 	StateRemediationOpen: {StateClosed, StateAborted},
 	StateClosed:          {},
 }
@@ -171,7 +174,10 @@ func (s Store) Finish(ctx context.Context, drillKey, to, actor, resultEvidence s
 			WHERE drill_key = $2`, resultEvidence, drillKey); err != nil {
 			return err
 		}
-		// SUCCEEDED with findings → open the remediation phase in the same tx
+		// SUCCEEDED with findings → open the remediation phase in the same
+		// tx — as a MATRIX transition WITH an audit row (review R1 P1-1:
+		// the previous inline write bypassed transition() leaving the audit
+		// chain's tail ≠ actual state)
 		if to == StateSucceeded {
 			var openFindings int
 			if err := tx.QueryRow(ctx, `
@@ -179,9 +185,7 @@ func (s Store) Finish(ctx context.Context, drillKey, to, actor, resultEvidence s
 				return err
 			}
 			if openFindings > 0 {
-				if _, err := tx.Exec(ctx, `
-					UPDATE saoaf.exit_drill SET state = 'REMEDIATION_OPEN', remediation_opened_at = now()
-					WHERE drill_key = $1`, drillKey); err != nil {
+				if err := txTransition(ctx, tx, drillKey, StateSucceeded, StateRemediationOpen, actor); err != nil {
 					return err
 				}
 			}
@@ -247,9 +251,10 @@ func (s Store) transition(ctx context.Context, drillKey, from, to string, mutate
 	if !ValidateTransition(from, to) {
 		return errT(ReasonInvalidTransition, from+" → "+to+" outside the matrix")
 	}
-	// base state transition FIRST; the mutate hook may then advance the
-	// row further (e.g. Finish: RUNNING → SUCCEEDED → REMEDIATION_OPEN in
-	// one tx when findings exist)
+	// base state transition FIRST (audit row immediately after, so the
+	// log order matches the edge order); the mutate hook may then advance
+	// the row further (e.g. Finish: RUNNING → SUCCEEDED → REMEDIATION_OPEN
+	// in one tx when findings exist)
 	tag, err := tx.Exec(ctx, `
 		UPDATE saoaf.exit_drill SET state = $1 WHERE drill_key = $2 AND state = $3`,
 		to, drillKey, from)
@@ -259,17 +264,47 @@ func (s Store) transition(ctx context.Context, drillKey, from, to string, mutate
 	if tag.RowsAffected() == 0 {
 		return errT(ReasonCasConflict, "concurrent command won the CAS")
 	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO saoaf.exit_drill_transition (drill_key, from_state, to_state, actor)
+		VALUES ($1, $2, $3, $4)`, drillKey, from, to, actor); err != nil {
+		return err
+	}
 	if mutate != nil {
 		if err := mutate(tx, &d); err != nil {
 			return err
 		}
+	}
+	return tx.Commit(ctx)
+}
+
+// Transition applies any matrix-legal edge (CAS + audit) — the generic
+// command surface used by the store-level matrix test and future tooling.
+func (s Store) Transition(ctx context.Context, drillKey, from, to, actor string) error {
+	return s.transition(ctx, drillKey, from, to, nil, actor)
+}
+
+// txTransition performs a matrix-checked state transition INSIDE an
+// existing transaction with an audit row（the building block for compound
+// transitions like Finish and AddFinding）.
+func txTransition(ctx context.Context, tx pgx.Tx, drillKey, from, to, actor string) error {
+	if !ValidateTransition(from, to) {
+		return errT(ReasonInvalidTransition, from+" → "+to+" outside the matrix")
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE saoaf.exit_drill SET state = $1 WHERE drill_key = $2 AND state = $3`,
+		to, drillKey, from)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errT(ReasonCasConflict, "concurrent command won the CAS")
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO saoaf.exit_drill_transition (drill_key, from_state, to_state, actor)
 		VALUES ($1, $2, $3, $4)`, drillKey, from, to, actor); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 // Get returns the drill.
@@ -288,21 +323,53 @@ func (s Store) Get(ctx context.Context, drillKey string) (*Drill, error) {
 	return &d, nil
 }
 
-// AddFinding records a finding (drills in SUCCEEDED/REMEDIATION_OPEN may
-// accumulate findings before closing).
-func (s Store) AddFinding(ctx context.Context, drillKey, findingKey, description, severity string) error {
-	if _, err := s.Pool.Exec(ctx, `
+// AddFinding records a finding and, when the drill is SUCCEEDED, opens
+// the remediation phase — INSERT + state transition + audit row in ONE
+// transaction (review R1 P1-1: the previous two-statement form was
+// non-transactional and wrote no audit row). CLOSED and other terminal
+// states reject the finding（P2-2: CLOSED's invariant must not be
+// breakable after the fact）.
+func (s Store) AddFinding(ctx context.Context, drillKey, findingKey, description, severity string, actor string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var state string
+	if err := tx.QueryRow(ctx, `
+		SELECT state FROM saoaf.exit_drill WHERE drill_key = $1`, drillKey).Scan(&state); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	switch state {
+	case StateSucceeded, StateRemediationOpen:
+		// findings accumulate; SUCCEEDED flips to the remediation phase
+	case StateRunning:
+		// pre-register findings (they surface at Finish)
+	case StateFailed, StateAborted:
+		// terminal-with-findings: the remediation phase opens per the
+		// issue matrix ({SUCCEEDED|FAILED|ABORTED} → REMEDIATION_OPEN)
+		if err := txTransition(ctx, tx, drillKey, state, StateRemediationOpen, actor); err != nil {
+			return err
+		}
+	default:
+		return errT(ReasonInvalidTransition, "findings cannot be added to a "+state+" drill")
+	}
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO saoaf.exit_drill_finding (drill_key, finding_key, description, severity)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (drill_key, finding_key) DO NOTHING`,
 		drillKey, findingKey, description, severity); err != nil {
 		return err
 	}
-	// move a SUCCEEDED drill into the remediation phase
-	_, err := s.Pool.Exec(ctx, `
-		UPDATE saoaf.exit_drill SET state = 'REMEDIATION_OPEN', remediation_opened_at = now()
-		WHERE drill_key = $1 AND state = 'SUCCEEDED'`, drillKey)
-	return err
+	if state == StateSucceeded {
+		if err := txTransition(ctx, tx, drillKey, StateSucceeded, StateRemediationOpen, actor); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // ResolveFinding closes one finding with remediation + evidence.

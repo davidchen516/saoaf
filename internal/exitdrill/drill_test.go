@@ -74,18 +74,21 @@ func isReason(err error, reason string) bool {
 	return ok && et.Reason == reason
 }
 
-// GWT#2 全矩阵测试：每对状态各一次转换尝试，非法路径全部断言拒绝。
+// GWT#2 全矩阵测试（两层）：纯函数层按 issue 字面矩阵断言；store 层
+// 每对状态各一次真实转换尝试（审查探针 A2 吸收）——合法边成功且恰 1 条
+// 审计行，非法边 ReasonInvalidTransition 且状态不变。
 func TestFullTransitionMatrix(t *testing.T) {
 	states := []string{StateDraft, StateApproved, StateScheduled, StateRunning,
 		StateSucceeded, StateFailed, StateAborted, StateRemediationOpen, StateClosed}
+	// issue 原文矩阵（含 {SUCCEEDED|FAILED|ABORTED} → REMEDIATION_OPEN）
 	legal := map[string][]string{
 		StateDraft:           {StateApproved},
 		StateApproved:        {StateScheduled},
 		StateScheduled:       {StateRunning, StateAborted},
 		StateRunning:         {StateSucceeded, StateFailed, StateAborted},
 		StateSucceeded:       {StateRemediationOpen},
-		StateFailed:          {},
-		StateAborted:         {},
+		StateFailed:          {StateRemediationOpen},
+		StateAborted:         {StateRemediationOpen},
 		StateRemediationOpen: {StateClosed, StateAborted},
 		StateClosed:          {},
 	}
@@ -105,6 +108,96 @@ func TestFullTransitionMatrix(t *testing.T) {
 			}
 		}
 	}
+	// store layer: drive a drill into each state via the LEGAL path, then
+	// attempt EVERY edge from it — legal edges transition, illegal edges
+	// reject with the reason and leave the state unchanged
+	withDBD(t, func(dsn string, store Store, pool *pgxpool.Pool) {
+		ctx := context.Background()
+		for _, from := range states {
+			for _, to := range states {
+				if from == to {
+					continue
+				}
+				key := fmt.Sprintf("mx-%s-%s", from, to)
+				if err := store.Create(ctx, newDrill(key, "v", "user:i")); err != nil {
+					t.Fatal(err)
+				}
+				// drive to `from` along the legal path
+				if err := driveTo(ctx, store, key, from); err != nil {
+					t.Fatalf("drive %s to %s: %v", key, from, err)
+				}
+				want := false
+				for _, x := range legal[from] {
+					if x == to {
+						want = true
+					}
+				}
+				err := store.Transition(ctx, key, from, to, "user:matrix")
+				if want && err != nil {
+					t.Errorf("store matrix %s→%s (legal) rejected: %v", from, to, err)
+				}
+				if !want {
+					if !isReason(err, ReasonInvalidTransition) && !isReason(err, ReasonCasConflict) {
+						t.Errorf("store matrix %s→%s (illegal) not rejected with reason: %v", from, to, err)
+					}
+					d, _ := store.Get(ctx, key)
+					if d.State != from {
+						t.Errorf("illegal attempt %s→%s mutated state to %s", from, to, d.State)
+					}
+				}
+			}
+		}
+	})
+}
+
+// driveTo moves a fresh DRAFT drill to the target state along legal edges.
+func driveTo(ctx context.Context, store Store, key, target string) error {
+	switch target {
+	case StateDraft:
+		return nil
+	default:
+		if err := store.Approve(ctx, key, "user:a"); err != nil {
+			return err
+		}
+	}
+	switch target {
+	case StateApproved:
+		return nil
+	case StateScheduled:
+		return store.Schedule(ctx, key, "user:a")
+	case StateRunning, StateSucceeded, StateFailed, StateAborted:
+		if err := store.Schedule(ctx, key, "user:a"); err != nil {
+			return err
+		}
+		if target == StateAborted {
+			return store.Abort(ctx, key, "user:a")
+		}
+		if err := store.Start(ctx, key, "w"); err != nil {
+			return err
+		}
+		if target == StateRunning {
+			return nil
+		}
+		if target == StateFailed {
+			return store.Finish(ctx, key, StateFailed, "w", "evidence:f")
+		}
+		// SUCCEEDED via Finish
+		return store.Finish(ctx, key, StateSucceeded, "w", "evidence:s")
+	case StateRemediationOpen:
+		if err := driveTo(ctx, store, key, StateSucceeded); err != nil {
+			return err
+		}
+		return store.AddFinding(ctx, key, "f-drive", "x", "LOW", "user:a")
+	case StateClosed:
+		if err := driveTo(ctx, store, key, StateRemediationOpen); err != nil {
+			return err
+		}
+		if err := store.ResolveFinding(ctx, key, "f-drive", "fixed", "evidence:fx"); err != nil {
+			return err
+		}
+		return store.Close(ctx, key, "user:a")
+	}
+	return fmt.Errorf("unknown target %s", target)
 }
 
 // GWT#1 happy path：完整审批链 + Finding 整改 + CLOSED；审批人≠发起人。
@@ -128,7 +221,7 @@ func TestHappyPathFullCycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		// finding added before finish → SUCCEEDED transitions straight to REMEDIATION_OPEN
-		if err := store.AddFinding(ctx, "drill-1", "f1", "export manifest incomplete", "HIGH"); err != nil {
+		if err := store.AddFinding(ctx, "drill-1", "f1", "export manifest incomplete", "HIGH", "user:approver"); err != nil {
 			t.Fatal(err)
 		}
 		if err := store.Finish(ctx, "drill-1", StateSucceeded, "worker-1", "evidence:drill-1-result"); err != nil {
@@ -152,13 +245,27 @@ func TestHappyPathFullCycle(t *testing.T) {
 		if d.State != StateClosed {
 			t.Fatalf("final state = %s", d.State)
 		}
-		// audit trail: every transition recorded
+		// audit trail: every transition recorded — INCLUDING the
+		// SUCCEEDED→REMEDIATION_OPEN edge (R1 P1-1: the inline writes
+		// previously bypassed the audit chain)
 		log, err := store.TransitionLog(ctx, "drill-1")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(log) != 5 { // DRAFT→APPROVED→SCHEDULED→RUNNING→REMEDIATION_OPEN→CLOSED = 5 transitions... REMEDIATION came via AddFinding's UPDATE not via transition() — count what transition() wrote
-			t.Logf("transition log entries = %d (matrix transitions recorded; REMEDIATION_OPEN via finding path is a state write)", len(log))
+		// expected chain: DRAFT→APPROVED→SCHEDULED→RUNNING→SUCCEEDED→
+		// REMEDIATION_OPEN→CLOSED = 6 audited edges
+		if len(log) != 6 {
+			t.Fatalf("transition log entries = %d, want 6 (audit chain complete): %+v", len(log), log)
+		}
+		wantEdges := [][2]string{
+			{StateDraft, StateApproved}, {StateApproved, StateScheduled},
+			{StateScheduled, StateRunning}, {StateRunning, StateSucceeded},
+			{StateSucceeded, StateRemediationOpen}, {StateRemediationOpen, StateClosed},
+		}
+		for i, e := range wantEdges {
+			if log[i].From != e[0] || log[i].To != e[1] {
+				t.Fatalf("log[%d] = %s→%s, want %s→%s", i, log[i].From, log[i].To, e[0], e[1])
+			}
 		}
 	})
 }
@@ -241,7 +348,7 @@ func TestCloseRequiresResultEvidence(t *testing.T) {
 		// the way the issue defines it — a finding must exist. Without
 		// findings SUCCEEDED is terminal, so the evidence precondition is
 		// tested via the finding path:
-		_ = store.AddFinding(ctx, "drill-noev", "f9", "x", "LOW")
+		_ = store.AddFinding(ctx, "drill-noev", "f9", "x", "LOW", "user:a")
 		_ = store.ResolveFinding(ctx, "drill-noev", "f9", "fixed", "evidence:f9")
 		if err := store.Close(ctx, "drill-noev", "user:a"); !isReason(err, ReasonMissingEvidence) {
 			t.Fatalf("close without result evidence must be rejected, got %v", err)
@@ -467,4 +574,150 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// R1-P2-1 回归：ABORTED drill 的 worker 不再领取/执行外部步骤。
+func TestWorkerStopsOnAbortedDrill(t *testing.T) {
+	withDBD(t, func(dsn string, store Store, pool *pgxpool.Pool) {
+		ctx := context.Background()
+		_ = store.Create(ctx, newDrill("drill-abort-w", "v", "user:i"))
+		_ = store.Approve(ctx, "drill-abort-w", "user:a")
+		_ = store.Schedule(ctx, "drill-abort-w", "user:a")
+		_ = store.Start(ctx, "drill-abort-w", "w")
+		_ = store.Abort(ctx, "drill-abort-w", "user:a") // RUNNING → ABORTED
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO saoaf.exit_drill_step (drill_key, step_no, action, idempotency_key)
+			VALUES ('drill-abort-w', 1, 'a', 'idem-abw')`); err != nil {
+			t.Fatal(err)
+		}
+		var calls atomic.Int64
+		w := Worker{Store: store, WorkerID: "w2",
+			Executor: func(ctx context.Context, dk string, s Step) (string, error) {
+				calls.Add(1)
+				return "e", nil
+			}}
+		if err := w.RunDrill(ctx, "drill-abort-w"); err != nil {
+			t.Fatalf("run on aborted drill errored: %v", err)
+		}
+		if calls.Load() != 0 {
+			t.Fatalf("aborted drill executed %d external steps (must stop immediately)", calls.Load())
+		}
+		d, _ := store.Get(ctx, "drill-abort-w")
+		if d.State != StateAborted {
+			t.Fatalf("state drifted: %s", d.State)
+		}
+	})
+}
+
+// R1-P2-2 回归：CLOSED drill 不能添加 Finding（不变量不可事后破坏）。
+func TestClosedDrillRejectsFindings(t *testing.T) {
+	withDBD(t, func(dsn string, store Store, pool *pgxpool.Pool) {
+		ctx := context.Background()
+		_ = store.Create(ctx, newDrill("drill-closed-f", "v", "user:i"))
+		if err := driveTo(ctx, store, "drill-closed-f", StateClosed); err != nil {
+			t.Fatalf("drive to CLOSED: %v", err)
+		}
+		err := store.AddFinding(ctx, "drill-closed-f", "f-late", "late", "LOW", "user:a")
+		if !isReason(err, ReasonInvalidTransition) {
+			t.Fatalf("CLOSED drill must reject findings, got %v", err)
+		}
+		var open int
+		_ = pool.QueryRow(ctx,
+			`SELECT count(*) FROM saoaf.exit_drill_finding WHERE drill_key = 'drill-closed-f' AND state = 'OPEN'`).Scan(&open)
+		if open != 0 {
+			t.Fatalf("CLOSED invariant broken: %d open findings", open)
+		}
+	})
+}
+
+// R1-P2-3 回归：FAILED（和 ABORTED）+ Finding → 整改闭环可达。
+func TestFailedDrillOpensRemediation(t *testing.T) {
+	withDBD(t, func(dsn string, store Store, pool *pgxpool.Pool) {
+		ctx := context.Background()
+		_ = store.Create(ctx, newDrill("drill-failed-f", "v", "user:i"))
+		if err := driveTo(ctx, store, "drill-failed-f", StateFailed); err != nil {
+			t.Fatalf("drive to FAILED: %v", err)
+		}
+		if err := store.AddFinding(ctx, "drill-failed-f", "f1", "root cause", "HIGH", "user:a"); err != nil {
+			t.Fatalf("FAILED drill must accept findings (issue matrix: remediation reachable): %v", err)
+		}
+		d, _ := store.Get(ctx, "drill-failed-f")
+		if d.State != StateRemediationOpen {
+			t.Fatalf("state after finding on FAILED = %s, want REMEDIATION_OPEN", d.State)
+		}
+		// audit row exists for the FAILED→REMEDIATION_OPEN edge
+		log, _ := store.TransitionLog(ctx, "drill-failed-f")
+		found := false
+		for _, e := range log {
+			if e.From == StateFailed && e.To == StateRemediationOpen {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("FAILED→REMEDIATION_OPEN audit row missing: %+v", log)
+		}
+		// and the loop closes
+		_ = store.ResolveFinding(ctx, "drill-failed-f", "f1", "fixed", "evidence:fx")
+		if err := store.Close(ctx, "drill-failed-f", "user:a"); err != nil {
+			t.Fatalf("close after remediation of a failed drill: %v", err)
+		}
+	})
+}
+
+// R1-P2-5 回归：RUNNING → ABORTED 人工中断的确定性测试。
+func TestRunningAbortDeterministic(t *testing.T) {
+	withDBD(t, func(dsn string, store Store, pool *pgxpool.Pool) {
+		ctx := context.Background()
+		_ = store.Create(ctx, newDrill("drill-r-ab", "v", "user:i"))
+		if err := driveTo(ctx, store, "drill-r-ab", StateRunning); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Abort(ctx, "drill-r-ab", "user:a"); err != nil {
+			t.Fatalf("running abort: %v", err)
+		}
+		d, _ := store.Get(ctx, "drill-r-ab")
+		if d.State != StateAborted {
+			t.Fatalf("state = %s, want ABORTED", d.State)
+		}
+		// audit row for the RUNNING→ABORTED edge
+		log, _ := store.TransitionLog(ctx, "drill-r-ab")
+		found := false
+		for _, e := range log {
+			if e.From == StateRunning && e.To == StateAborted {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("RUNNING→ABORTED audit row missing: %+v", log)
+		}
+		// second abort from the terminal state is rejected (no matrix edge)
+		if err := store.Abort(ctx, "drill-r-ab", "user:a"); !isReason(err, ReasonInvalidTransition) {
+			t.Fatalf("double abort must be rejected, got %v", err)
+		}
+	})
+}
+
+// R1-P1-1 回归（AddFinding 路径）：SUCCEEDED + Finding 的状态推进带审计行
+// 且整体单事务。
+func TestAddFindingWritesAuditRow(t *testing.T) {
+	withDBD(t, func(dsn string, store Store, pool *pgxpool.Pool) {
+		ctx := context.Background()
+		_ = store.Create(ctx, newDrill("drill-af-audit", "v", "user:i"))
+		if err := driveTo(ctx, store, "drill-af-audit", StateSucceeded); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.AddFinding(ctx, "drill-af-audit", "f1", "x", "LOW", "user:a"); err != nil {
+			t.Fatal(err)
+		}
+		log, _ := store.TransitionLog(ctx, "drill-af-audit")
+		found := false
+		for _, e := range log {
+			if e.From == StateSucceeded && e.To == StateRemediationOpen {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("SUCCEEDED→REMEDIATION_OPEN audit row missing on AddFinding path: %+v", log)
+		}
+	})
 }
