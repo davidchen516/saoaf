@@ -29,17 +29,23 @@ interface Plan {
   items: { requirement_id: string; provider_key: string }[]
 }
 
-// fetch with the API error envelope; never logs payloads
+// fetch with the FROZEN error envelope: flat
+// {error_code, message, request_id} (contracts/schemas/v1/error-envelope.json)
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api/admin/v1${path}`, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
   })
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: { code?: string; message?: string } }
-    throw Object.assign(new Error(body.error?.message ?? `HTTP ${res.status}`), {
+    const body = (await res.json().catch(() => ({}))) as {
+      error_code?: string
+      message?: string
+      request_id?: string
+    }
+    throw Object.assign(new Error(body.message ?? `HTTP ${res.status}`), {
       status: res.status,
-      code: body.error?.code,
+      code: body.error_code,
+      requestId: body.request_id,
     })
   }
   return (await res.json()) as T
@@ -81,13 +87,18 @@ export function App() {
   // controlled write: publish with the server-verified revision (CAS) —
   // a concurrent editor's 409 surfaces as an explicit conflict, never a
   // silent overwrite
+  // the approval reference flows from the operator context (server chain
+  // demands X-Saoaf-Approval-Ref — the UI surfaces the requirement as a
+  // form field; production uses the platform's approval attachment flow)
+  const [approvalRef, setApprovalRef] = useState('')
+
   async function publish(key: string, revision: number) {
     setConflict(null)
     setError(null)
     try {
       await api(`/bindings/${key}/publish`, {
         method: 'POST',
-        headers: { 'If-Match': String(revision) },
+        headers: { 'If-Match': String(revision), 'X-Saoaf-Approval-Ref': approvalRef },
         body: JSON.stringify({ expected_revision: revision }),
       })
       loadBindings()
@@ -142,6 +153,21 @@ export function App() {
             onChange={(e) => setFilter(e.target.value)}
             aria-label="搜索"
           />
+          {who?.canPublish && (
+            <div style={{ margin: '0.5rem 0' }}>
+              <label htmlFor="approval-ref" style={{ marginRight: '0.5rem' }}>
+                审批引用：
+              </label>
+              <input
+                id="approval-ref"
+                data-testid="approval-ref"
+                placeholder="approval decision reference"
+                value={approvalRef}
+                onChange={(e) => setApprovalRef(e.target.value)}
+                style={{ width: 300 }}
+              />
+            </div>
+          )}
           <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '0.5rem' }}>
             <thead>
               <tr>

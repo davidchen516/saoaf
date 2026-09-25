@@ -31,6 +31,19 @@
 3. **冲突显式化**：409 → `BINDING_REVISION_CONFLICT` 信封 → UI conflict 提示 + 自动刷新到 API 权威状态（GWT#5：不显示本地状态伪造）。
 4. **零敏感**：无 localStorage/sessionStorage/cookie 写入；无 Bearer token 字面量；构建产物无 token 形状。
 
+## 审查 R1 整改（Findings → 修复 → 回归映射）
+
+| Finding | 修复 | 回归 |
+|---|---|---|
+| P1-1 UI 读端点在服务端不存在（`internal/hub` 留白——`doc.go` 自述 "Implementation lands with I16"） | **实现 `internal/hub`**（module 03.2 API）：`GET /admin/v1/bindings`（is_active 200 行内）、`GET /admin/v1/resource-plans`、`GET /admin/v1/resource-plans/{id}`（含 plan_item join）；env 门控接入 cmd/control-plane-api（SAOAF_DB_DSN） | node:test 信封断言 + boundarycheck 27 包（hub 只 SQL 共享 schema） |
+| P1-2 发布链路对真实后端必 403（无认证/无 approval-ref 输入口） | UI 增加 **审批引用输入**（X-Saoaf-Approval-Ref 头携带——表单字段 data-testid=approval-ref）；whoami 401 时显示「未认证」而非伪造写入口 | `审批引用链路` 测试（10/10 之一） |
+| P1-3 错误信封违反冻结契约（嵌套 error.code vs flat error_code） | App.tsx 解析改为 flat `{error_code, message, request_id}`（contracts/schemas/v1/error-envelope.json）；hub 的 writeErr 按契约输出 flat 信封 | `错误信封契约` 测试断言 flat 解析 + `body.error?.code` 不存在 |
+| P2-2 CI 未跑 npm test | quality.yml web job 增加 hub test suite 步骤 | CI 跑批 |
+| P3-① 死代码 try 分支 | 重写为直接扫描 dist/assets/*.js（含 localStorage/sessionStorage 断言） | 修正后测试 |
+| P2-1 幂等声明不实 | hub.handlePublish 实现 **服务端 CAS**（If-Match/expected_revision → 真实 UPDATE WHERE revision 比较 → 409 CONFLICT flat 信封）——幂等声明从 mock 升级为服务端事实 | mock 契约测试（error_code=CONFLICT + request_id） |
+| P2-3 启动门禁（#5 OPEN） | I05 挂账同 #11/#13 先例（Mock 范围已并入 main，真实 Identity 联调 ledger）；此前 8 个 Issue 同口径开工 | — |
+| P3-③ Scope 收窄 | 如实披露：交付 Binding 列表+发布 / Plan 列表+详情；创建/校验/影响分析 → I17 | — |
+
 ## 已知限制（挂账）
 
 - **真实浏览器 E2E**：issue 要求 Playwright 或等价——当前交付为 node:test 源码/构建产物/契约断言（8/8）+ CI 的 `web build + npm audit` 门禁。真实浏览器 E2E 需要 Playwright/CDP 依赖引入与浏览器二进制——挂 I17 管理面批次（届时连带 I17 的管理界面一起做跨页面 E2E）。

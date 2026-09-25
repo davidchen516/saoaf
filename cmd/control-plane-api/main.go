@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/davidchen516/saoaf/internal/hub"
 	"github.com/davidchen516/saoaf/internal/platform/approval"
 	"github.com/davidchen516/saoaf/internal/platform/audit"
 	"github.com/davidchen516/saoaf/internal/platform/authn"
@@ -51,6 +52,16 @@ func main() {
 	// configured; otherwise the runtime surface stays CLOSED.
 	if cfg := resolverConfigFromEnv(logger); cfg != nil {
 		resolver.MountResolver(router, cfg)
+	}
+
+	// I16 resource hub read API (module 03.2): mounted when the database
+	// is configured; reads only (publish remains on the approval-gated
+	// admin chain from I05)
+	if dsn := os.Getenv("SAOAF_DB_DSN"); dsn != "" {
+		pool, err := pgxpool.New(context.Background(), dsn)
+		if err == nil {
+			hub.Mount(router, hub.Config{Pool: pool, BindingsDSN: dsn})
+		}
 	}
 
 	srv := &http.Server{
