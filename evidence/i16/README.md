@@ -54,6 +54,38 @@
 | R2-P2 request_id 空串违 schema minLength | writeErr 兜底生成非空 request_id | 冒烟 401 信封 request_id=UUID |
 | R2-P3-4 hub 零 Go 测试 | 如实披露（HTTP 面冒烟脚本 /tmp/hub-smoke.sh 记录于 evidence；Go 单测随 I17 管理面批次统一） | — |
 
+## 审查 R3 整改（复审新发现——本轮为结构性返工）
+
+R3 判定 CHANGES REQUESTED：R2 的「hub 内自注册 publish + minimal CAS」整改路线被否决——hub 二次注册 publish 路由被 chi **静默覆盖**（scope/PDP/审批/审计四道门禁整体剥离，实测 read-only token 可 200 真实发布），且 minimal CAS 绕过 binding 模块领域不变量（实测复活 SUSPENDED binding、change_record/outbox 零行）。整改为**发布链路彻底回归 I05 门控链 + 域模块单一实现**：
+
+| Finding | 修复 | 证据 |
+|---|---|---|
+| R3-P1-1 publish 门禁被 hub 静默剥离（chi 同 pattern 后注册者覆盖；read-only token 实测 200 真实发布、零审计） | **hub 撤掉 publish 自注册**（纯读投影）；真实发布进入 I05 既有 `With(RequireScope, ApprovalGate)` 链 handler；`MountAdmin` 内嵌 **routeRecorder**——同 method+pattern 重复注册**启动即 panic**（把 chi 的静默覆盖语义变成 fail-fast） | `TestAdminRouteShadowingPanics`（回归）；冒烟 PROBE-C：read-only token POST publish → **403** + 0 行写入 |
+| R3-P1-2 minimal CAS 绕过领域不变量（SUSPENDED 复活、change_record/outbox/approval_ref/published_at 全缺） | 删除 hub 侧 SQL 复刻；binding 模块新增 **`Store.Republish`**（加载当前行内容 → 走**完整** `Publish`：PublishGate、状态仲裁「publish supersedes PUBLISHED only」、overlap guard、幂等 ledger、change_record + outbox 事件同事务、approval_ref/published_at 持久化）；composition root（cmd/control-plane-api）通过 `PublishBinding` 钩子接线（ADR-0006：cmd 是唯一可同时见 platform 与 domain 的位置） | `TestDBRepublishSuspendedRejected`（SUSPENDED→ErrInvalidTransition、无复活、无多余审计行）；冒烟 PROBE-D2/D4：SUSPENDED publish → **409 CONFLICT**、状态保持 SUSPENDED；PROBE-E：change_record=2（域事务 1 + I05 audit sink 1）、outbox=1、approval_ref/published_at 落库 |
+| R3-P2-1 并发竞态错误映射（UNIQUE 兜底 → 500 而非 409） | 复用域 Publish 的 `constraintOf` 分类 + sentinel 映射（ErrRevisionConflict/ErrDuplicateActive/ErrScopeConflict → ErrPublishConflict → 409） | `TestDBRepublishConcurrentSingleWinner`：20 并发恰 1 成功、19 全部**分类冲突**（0 个 unclassified） |
+| R3-P3 writeErr 注释与实现不符（UUID vs UnixNano）+ pgxpool 失败静默 | `httpapi.WriteErr` 统一信封（注释如实）；main.go pgxpool 失败 `logger.Warn` | 代码 |
+
+**发布链路最终形态**（审查员 R3「修复正解」原文的实现）：
+
+```
+POST /admin/v1/bindings/{id}/publish
+  → RequireIdentity(401) → RequireScope("resource.publish")(403)
+  → ApprovalGate(PDP + approval ref)(403)          ← I05 既有四道门禁，原样保留
+  → httpapi.publishBinding handler
+      → PublishBinding 钩子（composition root 接线）
+      → binding.Store.Republish                     ← 域内单一实现，完整不变量
+      → audit sink 写入（成功后）
+```
+
+hub（module 03.2）只保留三个读端点（bindings / resource-plans / resource-plans/{id}），全部在 `RequireIdentity+RateLimit` 子树内。
+
+**R3 探针全量复放（真实二进制 + 真 PG 18.6 + 真 OIDC/PDP/审批 stub，18/18 PASS）**：
+A 双面共存启动存活无 panic ｜ B1/B2 匿名读 401 + UNAUTHENTICATED 信封（request_id 非空）｜ C read-only token 发布 403 + 零写入 ｜ D1 合法 DRAFT 发布 200 ｜ D2/D3/D4 SUSPENDED 发布 409 CONFLICT + 无复活 ｜ E1-E4 change_record/outbox/approval_ref/published_at 全落库 ｜ F stale If-Match → 409 ｜ G1-G4 Idempotency-Key 重放 → already-published + 零新增 revision。
+
+**新增测试**：binding `TestDBRepublish*` 9 个（真 PG）、httpapi `TestPublishHandler*`/`TestAdminRouteShadowingPanics`/`TestAdminExtensionKeepsGatedPublish` 9 个；web 测试 11/11（新增 change_reason 必填 + Idempotency-Key per intent 断言）；全仓 `-race` 22/22 包绿。
+
+**UI 对齐**：发布表单增加必填「变更原因」（域 PublishGate 必填 change_reason，change record 关联）；Idempotency-Key **按意图生成**（binding+expected revision）并在同意图重试间复用（网络重试幂等而非双发）；按钮在 approval-ref/change-reason 齐全前禁用。
+
 ## 已知限制（挂账）
 
 - **真实浏览器 E2E**：issue 要求 Playwright 或等价——当前交付为 node:test 源码/构建产物/契约断言（8/8）+ CI 的 `web build + npm audit` 门禁。真实浏览器 E2E 需要 Playwright/CDP 依赖引入与浏览器二进制——挂 I17 管理面批次（届时连带 I17 的管理界面一起做跨页面 E2E）。

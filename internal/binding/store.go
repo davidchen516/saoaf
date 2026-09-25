@@ -622,6 +622,107 @@ func (s Store) FindOverlapping(ctx context.Context, environment string, query Sc
 	return out, rows.Err()
 }
 
+// RepublishReq carries the hub publish intent (I16): re-publish the CURRENT
+// revision's content as a new PUBLISHED revision — DRAFT→PUBLISHED first
+// publish, or supersede of the active PUBLISHED revision. It runs the FULL
+// Publish path (approval gate, overlap guard, idempotency ledger, change
+// record, outbox event) — never a reduced CAS (review R3 P1-2: a hub-side
+// "minimal CAS" revived SUSPENDED bindings and skipped change_record/outbox).
+type RepublishReq struct {
+	BindingKey     string
+	ExpectedRev    int
+	ApprovalRef    string
+	ChangeReason   string
+	TicketRef      string
+	TenantRef      string
+	Actor          string
+	TraceID        string
+	IdempotencyKey string
+}
+
+// RepublishResult reports the authoritative post-publish state.
+type RepublishResult struct {
+	Revision int
+	State    State
+	// Replayed is true when the idempotency ledger answered the call: no
+	// new revision was created (GWT#3).
+	Replayed bool
+}
+
+// Republish loads the latest revision's content and publishes it as the next
+// revision under the full Publish invariants. Non-PUBLISHED active states
+// are rejected by Publish's state arbitration ("publish supersedes PUBLISHED
+// only" — SUSPENDED must Resume, RETIRED is terminal).
+func (s Store) Republish(ctx context.Context, req RepublishReq) (RepublishResult, error) {
+	conn, err := pgx.Connect(ctx, s.DSN)
+	if err != nil {
+		return RepublishResult{}, err
+	}
+	defer conn.Close(ctx)
+
+	var capabilityID, providerID, snapshotID int64
+	var profile, environment string
+	var priority int
+	var scopeJSON []byte
+	qerr := conn.QueryRow(ctx, `
+		SELECT capability_id, provider_id, snapshot_id, profile_or_action,
+		       environment, priority, scope
+		FROM registry.capability_binding
+		WHERE binding_key = $1
+		ORDER BY revision DESC LIMIT 1`, req.BindingKey).
+		Scan(&capabilityID, &providerID, &snapshotID, &profile, &environment, &priority, &scopeJSON)
+	if errors.Is(qerr, pgx.ErrNoRows) {
+		return RepublishResult{}, errS(ErrNotFound, ReasonNotFound, "binding does not exist")
+	}
+	if qerr != nil {
+		return RepublishResult{}, qerr
+	}
+	var scope Scope
+	if err := json.Unmarshal(scopeJSON, &scope); err != nil {
+		return RepublishResult{}, fmt.Errorf("stored scope for %s is not parseable: %w", req.BindingKey, err)
+	}
+
+	// active revision before the attempt — the replay detector compares
+	// against it (a fresh publish always creates expected+1)
+	var activeRev int
+	_ = conn.QueryRow(ctx, `
+		SELECT revision FROM registry.capability_binding
+		WHERE binding_key = $1 AND is_active`, req.BindingKey).Scan(&activeRev) //nolint:errcheck // ErrNoRows → 0
+
+	err = s.Publish(ctx, PublishReq{
+		BindingKey:     req.BindingKey,
+		Revision:       req.ExpectedRev,
+		Scope:          scope,
+		Priority:       priority,
+		Environment:    environment,
+		ApprovalRef:    req.ApprovalRef,
+		ChangeReason:   req.ChangeReason,
+		TicketRef:      req.TicketRef,
+		TenantRef:      req.TenantRef,
+		Actor:          req.Actor,
+		TraceID:        req.TraceID,
+		IdempotencyKey: req.IdempotencyKey,
+	}, &Binding{
+		CapabilityID: capabilityID, ProviderID: providerID,
+		SnapshotID: snapshotID, Profile: profile,
+	})
+	if err != nil {
+		return RepublishResult{}, err
+	}
+
+	// authoritative post-state: the CURRENT active revision (not computed
+	// from the request — the ledger replay path keeps the old revision)
+	var res RepublishResult
+	if rerr := conn.QueryRow(ctx, `
+		SELECT revision, state FROM registry.capability_binding
+		WHERE binding_key = $1 AND is_active`, req.BindingKey).
+		Scan(&res.Revision, &res.State); rerr != nil {
+		return RepublishResult{}, rerr
+	}
+	res.Replayed = req.IdempotencyKey != "" && res.Revision == activeRev
+	return res, nil
+}
+
 // constraintOf extracts the constraint name of a unique-violation (23505).
 func constraintOf(err error) (string, bool) {
 	var pgErr *pgconn.PgError

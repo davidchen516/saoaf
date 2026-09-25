@@ -10,3 +10,24 @@
 # - 匿名 GET /admin/v1/bindings → 401 {"error_code":"UNAUTHENTICATED",...,"request_id":"<uuid>"}（门控子树内）
 # - request_id 非空（冻结 schema minLength 满足）
 # R2 后全仓 -race 22/22 ok；BOUNDARY PASS
+PASS=18 FAIL=0
+
+PASS A dual-surface alive (no panic) (200)
+PASS B1 anonymous read = 401 (401)
+PASS B2 envelope UNAUTHENTICATED + request_id (UNAUTHENTICATED True)
+PASS C read-only token publish = 403 (403)
+PASS C2 no write happened (0 active) (0)
+PASS D1 legit DRAFT publish = 200 (200)
+PASS D2 SUSPENDED publish = 409 (409)
+PASS D3 envelope CONFLICT (CONFLICT)
+PASS D4 b-susp stays SUSPENDED (no revival) (SUSPENDED)
+PASS E1 change_record linked (decided_ref=approval:1) (2)
+PASS E2 outbox event emitted (resolver feed) (1)
+PASS E3 approval_ref persisted on active row (approval:1)
+PASS E4 published_at set (1)
+PASS F stale CAS = 409 (409)
+PASS G1 fresh publish (idem key) = 200 (200)
+PASS G2 replay = 200 (200)
+PASS G3 replay status already-published (already-published)
+PASS G4 no extra revision after replay (3)
+PASS=18 FAIL=0

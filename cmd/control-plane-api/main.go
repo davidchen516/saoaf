@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/davidchen516/saoaf/internal/binding"
 	"github.com/davidchen516/saoaf/internal/hub"
 	"github.com/davidchen516/saoaf/internal/platform/approval"
 	"github.com/davidchen516/saoaf/internal/platform/audit"
@@ -41,21 +43,23 @@ func main() {
 	router.Get("/healthz", health.LivenessHandler)
 	router.Get("/readyz", health.ReadinessHandler)
 
-	// I05 admin demo endpoints: enabled only when the full adapter config
+	// I05 admin endpoints: enabled only when the full adapter config
 	// is present (issuer + PDP + approval); otherwise the admin API stays
-	// CLOSED rather than open (fail-closed by default). The I16 hub
-	// resource routes mount INSIDE the same identity-gated block — the
-	// management reads are authenticated (review R2 P1-2: anonymous reads
-	// are fail-open and forbidden) and register paths directly (review
-	// R2 P1-1: a second Route() on the same path panics chi at startup).
-	if cfg := adminConfigFromEnv(); cfg != nil {
-		// hub resource routes mount INSIDE the gated subtree (paths are
-		// RELATIVE to /admin/v1 — the subrouter prefixes them)
+	// CLOSED rather than open (fail-closed by default). When the database
+	// is configured, the publish route executes the REAL domain publish
+	// (binding.Store.Republish) inside the gate chain (I16, review R3
+	// P1-1/P1-2). The I16 hub resource READ routes mount INSIDE the same
+	// identity-gated block (review R2 P1-2: anonymous reads are fail-open
+	// and forbidden) with relative paths (review R2 P1-1: a second
+	// Route() on the same path panics chi at startup).
+	if cfg := adminConfigFromEnv(logger); cfg != nil {
 		var hubExt func(admin chi.Router)
 		if dsn := os.Getenv("SAOAF_DB_DSN"); dsn != "" {
 			pool, err := pgxpool.New(context.Background(), dsn)
-			if err == nil {
-				hubCfg := hub.Config{Pool: pool, BindingsDSN: dsn}
+			if err != nil {
+				logger.Warn("hub read API disabled: database pool failed", "error", err)
+			} else {
+				hubCfg := hub.Config{Pool: pool}
 				hubExt = func(admin chi.Router) { hub.Mount(admin, hubCfg) }
 			}
 		}
@@ -206,8 +210,12 @@ func (p policyEngine) Evaluate(ctx context.Context, rev *resolver.PolicyRevision
 }
 
 // adminConfigFromEnv returns the I05 admin wiring when all adapter
-// endpoints are configured; nil keeps the admin surface closed.
-func adminConfigFromEnv() *httpapi.AdminConfig {
+// endpoints are configured; nil keeps the admin surface closed. With a
+// database configured, the publish route executes the real domain publish
+// (I16): PublishBinding adapts binding.Store.Republish onto the admin
+// chain's hook — ADR-0006: the composition root is the only place that
+// sees both the platform admin surface and the binding domain module.
+func adminConfigFromEnv(logger *slog.Logger) *httpapi.AdminConfig {
 	issuer := os.Getenv("SAOAF_OIDC_ISSUER")
 	pdp := os.Getenv("SAOAF_PDP_URL")
 	appr := os.Getenv("SAOAF_APPROVAL_URL")
@@ -218,17 +226,81 @@ func adminConfigFromEnv() *httpapi.AdminConfig {
 	if err != nil {
 		return nil
 	}
+	dsn := os.Getenv("SAOAF_DB_DSN")
 	var sink audit.Sink = audit.NoopSink{}
-	if dsn := os.Getenv("SAOAF_DB_DSN"); dsn != "" {
+	if dsn != "" {
 		sink = audit.PostgresSink{DSN: dsn}
 	}
-	return &httpapi.AdminConfig{
+	cfg := &httpapi.AdminConfig{
 		Authn:      v,
 		PDP:        authz.NewPDPClient(pdp),
 		Approvals:  approval.NewClient(appr),
 		Audit:      sink,
 		RatePerSec: 100,
 		RateBurst:  200,
+	}
+	if dsn != "" {
+		store := binding.Store{DSN: dsn}
+		cfg.PublishBinding = publishBindingAdapter(store)
+	} else {
+		logger.Warn("admin publish route fail-closed: no database configured")
+	}
+	return cfg
+}
+
+// publishBindingAdapter runs the binding module's Republish behind the
+// admin gate chain and projects its domain sentinels onto the admin
+// surface's sentinels (HTTP statuses are decided by the httpapi handler).
+func publishBindingAdapter(store binding.Store) func(context.Context, httpapi.PublishInput) (httpapi.PublishResult, error) {
+	return func(ctx context.Context, in httpapi.PublishInput) (httpapi.PublishResult, error) {
+		res, err := store.Republish(ctx, binding.RepublishReq{
+			BindingKey:     in.BindingID,
+			ExpectedRev:    in.ExpectedRevision,
+			ApprovalRef:    in.ApprovalRef,
+			ChangeReason:   in.ChangeReason,
+			TicketRef:      in.TicketRef,
+			TenantRef:      in.TenantRef,
+			Actor:          in.Actor,
+			TraceID:        in.TraceID,
+			IdempotencyKey: in.IdempotencyKey,
+		})
+		if err != nil {
+			return httpapi.PublishResult{}, mapPublishError(err)
+		}
+		return httpapi.PublishResult{
+			Revision:         res.Revision,
+			State:            string(res.State),
+			IdempotentReplay: res.Replayed,
+		}, nil
+	}
+}
+
+// mapPublishError keeps the domain reason message while translating the
+// sentinel for the handler's status mapping.
+func mapPublishError(err error) error {
+	msg := err.Error()
+	var se *binding.StoreError
+	if errors.As(err, &se) {
+		msg = se.Msg
+	}
+	var ve *binding.ValidationError
+	if errors.As(err, &ve) {
+		return fmt.Errorf("%w: %s", httpapi.ErrPublishValidation, ve.Msg)
+	}
+	switch {
+	case errors.Is(err, binding.ErrNotFound):
+		return fmt.Errorf("%w: %s", httpapi.ErrPublishNotFound, msg)
+	case errors.Is(err, binding.ErrRevisionConflict),
+		errors.Is(err, binding.ErrScopeConflict),
+		errors.Is(err, binding.ErrDuplicateActive),
+		errors.Is(err, binding.ErrIdemKeyReuse):
+		return fmt.Errorf("%w: %s", httpapi.ErrPublishConflict, msg)
+	case errors.Is(err, binding.ErrInvalidTransition):
+		return fmt.Errorf("%w: %s", httpapi.ErrPublishInvalidTransition, msg)
+	case errors.Is(err, binding.ErrBacklogBlocked):
+		return fmt.Errorf("%w: %s", httpapi.ErrPublishUnavailable, msg)
+	default:
+		return err
 	}
 }
 

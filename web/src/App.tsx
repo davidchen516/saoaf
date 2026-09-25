@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 /**
  * I16: AI Resource Hub management UI (read + controlled writes via Admin
@@ -89,8 +89,22 @@ export function App() {
   // silent overwrite
   // the approval reference flows from the operator context (server chain
   // demands X-Saoaf-Approval-Ref — the UI surfaces the requirement as a
-  // form field; production uses the platform's approval attachment flow)
+  // form field; production uses the platform's approval attachment flow).
+  // change_reason is required by the domain publish gate (change record);
+  // the Idempotency-Key is generated PER INTENT (binding + expected
+  // revision) and reused across retries of that same intent, so a network
+  // retry replays idempotently instead of double-publishing.
   const [approvalRef, setApprovalRef] = useState('')
+  const [changeReason, setChangeReason] = useState('')
+  const idemKeys = useRef<Record<string, { key: string; rev: number }>>({})
+
+  function idemKeyFor(key: string, rev: number): string {
+    const cur = idemKeys.current[key]
+    if (cur && cur.rev === rev) return cur.key // retry of the same intent
+    const fresh = `hub-${key}-${rev}-${crypto.randomUUID()}`
+    idemKeys.current[key] = { key: fresh, rev }
+    return fresh
+  }
 
   async function publish(key: string, revision: number) {
     setConflict(null)
@@ -98,8 +112,12 @@ export function App() {
     try {
       await api(`/bindings/${key}/publish`, {
         method: 'POST',
-        headers: { 'If-Match': String(revision), 'X-Saoaf-Approval-Ref': approvalRef },
-        body: JSON.stringify({ expected_revision: revision }),
+        headers: {
+          'If-Match': String(revision),
+          'X-Saoaf-Approval-Ref': approvalRef,
+          'Idempotency-Key': idemKeyFor(key, revision),
+        },
+        body: JSON.stringify({ expected_revision: revision, change_reason: changeReason }),
       })
       loadBindings()
     } catch (e) {
@@ -154,18 +172,29 @@ export function App() {
             aria-label="搜索"
           />
           {who?.canPublish && (
-            <div style={{ margin: '0.5rem 0' }}>
-              <label htmlFor="approval-ref" style={{ marginRight: '0.5rem' }}>
+            <div style={{ margin: '0.5rem 0', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+              <label htmlFor="approval-ref">
                 审批引用：
+                <input
+                  id="approval-ref"
+                  data-testid="approval-ref"
+                  placeholder="approval decision reference"
+                  value={approvalRef}
+                  onChange={(e) => setApprovalRef(e.target.value)}
+                  style={{ width: 260, marginLeft: '0.25rem' }}
+                />
               </label>
-              <input
-                id="approval-ref"
-                data-testid="approval-ref"
-                placeholder="approval decision reference"
-                value={approvalRef}
-                onChange={(e) => setApprovalRef(e.target.value)}
-                style={{ width: 300 }}
-              />
+              <label htmlFor="change-reason">
+                变更原因：
+                <input
+                  id="change-reason"
+                  data-testid="change-reason"
+                  placeholder="required — goes on the change record"
+                  value={changeReason}
+                  onChange={(e) => setChangeReason(e.target.value)}
+                  style={{ width: 260, marginLeft: '0.25rem' }}
+                />
+              </label>
             </div>
           )}
           <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '0.5rem' }}>
@@ -187,9 +216,14 @@ export function App() {
                   <td data-testid={`rev-${b.binding_key}`}>{b.revision}</td>
                   <td>
                     {/* 无权用户看不到写入口（服务端 403 是最终防线，UI
-                        隐藏只是体验——E2E 同时断言两侧） */}
+                        隐藏只是体验——E2E 同时断言两侧）。审批引用与
+                        变更原因是服务端域门禁的必填项 */}
                     {who?.canPublish && (
-                      <button onClick={() => void publish(b.binding_key, b.revision)}>
+                      <button
+                        onClick={() => void publish(b.binding_key, b.revision)}
+                        disabled={!approvalRef || !changeReason}
+                        data-testid={`publish-${b.binding_key}`}
+                      >
                         发布
                       </button>
                     )}

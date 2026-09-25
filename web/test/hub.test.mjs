@@ -88,6 +88,16 @@ test('mock 契约：scope 决定发布按钮可见性（whoami scopes 驱动 can
 test('幂等键（GWT#3）：发布走 POST + expected_revision（幂等键一致时不产生重复发布）', () => {
   // the source sends expected_revision in the publish body
   assert.ok(src.includes('expected_revision'))
+  // the source sends an Idempotency-Key per intent and reuses it on retry
+  assert.ok(src.includes('Idempotency-Key'))
+  assert.ok(src.includes('idemKeyFor'))
+})
+
+test('变更关联（AC#4）：发布携带 change_reason（域门禁必填，change record 关联）', () => {
+  assert.ok(src.includes('change_reason'))
+  assert.ok(src.includes('data-testid="change-reason"'))
+  // the publish button is disabled until both domain-required inputs exist
+  assert.ok(src.includes('disabled={!approvalRef || !changeReason}'))
 })
 
 test('构建产物敏感零扫描：dist JS 无 token 形状 / 无 storage 写入', async () => {
