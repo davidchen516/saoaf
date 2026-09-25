@@ -1,0 +1,33 @@
+# I16 Hub UI 测试（node:test 8/8 PASS）
+# 敏感零落地（源码+构建产物）/ UI 非权威（唯一基址 /api/admin/v1）/ 409 冲突语义（显式呈现不覆盖）
+# mock 契约（scope 门控 canPublish + BINDING_REVISION_CONFLICT 信封）/ 幂等键（expected_revision）
+
+# 构建产物：dist/assets/index-*.js 226 KB（gzip 71 KB）——tsc --noEmit + vite build ✅
+# npm audit：本地 registry 不支持 audit 端点（CI 的 web build + npm audit gate 覆盖）
+
+# R2 冒烟（真实 PG + 真实 cmd/control-plane-api 实例 + curl）：
+# - admin+hub 双面共存配置（SAOAF_OIDC_ISSUER+SAOAF_PDP_URL+SAOAF_APPROVAL_URL+SAOAF_DB_DSN 全配）启动 ALIVE——无 chi panic
+# - 匿名 GET /admin/v1/bindings → 401 {"error_code":"UNAUTHENTICATED",...,"request_id":"<uuid>"}（门控子树内）
+# - request_id 非空（冻结 schema minLength 满足）
+# R2 后全仓 -race 22/22 ok；BOUNDARY PASS
+PASS=18 FAIL=0
+
+PASS A dual-surface alive (no panic) (200)
+PASS B1 anonymous read = 401 (401)
+PASS B2 envelope UNAUTHENTICATED + request_id (UNAUTHENTICATED True)
+PASS C read-only token publish = 403 (403)
+PASS C2 no write happened (0 active) (0)
+PASS D1 legit DRAFT publish = 200 (200)
+PASS D2 SUSPENDED publish = 409 (409)
+PASS D3 envelope CONFLICT (CONFLICT)
+PASS D4 b-susp stays SUSPENDED (no revival) (SUSPENDED)
+PASS E1 change_record linked (decided_ref=approval:1) (2)
+PASS E2 outbox event emitted (resolver feed) (1)
+PASS E3 approval_ref persisted on active row (approval:1)
+PASS E4 published_at set (1)
+PASS F stale CAS = 409 (409)
+PASS G1 fresh publish (idem key) = 200 (200)
+PASS G2 replay = 200 (200)
+PASS G3 replay status already-published (already-published)
+PASS G4 no extra revision after replay (3)
+PASS=18 FAIL=0
