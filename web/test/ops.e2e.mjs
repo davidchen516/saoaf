@@ -74,25 +74,26 @@ test('E2E: ops console renders every view with authoritative data', { timeout: 6
 
     // broken evidence view: rows + explicit reasons
     await page.getByRole('button', { name: '证据断链' }).click()
-    await page.waitForSelector('[data-testid="ops-broken"]', { timeout: 15000 })
+    // wait for ROW CONTENT, not the table container — the table renders
+    // before the API response lands (same race class as drill-detail)
+    await page.waitForSelector('[data-testid="ops-broken"] tbody tr', { timeout: 15000 })
     const brokenRows = await page.locator('[data-testid="ops-broken"] tbody tr').count()
     assert.ok(brokenRows >= 1, `broken rows must render (got ${brokenRows})`)
 
     // alerts view
     await page.getByRole('button', { name: '风险' }).click()
-    await page.waitForSelector('[data-testid="ops-alerts"]', { timeout: 15000 })
+    await page.waitForSelector('[data-testid="ops-alerts"] tbody tr', { timeout: 15000 })
     const alertRows = await page.locator('[data-testid="ops-alerts"] tbody tr').count()
     assert.ok(alertRows >= 1, 'alert rows must render')
 
     // exit packs: the seeded expired pack shows read-time EXPIRED
     await page.getByRole('button', { name: 'Exit Pack' }).click()
-    await page.waitForSelector('[data-testid="ops-packs"]', { timeout: 15000 })
-    assert.ok((await page.getByText('已过期（读取时判定）').count()) >= 1,
-      'expired pack must render explicitly EXPIRED (never silently healthy)')
+    await page.waitForSelector('[data-testid="ops-packs"] tbody tr', { timeout: 15000 })
+    await page.waitForSelector('text=已过期（读取时判定）', { timeout: 15000 })
 
     // drills: detail + findings + audit trail
     await page.getByRole('button', { name: 'Drill / 整改' }).click()
-    await page.waitForSelector('[data-testid="ops-drills"]', { timeout: 15000 })
+    await page.waitForSelector('[data-testid="ops-drills"] tbody tr', { timeout: 15000 })
     await page.getByRole('button', { name: '详情' }).first().click()
     await page.waitForSelector('[data-testid="drill-detail"]', { timeout: 15000 })
     // the audit trail is a SECOND async load — wait for its content, not
