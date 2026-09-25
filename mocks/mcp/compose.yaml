@@ -1,0 +1,9 @@
+services:
+  mcp:
+    image: stoplight/prism:5.15.10
+    platform: linux/amd64
+    command: ["mock", "-h", "0.0.0.0", "--errors", "--multiprocess=false", "/contracts/openapi.yaml"]
+    ports:
+      - "127.0.0.1:4030:4010"
+    volumes:
+      - ../../contracts/protocols/mcp-tool/openapi.yaml:/contracts/openapi.yaml:ro

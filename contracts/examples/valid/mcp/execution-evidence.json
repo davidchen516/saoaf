@@ -1,0 +1,18 @@
+{
+  "tool_execution_id": "te-mock-001",
+  "action_id": "tool.erp.work-order.write",
+  "resource_plan_id": "plan-mock-001",
+  "resource_plan_item_id": "item-mock-001",
+  "tenant_ref": "tenant-a",
+  "state": "SUCCEEDED",
+  "policy_decision_ref": "pd-mock-001",
+  "approval_ref": "approval:mock-erp-write",
+  "idempotency_key": "idem-mock-001",
+  "result_ref": {
+    "uri": "evidence://tool-executions/te-mock-001/result",
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "started_at": "2026-09-22T00:00:00Z",
+  "finished_at": "2026-09-22T00:00:01Z",
+  "trace_id": "00-00000000000000000000000000000000-0000000000000000-01"
+}

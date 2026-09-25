@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.saoaf.dev/schemas/v1/mcp/tool-snapshot.json",
+  "title": "MCP Tool Snapshot（03.5 逻辑 action 投影）",
+  "description": "MCP Fabric 向 ARR/Registry 发布的逻辑 action 快照：risk、idempotency、approval requirement。快照是发布事实（不可变 revision），Tool Server 迁移只更新 MCP Fabric，action contract 稳定时 ARR 与 Agent 不变。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "provider_id",
+    "snapshot_version",
+    "contract_version",
+    "generated_at",
+    "valid_until",
+    "actions",
+    "digest"
+  ],
+  "properties": {
+    "provider_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "MCP Gateway 提供者标识（如 enterprise-mcp-gateway）。"
+    },
+    "snapshot_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contract_version": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}$",
+      "description": "契约月度版本（与 contracts/ 目录冻结版本对应）。"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "valid_until": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/ToolAction"
+      }
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "快照内容寻址摘要（发布方签名前对规范化字节计算）。"
+    },
+    "signature": {
+      "type": "string",
+      "description": "发布方对 digest 的签名（mock 环境可为非密码学占位）。"
+    }
+  },
+  "$defs": {
+    "ToolAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_id",
+        "capability_key",
+        "server_ref",
+        "transport",
+        "risk_level",
+        "idempotency",
+        "approval_required",
+        "parameter_schema_ref",
+        "status"
+      ],
+      "properties": {
+        "action_id": {
+          "type": "string",
+          "pattern": "^tool\\.[a-z0-9-]+(\\.[a-z0-9-]+)*\\.(read|write|execute)$",
+          "description": "协议动作标识（企业语义由 Capability Registry 的 capability_key 持有；此为 MCP Registry 协议对象）。"
+        },
+        "capability_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "企业语义能力键（Registry 绑定的上游锚点）。"
+        },
+        "server_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Domain MCP Server 引用（Gateway 内部解析；不含 endpoint 明文——迁移不破坏契约）。"
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "stdio",
+            "http-sse",
+            "http-streamable"
+          ],
+          "description": "MCP 传输形态。"
+        },
+        "risk_level": {
+          "type": "string",
+          "enum": [
+            "LOW",
+            "MEDIUM",
+            "HIGH"
+          ],
+          "description": "风险等级：HIGH 写操作必须 preview → approve → execute 且每次执行携带审批引用。"
+        },
+        "idempotency": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "supported",
+            "key_scope"
+          ],
+          "properties": {
+            "supported": {
+              "type": "boolean"
+            },
+            "key_scope": {
+              "type": "string",
+              "enum": [
+                "action",
+                "action+parameter-digest"
+              ],
+              "description": "幂等键作用域：action 级或 action+参数摘要级。"
+            },
+            "ttl_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "幂等窗口（缺失 = 契约层未承诺）。"
+            }
+          }
+        },
+        "approval_required": {
+          "type": "boolean",
+          "description": "执行前置审批（HIGH 风险必为 true——校验规则见 contractlint 夹具）。"
+        },
+        "parameter_schema_ref": {
+          "type": "string",
+          "pattern": "^schema://capabilities/[^/]+/v[0-9]+$",
+          "description": "参数 Schema 引用（引用而非内联：Tool 参数正文禁止进入契约仓库）。"
+        },
+        "rate_limit": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "requests_per_minute": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "AVAILABLE",
+            "DEPRECATED",
+            "RETIRED"
+          ],
+          "description": "action 协议状态（RETIRED 后不再出现在新快照）。"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "risk_level": {
+                "const": "HIGH"
+              }
+            },
+            "required": [
+              "risk_level"
+            ]
+          },
+          "then": {
+            "properties": {
+              "approval_required": {
+                "const": true
+              }
+            },
+            "required": [
+              "approval_required"
+            ]
+          },
+          "$comment": "核心不变量（冻结）：HIGH 风险 action 必须 approval_required=true——违反经 contractlint classify 映射为 VALIDATION_INVALID_ENUM（const 违反与枚举违反同消息形——审查 R1 P2-1：冻结后加约束属破坏性，必须在 freeze 前落地）"
+        }
+      ]
+    }
+  }
+}

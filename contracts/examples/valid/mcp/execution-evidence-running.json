@@ -1,0 +1,12 @@
+{
+  "tool_execution_id": "te-mock-002",
+  "action_id": "tool.erp.work-order.write",
+  "resource_plan_id": "plan-mock-001",
+  "resource_plan_item_id": "item-mock-001",
+  "tenant_ref": "tenant-a",
+  "state": "RUNNING",
+  "policy_decision_ref": "pd-mock-001",
+  "approval_ref": "approval:mock-erp-write",
+  "idempotency_key": "idem-mock-002",
+  "started_at": "2026-09-22T00:00:00Z"
+}
