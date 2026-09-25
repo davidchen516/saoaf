@@ -1,0 +1,6 @@
+# I17 test results (2026-09-25, branch i17-ops)
+- go: full-repo -race 22/22 ok (incl. internal/ops 8/8, real PG)
+- web: npm test 24/24 (hub 11 + ops 13)
+- E2E (Playwright + system Chrome, real binary + real PG + stubs): 3/3
+- metrics page payload: 1243 bytes (limit=50; hard cap 200/page, 256KiB assertion)
+- boundarycheck: PASS (27 packages)

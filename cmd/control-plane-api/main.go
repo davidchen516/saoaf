@@ -21,6 +21,7 @@ import (
 
 	"github.com/davidchen516/saoaf/internal/binding"
 	"github.com/davidchen516/saoaf/internal/hub"
+	"github.com/davidchen516/saoaf/internal/ops"
 	"github.com/davidchen516/saoaf/internal/platform/approval"
 	"github.com/davidchen516/saoaf/internal/platform/audit"
 	"github.com/davidchen516/saoaf/internal/platform/authn"
@@ -48,26 +49,26 @@ func main() {
 	// CLOSED rather than open (fail-closed by default). When the database
 	// is configured, the publish route executes the REAL domain publish
 	// (binding.Store.Republish) inside the gate chain (I16, review R3
-	// P1-1/P1-2). The I16 hub resource READ routes mount INSIDE the same
-	// identity-gated block (review R2 P1-2: anonymous reads are fail-open
-	// and forbidden) with relative paths (review R2 P1-1: a second
-	// Route() on the same path panics chi at startup).
+	// P1-1/P1-2). The I16 hub resource READ routes and the I17 sovereignty
+	// operations READ routes mount INSIDE the same identity-gated block
+	// (review R2 P1-2: anonymous reads are fail-open and forbidden) with
+	// relative paths (review R2 P1-1: a second Route() on the same path
+	// panics chi at startup). Reads never re-register gated routes (R3 P1-1:
+	// the routeRecorder panics on any duplicate registration).
 	if cfg := adminConfigFromEnv(logger); cfg != nil {
-		var hubExt func(admin chi.Router)
+		var extensions []func(admin chi.Router)
 		if dsn := os.Getenv("SAOAF_DB_DSN"); dsn != "" {
 			pool, err := pgxpool.New(context.Background(), dsn)
 			if err != nil {
-				logger.Warn("hub read API disabled: database pool failed", "error", err)
+				logger.Warn("hub/ops read APIs disabled: database pool failed", "error", err)
 			} else {
 				hubCfg := hub.Config{Pool: pool}
-				hubExt = func(admin chi.Router) { hub.Mount(admin, hubCfg) }
+				extensions = append(extensions, func(admin chi.Router) { hub.Mount(admin, hubCfg) })
+				opsCfg := ops.Config{Pool: pool}
+				extensions = append(extensions, func(admin chi.Router) { ops.Mount(admin, opsCfg) })
 			}
 		}
-		if hubExt != nil {
-			httpapi.MountAdmin(router, *cfg, hubExt)
-		} else {
-			httpapi.MountAdmin(router, *cfg)
-		}
+		httpapi.MountAdmin(router, *cfg, extensions...)
 	}
 
 	// I09 runtime resolver API: mounted only when identity + database are
