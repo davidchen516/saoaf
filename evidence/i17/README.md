@@ -62,7 +62,7 @@
 | P1-1 history/broken 未应用 environments 收窄（production-scoped token 可读 staging 行；显式 environment 过滤被静默忽略） | 两 handler 接住 `envs` 追加 `dimensions->>'environment' IN (...)`（与 listMetrics 同构）；history 同时应用显式 environment 过滤 | `TestOpsEnvironmentConfinementHistoryAndBroken`（staging 不可见 + in-scope 可见 + off-scope 403 + 无 claim 对照组） |
 | P2-1 overview unknown_metrics 查询失败静默折 0 | 失败进 `unknown_fields` + 输出 null（与 quarantine_depth 语义对齐：显式未知，绝不当 0） | `TestOpsOverviewUnknownSemantics`（wire shape：number/list 断言）+ UI `UnknownBadge` |
 | P3-1 drills/{missing}/log 200 空列表 | 先查存在性 → 404 NOT_FOUND（与 getDrill 一致） | `TestOpsDrillLogNotFound` |
-| P3-2 getDrill findings 查询失败静默空成功 | 失败 → 500 INTERNAL（部分失败不呈现为成功空态） | 代码路径 |
+| P3-2 getDrill findings 查询失败静默空成功 | 失败 → 500 INTERNAL、scan 失败 → 500（R2 复审发现 R1 轮的批量替换静默未命中——声明先行于代码，本轮真修） | `TestOpsDrillDetailFindingsFailureExplicit`（故障注入：DROP findings 表 → 500 INTERNAL 信封） |
 | P3-3 e2e-stack.sh 卫生成组 | trap 覆盖 EXIT/INT/TERM；删除死代码 stub 启动；cleanup 覆盖全部临时文件 + vite 进程树（setsid + pkill）；种子 SQL `-v ON_ERROR_STOP=1`；E2E_HOLD 调试模式 | 运行后孤儿/残留检查通过 |
 | P3-4 /ops/evidence?since= 非法值静默忽略 | 与 metrics 一致 → 400 VALIDATION_INVALID_ENUM | 代码路径 |
 | P3-5 跨租户/环境 403 错误码 FORBIDDEN_FIELD | 统一为 `FORBIDDEN`（与 RequireScope 同码；FORBIDDEN_FIELD 保留原写面语义） | 4 处替换 |

@@ -677,21 +677,27 @@ func (c Config) getDrill(w http.ResponseWriter, r *http.Request) {
 		FROM saoaf.exit_drill_finding
 		WHERE drill_key = $1
 		ORDER BY created_at`, key)
-	if ferr == nil {
-		defer frows.Close()
-		for frows.Next() {
-			var fk, desc, sev, st, rem, remEv string
-			var createdAt, resolvedAt *time.Time
-			if err := frows.Scan(&fk, &desc, &sev, &st, &rem, &remEv, &createdAt, &resolvedAt); err != nil {
-				continue
-			}
-			findings = append(findings, map[string]any{
-				"finding_key": fk, "description": desc, "severity": sev,
-				"state": st, "remediation": rem,
-				"remediation_evidence": remEv,
-				"created_at":           createdAt, "resolved_at": resolvedAt,
-			})
+	if ferr != nil {
+		// partial failure must not render as an empty success (GWT#2;
+		// review R1 P3-2 — the R2 re-review caught the earlier claim
+		// outrunning the code)
+		httpapi.WriteErr(w, r, http.StatusInternalServerError, "INTERNAL", "store error")
+		return
+	}
+	defer frows.Close()
+	for frows.Next() {
+		var fk, desc, sev, st, rem, remEv string
+		var createdAt, resolvedAt *time.Time
+		if err := frows.Scan(&fk, &desc, &sev, &st, &rem, &remEv, &createdAt, &resolvedAt); err != nil {
+			httpapi.WriteErr(w, r, http.StatusInternalServerError, "INTERNAL", "scan error")
+			return
 		}
+		findings = append(findings, map[string]any{
+			"finding_key": fk, "description": desc, "severity": sev,
+			"state": st, "remediation": rem,
+			"remediation_evidence": remEv,
+			"created_at":           createdAt, "resolved_at": resolvedAt,
+		})
 	}
 	httpapi.WriteJSON(w, http.StatusOK, map[string]any{
 		"drill_key": key, "vendor": vendor, "state": state,

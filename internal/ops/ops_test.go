@@ -629,6 +629,31 @@ func TestOpsOverviewUnknownSemantics(t *testing.T) {
 	})
 }
 
+// P3-2 regression: a findings query failure must surface as 500, never as
+// a 200 with empty findings (fault injection: drop the table).
+func TestOpsDrillDetailFindingsFailureExplicit(t *testing.T) {
+	withDBO(t, func(dsn string) {
+		seedOps(t, dsn)
+		// inject the fault: the findings table becomes unreadable
+		admin, err := pgx.Connect(context.Background(), dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := admin.Exec(context.Background(),
+			`DROP TABLE saoaf.exit_drill_finding`); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = admin.Close(context.Background()) })
+
+		h := newOpsHarness(t, dsn)
+		tok := h.iss.token(t, "ops.read ops.all-tenants", "tenant-a", nil)
+		code, body := h.get(t, "/admin/v1/ops/drills/drill-1", tok)
+		if code != http.StatusInternalServerError || !strings.Contains(body, `"error_code":"INTERNAL"`) {
+			t.Fatalf("findings failure = %d %s, want 500 INTERNAL (never an empty 200)", code, body)
+		}
+	})
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
