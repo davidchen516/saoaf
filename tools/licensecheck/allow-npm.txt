@@ -127,3 +127,7 @@ source-map-js
 tinyglobby
 update-browserslist-db
 yallist
+
+# I17 E2E toolchain — Apache-2.0 (playwright + playwright-core, dev-only)
+playwright
+playwright-core
