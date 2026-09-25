@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "node --test test/hub.test.mjs"
+    "test": "node --test test/hub.test.mjs test/ops.test.mjs"
   },
   "dependencies": {
     "react": "^19.1.0",
@@ -17,6 +17,7 @@
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^5.2.0",
+    "playwright": "^1.63.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.0"
   }

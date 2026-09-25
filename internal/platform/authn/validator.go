@@ -36,6 +36,11 @@ type Identity struct {
 	Scopes    []string // "scope" claim, space-split
 	TokenID   string   // "jti" — replay/audit correlation
 	Expiry    time.Time
+	// Environments is the trusted "environments" claim (I17): the operator's
+	// allowed environment scope. Absent/empty = unrestricted (platform
+	// operator); otherwise sovereignty-ops views are confined to these
+	// environments and explicit off-scope requests are rejected (403).
+	Environments []string
 }
 
 // HasScope reports whether the identity carries a scope.
@@ -232,6 +237,13 @@ func (v *Validator) Validate(ctx context.Context, rawToken string) (*Identity, e
 	id.TenantRef = str(claims["tenant_ref"])
 	if sc, ok := claims["scope"].(string); ok {
 		id.Scopes = strings.Fields(sc)
+	}
+	if envs, ok := claims["environments"].([]any); ok {
+		for _, e := range envs {
+			if s := str(e); s != "" {
+				id.Environments = append(id.Environments, s)
+			}
+		}
 	}
 	if exp, err := claims.GetExpirationTime(); err == nil && exp != nil {
 		id.Expiry = exp.Time

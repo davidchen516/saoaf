@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Ops } from './Ops'
 
 /**
  * I16: AI Resource Hub management UI (read + controlled writes via Admin
@@ -6,6 +7,7 @@ import { useEffect, useRef, useState } from 'react'
  * Plans with search/filter; publish actions gated by server-verified
  * scopes; revision conflicts surface as explicit 409s (never silent
  * overwrite). Token/密钥/敏感正文 never enter browser storage, URL, or logs.
+ * I17 adds the Sovereignty Operations console (read-only views).
  */
 
 interface WhoAmI {
@@ -53,7 +55,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function App() {
   const [who, setWho] = useState<WhoAmI | null>(null)
-  const [view, setView] = useState<'bindings' | 'plans'>('bindings')
+  const [view, setView] = useState<'bindings' | 'plans' | 'ops'>('bindings')
   const [bindings, setBindings] = useState<Binding[]>([])
   const [plans, setPlans] = useState<Plan[]>([])
   const [conflict, setConflict] = useState<string | null>(null)
@@ -80,7 +82,8 @@ export function App() {
   useEffect(() => {
     if (!who) return
     if (view === 'bindings') loadBindings()
-    else loadPlans()
+    else if (view === 'plans') loadPlans()
+    // 'ops' loads inside the Ops component (server-side paginated)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, who])
 
@@ -149,8 +152,13 @@ export function App() {
         </button>{' '}
         <button onClick={() => setView('plans')} disabled={view === 'plans'}>
           Resource Plans
+        </button>{' '}
+        <button onClick={() => setView('ops')} disabled={view === 'ops'} data-testid="nav-ops">
+          Sovereignty Ops
         </button>
       </nav>
+
+      {view === 'ops' && <Ops />}
 
       {conflict && (
         <p role="alert" data-testid="conflict" style={{ color: '#b00', border: '1px solid #b00', padding: '0.5rem' }}>
