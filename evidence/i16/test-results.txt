@@ -1,0 +1,6 @@
+# I16 Hub UI 测试（node:test 8/8 PASS）
+# 敏感零落地（源码+构建产物）/ UI 非权威（唯一基址 /api/admin/v1）/ 409 冲突语义（显式呈现不覆盖）
+# mock 契约（scope 门控 canPublish + BINDING_REVISION_CONFLICT 信封）/ 幂等键（expected_revision）
+
+# 构建产物：dist/assets/index-*.js 226 KB（gzip 71 KB）——tsc --noEmit + vite build ✅
+# npm audit：本地 registry 不支持 audit 端点（CI 的 web build + npm audit gate 覆盖）
