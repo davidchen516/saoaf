@@ -439,7 +439,14 @@ components:
                 additionalProperties: false
                 properties:
                   requests_per_minute: {type: integer, minimum: 1}
-              status: {type: string, enum: [AVAILABLE, DEPRECATED, RETIRED]}
+              status: {type: string, enum: [AVAILABLE, DEPRECATED, RETIRED], description: RETIRED actions stop receiving new executions; they vanish from the NEXT published snapshot}
+            allOf:
+              - if:
+                  properties: {risk_level: {const: HIGH}}
+                  required: [risk_level]
+                then:
+                  properties: {approval_required: {const: true}}
+                  required: [approval_required]
         digest: {type: string}
         signature: {type: string}
   responses:

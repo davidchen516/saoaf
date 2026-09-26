@@ -49,3 +49,14 @@
 
 - 外部反馈（01 Agent Runtime/04 delegation 接口）：start rule 只约束后续兼容变更/新 major
 - 有状态委派子集仲裁/cancel 竞争仲裁/trust-domain 验证：03.6 运行时批次
+
+## 审查 R1 整改（CHANGES REQUESTED → 全项修复）
+
+| Finding | 修复 | 验证 |
+|---|---|---|
+| P2-1 Four invariants but only one negative fixture + breaking.go tail-deletion blind spot (removing the COMPLETED⇒artifact_ref tail item, validate/breaking both green) | ① Add 3 negative fixtures (failed-no-error / running-no-granted / completed-no-artifact)——each invariant has one negative fixture; ② breaking.go object arrays `len(cur)<len(base)` means breaking (tail-deletion detection) | Blue-team replay: delete any one of the 4 invariants → validate all red (corresponding fixture unexpectedly PASSED); shrinkage detection has unit regression `TestObjectArrayShrinkageIsBreaking`; gate negatives 16→19 |
+| P3-1 OBS-1 claim ahead of code (mcp-tool only added description, no if/then) | **Truly add if/then allOf** to ToolSnapshot actions items (risk HIGH ⇒ approval_required const true) | grep allOf present at file line 443; Mock 13/13 (snapshot example passes through new validation); this round's patch has assert guards——silent no longer possible |
+| P3-2 Count disclosure errors (negative ×6 actually 5; 22 assertions actually 21) | README corrected (now ×8/21 assertions, consistent with the numbers after adding fixtures) | Text |
+| P3-3 Invalid taskId → Prism 422 bare error | mocks/a2a/README explicitly disclosed (mock-layer limitation, contract patterns are mandatory) | Text |
+
+After remediation: `CONTRACT GATE: PASS (schemas=8 examples=9 negatives=19 consumers=6 forbidden-hits=0)`; breaking vs main purely additive (changed=3 deleted=0); MCP 13/13 / A2A 11/11; contractlint unit tests all green (including new shrinkage regression).

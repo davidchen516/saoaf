@@ -23,6 +23,11 @@ arbitration, cancel/status race resolution, trust-domain validation — is
 (issue non-goals: no Gateway, remote agent, orchestration, credential
 issuance).
 
+Prism path-parameter validation failures surface as its own 422 (the
+GET/DELETE task operations declare no 400 response for an invalid at-
+pattern — a mock-level limitation, disclosed here; the CONTRACT enforces
+the pattern).
+
 This mock validates the SAOAF/agent boundary. It does not implement an
 A2A Gateway, remote agent runtime, orchestration, or delegation credential
 signing — those remain owned by the professional fabric. No deployable
