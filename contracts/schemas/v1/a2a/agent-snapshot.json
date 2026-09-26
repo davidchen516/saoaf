@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.saoaf.dev/schemas/v1/a2a/agent-snapshot.json",
+  "title": "A2A Agent Snapshot（03.6 逻辑 Agent Card 投影）",
+  "description": "A2A Fabric 向 ARR/Registry 发布的逻辑 agent capability 快照：Agent Card 经信任域映射后的协议投影。Agent 的内部模型、Prompt、Memory、Tools 不进入本契约（module-contracts §8.1）。签名由 04 工程的信任域机制验证（本 schema 携带 signature 字段；验证语义属运行时/04，契约冻结其必填性）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "provider_id",
+    "snapshot_version",
+    "contract_version",
+    "generated_at",
+    "valid_until",
+    "agents",
+    "digest",
+    "signature"
+  ],
+  "properties": {
+    "provider_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A2A Gateway 提供者标识。"
+    },
+    "snapshot_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contract_version": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}$"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "valid_until": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "agents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/AgentCard"
+      }
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "signature": {
+      "type": "string",
+      "description": "发布方对 digest 的签名（mock 环境可为非密码学占位；缺失即恶意/未认证 Card——契约必填性冻结）。"
+    }
+  },
+  "$defs": {
+    "AgentCard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent_id",
+        "capability_key",
+        "skills",
+        "interface_version",
+        "endpoint_ref",
+        "trust_domain",
+        "max_delegation_scope",
+        "status"
+      ],
+      "properties": {
+        "agent_id": {
+          "type": "string",
+          "pattern": "^agent\\.[a-z0-9-]+(\\.[a-z0-9-]+)*$",
+          "description": "协议 Agent 标识（企业语义锚点为 capability_key）。"
+        },
+        "capability_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "skills": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Agent Card 声明的技能（企业语义清单）。"
+        },
+        "interface_version": {
+          "type": "string",
+          "pattern": "^v[0-9]+$"
+        },
+        "endpoint_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A2A Gateway 内部解析的端点引用（不含明文 endpoint——远程 Agent 迁移不破坏契约）。"
+        },
+        "trust_domain": {
+          "type": "string",
+          "enum": [
+            "internal",
+            "partner",
+            "external"
+          ],
+          "description": "信任域分类：external 必须经过外部信任域、数据出境与供应商政策检查（运行时/04 强制；契约冻结分类枚举）。"
+        },
+        "max_delegation_scope": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "该 Agent 可被委派的最大范围（04 工程委派引用的上界；子任务权限不得超出——granted ⊆ 该范围由运行时仲裁，契约冻结其必填性）。"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "AVAILABLE",
+            "DEPRECATED",
+            "RETIRED"
+          ],
+          "description": "RETIRED Agent 停止接收新任务；下一份快照不再出现。"
+        }
+      }
+    }
+  }
+}

@@ -297,6 +297,14 @@ func findBreaking(path string, base, cur any, at string, out *[]string) {
 		}
 		// Arrays of objects: compare positionally by key identity where
 		// possible (best effort — property paths are maps below).
+		// SHRINKAGE IS BREAKING for object arrays (I19 R1 P2-1: tail-item
+		// deletion previously fell below the min(len) comparison window and
+		// evaded the gate — e.g. dropping the last if/then invariant).
+		if len(c) < len(b) {
+			for i := len(c); i < len(b); i++ {
+				*out = append(*out, fmt.Sprintf("%s: array entry removed at %s[%d] (object-array shrinkage is breaking)", path, at, i))
+			}
+		}
 		n := len(b)
 		if len(c) < n {
 			n = len(c)

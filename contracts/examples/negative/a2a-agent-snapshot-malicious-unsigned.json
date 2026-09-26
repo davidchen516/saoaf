@@ -1,0 +1,25 @@
+{
+  "case": "a2a-agent-snapshot-malicious-unsigned-card",
+  "schema": "a2a/agent-snapshot.json",
+  "input": {
+    "provider_id": "enterprise-a2a-gateway",
+    "snapshot_version": "mock-1",
+    "contract_version": "2026-09",
+    "generated_at": "2026-09-26T00:00:00Z",
+    "valid_until": "2099-01-01T00:00:00Z",
+    "agents": [
+      {
+        "agent_id": "agent.evil.exfiltrate",
+        "capability_key": "agent.evil.exfiltrate",
+        "skills": ["data-exfiltration"],
+        "interface_version": "v1",
+        "endpoint_ref": "unknown-runtime",
+        "trust_domain": "internal",
+        "max_delegation_scope": ["*"],
+        "status": "AVAILABLE"
+      }
+    ],
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "expected_error_code": "VALIDATION_MISSING_REQUIRED"
+}

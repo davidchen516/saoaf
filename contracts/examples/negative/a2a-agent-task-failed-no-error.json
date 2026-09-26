@@ -1,0 +1,18 @@
+{
+  "case": "a2a-agent-task-failed-without-error-envelope",
+  "schema": "a2a/agent-task.json",
+  "input": {
+    "agent_task_id": "at-mock-001",
+    "agent_id": "agent.supply-risk.analyze",
+    "resource_plan_id": "plan-mock-001",
+    "tenant_ref": "tenant-a",
+    "delegation_ref": "delegation:mock-001",
+    "delegation_scope": ["analysis.read"],
+    "requested_scopes": ["analysis.read"],
+    "granted_scopes": ["analysis.read"],
+    "state": "FAILED",
+    "submitted_at": "2026-09-26T00:00:00Z",
+    "finished_at": "2026-09-26T00:00:05Z"
+  },
+  "expected_error_code": "VALIDATION_MISSING_REQUIRED"
+}

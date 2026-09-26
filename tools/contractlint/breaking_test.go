@@ -154,3 +154,49 @@ func TestFindBreakingWholePathRemoval(t *testing.T) {
 		t.Fatalf("whole-path removal not detected: %v", out)
 	}
 }
+
+// TestObjectArrayShrinkageIsBreaking locks the I19 R1 P2-1 regression:
+// deleting a TAIL entry of an object array (e.g. the last if/then
+// invariant in an allOf) must be flagged — the positional compare
+// previously stopped at min(len) and tail deletions evaded the gate.
+func TestObjectArrayShrinkageIsBreaking(t *testing.T) {
+	base := map[string]any{
+		"allOf": []any{
+			map[string]any{"if": map[string]any{"properties": map[string]any{"state": map[string]any{"enum": []any{"COMPLETED"}}}}},
+			map[string]any{"if": map[string]any{"properties": map[string]any{"state": map[string]any{"enum": []any{"FAILED"}}}}},
+			map[string]any{"if": map[string]any{"properties": map[string]any{"state": map[string]any{"const": "CANCELED"}}}},
+		},
+	}
+	cur := map[string]any{
+		"allOf": []any{
+			base["allOf"].([]any)[0],
+			base["allOf"].([]any)[1],
+			// entry [2] dropped — the gate must say so
+		},
+	}
+	var out []string
+	findBreaking("schema.json", base, cur, "$", &out)
+	if len(out) == 0 {
+		t.Fatal("tail-entry deletion of an object array was not flagged as breaking")
+	}
+	found := false
+	for _, m := range out {
+		if strings.Contains(m, "shrinkage") && strings.Contains(m, "[2]") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a shrinkage hit at [2], got: %v", out)
+	}
+	// growing the array stays additive (no hit)
+	grown := map[string]any{
+		"allOf": append(append([]any{}, base["allOf"].([]any)...), map[string]any{"x": true}),
+	}
+	out = nil
+	findBreaking("schema.json", base, grown, "$", &out)
+	for _, m := range out {
+		if strings.Contains(m, "shrinkage") {
+			t.Fatalf("array GROWTH must not be flagged, got: %s", m)
+		}
+	}
+}
