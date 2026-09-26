@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.saoaf.dev/schemas/v1/a2a/agent-task.json",
+  "title": "A2A Agent Task Evidence",
+  "description": "A2A Gateway 的任务对象与最小证据：委派引用、请求/授予范围、状态机与 artifact 引用。子任务权限 ⊆ delegation_ref 表达范围——契约冻结 delegation_ref/delegation_scope/requested_scopes/granted_scopes 的必填性与状态机；授予范围的子集仲裁由 A2A Gateway 运行时强制（越权请求 → 403 信封，见 OpenAPI 负向例与消费测试）。委派凭证由 04 工程签发，Gateway 不自造身份。artifact 只允许引用 + 完整性 digest——正文被 additionalProperties:false 结构性拒绝。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agent_task_id", "agent_id", "resource_plan_id", "tenant_ref", "delegation_ref", "delegation_scope", "requested_scopes", "state", "submitted_at"],
+  "properties": {
+    "agent_task_id": {
+      "type": "string",
+      "pattern": "^at-[a-z0-9-]+$",
+      "description": "任务标识（幂等重放返回同一 ID）。"
+    },
+    "agent_id": { "type": "string" },
+    "resource_plan_id": { "type": "string", "minLength": 1, "description": "关联键（非授权令牌）。" },
+    "tenant_ref": { "type": "string", "minLength": 1 },
+    "delegation_ref": {
+      "type": "string",
+      "minLength": 1,
+      "description": "04 工程签发的委派引用（必填——无委派引用的任务被契约拒绝）。"
+    },
+    "delegation_scope": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "委派引用表达的范围回声（审计可比对 granted_scopes 的仲裁输入）。"
+    },
+    "requested_scopes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "子任务请求的范围（必须 ⊆ delegation_scope——越权在运行时被拒，契约级负向例见 OpenAPI）。"
+    },
+    "granted_scopes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "实际授予范围（RUNNING 起必填——授予结果显式，不从缺省推断）。"
+    },
+    "state": {
+      "type": "string",
+      "enum": ["SUBMITTED", "RUNNING", "COMPLETED", "FAILED", "CANCELED"],
+      "description": "任务状态机：SUBMITTED → RUNNING → {COMPLETED｜FAILED｜CANCELED}；cancel 与 status 存在竞争窗口，终态由 Gateway 仲裁；断线恢复经 status 查询语义收敛。重复 submit 以 task key（Idempotency-Key）幂等——同 key → 同任务。"
+    },
+    "artifact_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "digest"],
+      "description": "artifact 引用制：仅引用 + 完整性 digest；正文（inline content）被本对象结构性拒绝。",
+      "properties": {
+        "uri": { "type": "string", "pattern": "^evidence://" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error_code", "message", "request_id"],
+      "description": "flat 信封形状；error_code 为域分类（非冻结 HTTP 枚举）。",
+      "properties": {
+        "error_code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "maxLength": 512 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "submitted_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time", "description": "终态时间戳（终态必填；在途不得伪造——见 allOf）。" },
+    "trace_id": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "enum": ["COMPLETED", "FAILED", "CANCELED"] } }, "required": ["state"] },
+      "then": { "required": ["finished_at"] },
+      "$comment": "终态必带 finished_at（断线后 status 查询收敛到权威终态）。"
+    },
+    {
+      "if": { "properties": { "state": { "enum": ["FAILED", "CANCELED"] } }, "required": ["state"] },
+      "then": { "required": ["error"] },
+      "$comment": "FAILED/CANCELED 必带 error 信封（失败/取消语义显式）。"
+    },
+    {
+      "if": { "properties": { "state": { "enum": ["RUNNING", "COMPLETED", "FAILED"] } }, "required": ["state"] },
+      "then": { "required": ["granted_scopes"] },
+      "$comment": "进入执行后授予范围必填（授予显式；SUBMITTED 尚未授予）。"
+    },
+    {
+      "if": { "properties": { "state": { "const": "COMPLETED" } }, "required": ["state"] },
+      "then": { "required": ["artifact_ref"] },
+      "$comment": "完成必带 artifact 引用（引用 + digest，正文结构性禁止）。"
+    }
+  ]
+}

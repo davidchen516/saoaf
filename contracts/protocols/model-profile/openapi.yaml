@@ -192,6 +192,12 @@ components:
         signature: {type: string}
       additionalProperties: false
   responses:
+    Error:
+      description: Unified frozen error envelope
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+          example: {error: {code: INTERNAL, message: unexpected error}, model_route_decision_id: mrd-mock-error, resource_plan_id: plan-mock-001}
     ProfileNotFound:
       description: Logical profile is not published
       content:

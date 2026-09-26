@@ -1,0 +1,21 @@
+{
+  "provider_id": "enterprise-a2a-gateway",
+  "snapshot_version": "mock-1",
+  "contract_version": "2026-09",
+  "generated_at": "2026-09-26T00:00:00Z",
+  "valid_until": "2099-01-01T00:00:00Z",
+  "agents": [
+    {
+      "agent_id": "agent.supply-risk.analyze",
+      "capability_key": "agent.supply-risk.analyze",
+      "skills": ["supply-risk-analysis"],
+      "interface_version": "v1",
+      "endpoint_ref": "partner-agent-runtime-a",
+      "trust_domain": "partner",
+      "max_delegation_scope": ["analysis.read", "report.write"],
+      "status": "AVAILABLE"
+    }
+  ],
+  "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "signature": "mock-only-not-cryptographic"
+}

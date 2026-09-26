@@ -414,6 +414,10 @@ components:
             type: object
             additionalProperties: false
             required: [action_id, capability_key, server_ref, transport, risk_level, idempotency, approval_required, parameter_schema_ref, status]
+            description: >-
+              Mirrors schemas/v1/mcp/tool-snapshot.json (I18 R2 OBS-1) —
+              the HIGH risk level implies approval_required invariant is
+              frozen in the canonical JSON Schema and mirrored here.
             properties:
               action_id: {type: string}
               capability_key: {type: string}
@@ -439,6 +443,12 @@ components:
         digest: {type: string}
         signature: {type: string}
   responses:
+    Error:
+      description: Unified frozen error envelope
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: INTERNAL, message: unexpected error, request_id: req-mock-001}
     ActionNotFound:
       description: Action not in the current snapshot
       content:

@@ -1,0 +1,382 @@
+# SAOAF A2A Fabric (03.6) contract — agent discovery, task and delegation
+# boundary mock. Scope: Agent Card projection, submit/status/cancel task
+# semantics, delegation reference and artifact-reference integrity. NO
+# runtime: no A2A Gateway, remote agent, orchestration or credential
+# issuance (those are 04/runtime responsibilities).
+openapi: 3.1.0
+info:
+  title: SAOAF A2A Fabric Mock
+  version: 1.0.0
+  description: >-
+    Contract mock for the agent/delegation boundary. The Gateway validates
+    trust-domain and delegation contract semantics; remote execution
+    stays with the agent runtime. Artifacts return by reference + digest.
+servers:
+  - url: http://127.0.0.1:4040
+paths:
+  /control/v1/agent-snapshots/current:
+    get:
+      operationId: getCurrentAgentSnapshot
+      responses:
+        '200':
+          description: Current logical agent snapshot (ARR-facing)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AgentSnapshot'}
+              example:
+                provider_id: enterprise-a2a-gateway
+                snapshot_version: mock-1
+                contract_version: '2026-09'
+                generated_at: '2026-09-26T00:00:00Z'
+                valid_until: '2099-01-01T00:00:00Z'
+                agents:
+                  - agent_id: agent.supply-risk.analyze
+                    capability_key: agent.supply-risk.analyze
+                    skills: [supply-risk-analysis]
+                    interface_version: v1
+                    endpoint_ref: partner-agent-runtime-a
+                    trust_domain: partner
+                    max_delegation_scope: [analysis.read, report.write]
+                    status: AVAILABLE
+                digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+                signature: mock-only-not-cryptographic
+  /v1/agent-tasks:
+    post:
+      operationId: submitAgentTask
+      description: >-
+        Submit a delegated task. Idempotency: a repeated submit with the
+        same Idempotency-Key returns the original task (same at- ID). The
+        delegation reference is REQUIRED (04-issued); requested scopes
+        must stay within the delegation scope — an out-of-scope request
+        is rejected (see negative example).
+      parameters:
+        - {$ref: '#/components/parameters/ResourcePlanId'}
+        - {$ref: '#/components/parameters/TenantRef'}
+        - {$ref: '#/components/parameters/Traceparent'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SubmitRequest'}
+            example:
+              agent_id: agent.supply-risk.analyze
+              delegation_ref: delegation:mock-001
+              delegation_scope: [analysis.read, report.write]
+              requested_scopes: [analysis.read]
+              input_ref:
+                uri: evidence://task-inputs/ti-mock-001
+                digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      responses:
+        '200':
+          description: Task accepted (or idempotent replay — same at- ID)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AgentTask'}
+              example:
+                agent_task_id: at-mock-001
+                agent_id: agent.supply-risk.analyze
+                resource_plan_id: plan-mock-001
+                tenant_ref: tenant-a
+                delegation_ref: delegation:mock-001
+                delegation_scope: [analysis.read, report.write]
+                requested_scopes: [analysis.read]
+                granted_scopes: [analysis.read]
+                state: RUNNING
+                submitted_at: '2026-09-26T00:00:00Z'
+                trace_id: 00-00000000000000000000000000000000-0000000000000000-01
+        '400': {$ref: '#/components/responses/ParameterValidationFailed'}
+        '403': {$ref: '#/components/responses/DelegationScopeExceeded'}
+        '404': {$ref: '#/components/responses/AgentNotFound'}
+        '503': {$ref: '#/components/responses/AgentRuntimeUnavailable'}
+  /v1/agent-tasks/{taskId}:
+    get:
+      operationId: getAgentTaskStatus
+      description: >-
+        Status query — the disconnect-recovery convergence point: after a
+        broken connection the consumer polls status and converges on the
+        authoritative task state.
+      parameters:
+        - {$ref: '#/components/parameters/TaskId'}
+        - {$ref: '#/components/parameters/TenantRef'}
+        - {$ref: '#/components/parameters/Traceparent'}
+      responses:
+        '200':
+          description: Task evidence (authoritative state)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AgentTask'}
+              example:
+                agent_task_id: at-mock-001
+                agent_id: agent.supply-risk.analyze
+                resource_plan_id: plan-mock-001
+                tenant_ref: tenant-a
+                delegation_ref: delegation:mock-001
+                delegation_scope: [analysis.read, report.write]
+                requested_scopes: [analysis.read]
+                granted_scopes: [analysis.read]
+                state: COMPLETED
+                artifact_ref:
+                  uri: evidence://agent-tasks/at-mock-001/artifact
+                  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+                submitted_at: '2026-09-26T00:00:00Z'
+                finished_at: '2026-09-26T00:00:05Z'
+        '404': {$ref: '#/components/responses/TaskNotFound'}
+        '503': {$ref: '#/components/responses/AgentRuntimeUnavailable'}
+    delete:
+      operationId: cancelAgentTask
+      description: >-
+        Cancel competes with status/execution in a race window; the
+        Gateway arbitrates the terminal state (COMPLETED vs CANCELED)
+        and the consumer learns the outcome via the returned evidence.
+        Cancellation is idempotent per Idempotency-Key.
+      parameters:
+        - {$ref: '#/components/parameters/TaskId'}
+        - {$ref: '#/components/parameters/TenantRef'}
+        - {$ref: '#/components/parameters/Traceparent'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      responses:
+        '200':
+          description: Cancellation outcome (terminal state after arbitration)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AgentTask'}
+              example:
+                agent_task_id: at-mock-001
+                agent_id: agent.supply-risk.analyze
+                resource_plan_id: plan-mock-001
+                tenant_ref: tenant-a
+                delegation_ref: delegation:mock-001
+                delegation_scope: [analysis.read, report.write]
+                requested_scopes: [analysis.read]
+                granted_scopes: [analysis.read]
+                state: CANCELED
+                error:
+                  error_code: CANCELED
+                  message: task canceled by consumer
+                  request_id: req-mock-001
+                submitted_at: '2026-09-26T00:00:00Z'
+                finished_at: '2026-09-26T00:00:03Z'
+        '404': {$ref: '#/components/responses/TaskNotFound'}
+        '409': {$ref: '#/components/responses/CancelRaceLost'}
+components:
+  parameters:
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema: {type: string, pattern: '^at-[a-z0-9-]+$'}
+    ResourcePlanId:
+      name: X-Resource-Plan-ID
+      in: header
+      required: true
+      schema: {type: string, minLength: 1}
+    TenantRef:
+      name: X-Tenant-Ref
+      in: header
+      required: true
+      description: Injected by a trusted gateway in production.
+      schema: {type: string, minLength: 1}
+    Traceparent:
+      name: traceparent
+      in: header
+      required: true
+      schema: {type: string, pattern: '^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$'}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: {type: string, minLength: 1}
+  schemas:
+    ErrorEnvelope:
+      # FROZEN contract: flat {error_code, message, request_id}
+      # (contracts/schemas/v1/error-envelope.json)
+      type: object
+      additionalProperties: false
+      required: [error_code, message, request_id]
+      properties:
+        error_code:
+          type: string
+          enum: [VALIDATION_UNKNOWN_FIELD, VALIDATION_INVALID_ENUM, VALIDATION_PAYLOAD_TOO_LARGE,
+                 VALIDATION_PAYLOAD_TOO_DEEP, VALIDATION_MISSING_REQUIRED, SEMANTIC_INVALID,
+                 COMPATIBILITY_BREAKING_CHANGE, FORBIDDEN_FIELD, NOT_FOUND, METHOD_NOT_ALLOWED,
+                 CONFLICT, INTERNAL]
+        message: {type: string, maxLength: 512}
+        request_id: {type: string, minLength: 1, maxLength: 128}
+    SubmitRequest:
+      type: object
+      additionalProperties: false
+      required: [agent_id, delegation_ref, delegation_scope, requested_scopes]
+      description: >-
+        The 04-issued delegation reference and its scope are REQUIRED —
+        the gateway never invents identities. requested_scopes must stay
+        within delegation_scope (runtime arbitration; contract-level
+        negative example below).
+      properties:
+        agent_id: {type: string}
+        delegation_ref: {type: string, minLength: 1}
+        delegation_scope:
+          type: array
+          minItems: 1
+          items: {type: string, minLength: 1}
+        requested_scopes:
+          type: array
+          minItems: 1
+          items: {type: string, minLength: 1}
+        input_ref:
+          type: object
+          additionalProperties: false
+          required: [uri, digest]
+          description: task input by reference + integrity digest (no inline payload)
+          properties:
+            uri: {type: string, pattern: '^evidence://'}
+            digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+    AgentTask:
+      type: object
+      additionalProperties: false
+      description: >-
+        te-task evidence: delegation reference + scopes + state machine
+        SUBMITTED → RUNNING → {COMPLETED|FAILED|CANCELED}. Terminal
+        states require finished_at; FAILED/CANCELED require the error
+        envelope; RUNNING onwards requires granted_scopes; COMPLETED
+        requires artifact_ref (reference + digest only — inline artifact
+        content is structurally rejected).
+      required: [agent_task_id, agent_id, resource_plan_id, tenant_ref, delegation_ref, delegation_scope, requested_scopes, state, submitted_at]
+      properties:
+        agent_task_id: {type: string, pattern: '^at-[a-z0-9-]+$'}
+        agent_id: {type: string}
+        resource_plan_id: {type: string}
+        tenant_ref: {type: string}
+        delegation_ref: {type: string}
+        delegation_scope:
+          type: array
+          minItems: 1
+          items: {type: string, minLength: 1}
+        requested_scopes:
+          type: array
+          minItems: 1
+          items: {type: string, minLength: 1}
+        granted_scopes:
+          type: array
+          items: {type: string, minLength: 1}
+        state: {type: string, enum: [SUBMITTED, RUNNING, COMPLETED, FAILED, CANCELED]}
+        artifact_ref:
+          type: object
+          additionalProperties: false
+          required: [uri, digest]
+          description: flat envelope SHAPE; artifact content stays with the
+            agent data plane — reference + digest only.
+          properties:
+            uri: {type: string, pattern: '^evidence://'}
+            digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        error:
+          type: object
+          additionalProperties: false
+          description: flat envelope SHAPE; error_code is a domain
+            classification (e.g. CANCELED), not the frozen HTTP enum.
+          required: [error_code, message, request_id]
+          properties:
+            error_code: {type: string}
+            message: {type: string, maxLength: 512}
+            request_id: {type: string, minLength: 1, maxLength: 128}
+        submitted_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+        trace_id: {type: string}
+      allOf:
+        - if:
+            properties: {state: {enum: [COMPLETED, FAILED, CANCELED]}}
+            required: [state]
+          then:
+            required: [finished_at]
+        - if:
+            properties: {state: {enum: [FAILED, CANCELED]}}
+            required: [state]
+          then:
+            required: [error]
+        - if:
+            properties: {state: {enum: [RUNNING, COMPLETED, FAILED]}}
+            required: [state]
+          then:
+            required: [granted_scopes]
+        - if:
+            properties: {state: {const: COMPLETED}}
+            required: [state]
+          then:
+            required: [artifact_ref]
+    AgentSnapshot:
+      type: object
+      additionalProperties: false
+      required: [provider_id, snapshot_version, contract_version, generated_at, valid_until, agents, digest, signature]
+      properties:
+        provider_id: {type: string}
+        snapshot_version: {type: string}
+        contract_version: {type: string}
+        generated_at: {type: string, format: date-time}
+        valid_until: {type: string, format: date-time}
+        agents:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [agent_id, capability_key, skills, interface_version, endpoint_ref, trust_domain, max_delegation_scope, status]
+            properties:
+              agent_id: {type: string}
+              capability_key: {type: string}
+              skills:
+                type: array
+                minItems: 1
+                items: {type: string}
+              interface_version: {type: string}
+              endpoint_ref: {type: string}
+              trust_domain: {type: string, enum: [internal, partner, external]}
+              max_delegation_scope:
+                type: array
+                minItems: 1
+                items: {type: string, minLength: 1}
+              status: {type: string, enum: [AVAILABLE, DEPRECATED, RETIRED], description: RETIRED agents stop receiving new tasks; they vanish from the NEXT published snapshot}
+        digest: {type: string}
+        signature: {type: string}
+  responses:
+    Error:
+      description: Unified frozen error envelope
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: INTERNAL, message: unexpected error, request_id: req-mock-001}
+    AgentNotFound:
+      description: Agent is not in the current snapshot (unknown/malicious card — trust-domain validation belongs to runtime)
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: NOT_FOUND, message: agent not found in current snapshot, request_id: req-mock-001}
+    TaskNotFound:
+      description: Task does not exist
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: NOT_FOUND, message: agent task not found, request_id: req-mock-001}
+    DelegationScopeExceeded:
+      description: requested_scopes exceed the delegation reference scope (subset invariant enforced by the runtime)
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: SEMANTIC_INVALID, message: requested scopes exceed the delegation reference, request_id: req-mock-001}
+    ParameterValidationFailed:
+      description: Request failed contract validation
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: VALIDATION_MISSING_REQUIRED, message: missing required field, request_id: req-mock-001}
+    CancelRaceLost:
+      description: The task reached another terminal state first — cancellation lost the race
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: CONFLICT, message: task already terminal, request_id: req-mock-001}
+    AgentRuntimeUnavailable:
+      description: Remote agent runtime transport failure / timeout
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: INTERNAL, message: agent runtime transport failure, request_id: req-mock-001}

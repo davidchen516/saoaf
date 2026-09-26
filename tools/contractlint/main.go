@@ -221,6 +221,23 @@ func cmdValidate() error {
 		}
 	}
 
+	// 1b. Coverage assertion (I18 R2 OBS-2): every .json under
+	// examples/valid — at ANY depth — must be discovered by the globs.
+	// A silent skip here is how the MCP goldens escaped the gate once.
+	var discovered = map[string]bool{}
+	for _, ex := range examples {
+		discovered[ex] = true
+	}
+	_ = filepath.Walk(filepath.Join(contractsDir, "examples", "valid"), func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".json") {
+			return nil
+		}
+		if !discovered[path] {
+			add(path, "valid example not covered by the discovery globs (examples= counter lied)")
+		}
+		return nil
+	})
+
 	// 2. Negative fixtures must FAIL with the expected error code.
 	negatives, _ := filepath.Glob(filepath.Join(contractsDir, "examples", "negative", "*.json"))
 	for _, f := range negatives {
@@ -270,9 +287,12 @@ func cmdValidate() error {
 		}
 	}
 
-	// 6. OpenAPI structural lint.
+	// 6. OpenAPI structural lint — control-plane API AND module protocol
+	// mocks (I18 R1 P3-1: protocols/ joined the lint scope; every file
+	// must expose the unified components.responses.Error envelope).
 	apis, _ := filepath.Glob(filepath.Join(contractsDir, "openapi", "v*", "*.yaml"))
-	for _, f := range apis {
+	protos, _ := filepath.Glob(filepath.Join(contractsDir, "protocols", "*", "*.yaml"))
+	for _, f := range append(apis, protos...) {
 		if err := lintOpenAPI(f, add); err != nil {
 			return err
 		}
@@ -343,20 +363,17 @@ func exampleSchemaFor(name string) string {
 			return candidate
 		}
 	}
-	// subdirectory schemas (I18): "mcp-tool-snapshot.json" → mcp/tool-snapshot.json
+	// subdirectory schemas (I18 mcp, I19 a2a): "<module>-<name>.json" maps
+	// to schemas/v1/<module>/<name>.json for ANY existing module directory
 	if i := strings.Index(base, "-"); i > 0 {
 		dir, rest := base[:i], base[i+1:]
-		if dir == "mcp" {
-			for _, candidate := range []string{rest + ".json", rest} {
-				if try(filepath.Join("mcp", candidate)) {
-					return filepath.Join("mcp", candidate)
-				}
-			}
-			// mcp-<sub>-…: mcp-tool-snapshot-variant → mcp/tool-snapshot.json
-			if j := strings.Index(rest, "-"); j > 0 {
-				if try(filepath.Join("mcp", rest[:j]+".json")) {
-					return filepath.Join("mcp", rest[:j]+".json")
-				}
+		if try(filepath.Join(dir, rest+".json")) {
+			return filepath.Join(dir, rest+".json")
+		}
+		// "<module>-<sub>-…-variant": mcp-tool-snapshot-variant → mcp/tool-snapshot.json
+		if j := strings.Index(rest, "-"); j > 0 {
+			if try(filepath.Join(dir, rest[:j]+".json")) {
+				return filepath.Join(dir, rest[:j]+".json")
 			}
 		}
 		// top-level stem prefix (e.g. cloudevents-published)
@@ -616,6 +633,17 @@ func lintOpenAPI(path string, add func(f, m string)) error {
 					continue
 				}
 				blob, _ := json.Marshal(r)
+				// a bare $ref to a named response dereferences ONE level —
+				// the named components.responses.* entry carries the envelope
+				if m, ok := r.(map[string]any); ok {
+					if ref, ok := m["$ref"].(string); ok {
+						name := strings.TrimPrefix(ref, "#/components/responses/")
+						if named, ok := doc.Components.Responses[name]; ok {
+							nb, _ := json.Marshal(named)
+							blob = append(blob, nb...)
+						}
+					}
+				}
 				if !bytes.Contains(blob, []byte("Error")) &&
 					!bytes.Contains(blob, []byte("error-envelope")) {
 					add(path, fmt.Sprintf("%s %s: %s response does not reference the unified error envelope", strings.ToUpper(method), p, cs))
