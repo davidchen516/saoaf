@@ -10,9 +10,9 @@
 | OpenAPI 3.1 | `contracts/protocols/a2a-agent/openapi.yaml` | Agent Snapshot 端点 + submit/status/cancel 全生命周期；幂等 submit（同 key → 同 at- 任务）；委派引用必填；负向响应 7 类（冻结信封枚举内） |
 | 不变量（if/then 冻结） | agent-task schema allOf ×4 | 终态⇒finished_at；FAILED/CANCELED⇒error 信封；RUNNING 起必带 granted_scopes；COMPLETED 必带 artifact_ref（引用+digest）——**蓝军反验**：删除不变量 → 负向夹具变「unexpectedly PASSED」→ 红 |
 | Mock | `mocks/a2a/compose.yaml`（Prism :4040） | 契约语义 mock；**不实现** A2A Gateway/远程 Agent/编排/委派凭证签发（example-selection 披露同 I18 先例） |
-| 夹具 | valid/a2a ×2、negative ×6 | golden + 恶意未签名 Card（MISSING_REQUIRED）/未知信任域（INVALID_ENUM）/缺委派引用（MISSING_REQUIRED）/artifact 内联正文（UNKNOWN_FIELD——引用制结构性拒绝）/终态缺 finished_at（MISSING_REQUIRED） |
+| 夹具 | valid/a2a ×2、negative ×8 | golden + 恶意未签名 Card（MISSING_REQUIRED）/未知信任域（INVALID_ENUM）/缺委派引用（MISSING_REQUIRED）/artifact 内联正文（UNKNOWN_FIELD——引用制结构性拒绝）/终态缺 finished_at（MISSING_REQUIRED）/FAILED 缺 error 信封（MISSING_REQUIRED）/RUNNING 缺 granted_scopes（MISSING_REQUIRED）/COMPLETED 缺 artifact_ref（MISSING_REQUIRED）——四条不变量各配一夹具（R1 P2-1） |
 | 消费者样例 | `compatibility/v1/consumer-fixtures/a2a-*.json` ×2 | 钉版本 N/N-1 |
-| 消费者测试 | `scripts/a2a-contract-test.sh` | 11/11 组 22 断言（见下） |
+| 消费者测试 | `scripts/a2a-contract-test.sh` | 11/11 组 21 断言（11 check + 10 内容断言；见下） |
 
 ## 契约语义状态机（issue 核心验收逻辑）
 
@@ -43,7 +43,7 @@
 
 ## 门禁基线
 
-`CONTRACT GATE: PASS (schemas=8 examples=9 negatives=16 consumers=6 forbidden-hits=0)`；`DEPLOYABLE SCAN: PASS`；breaking 对 main 纯加法；CI module-contracts job（MCP+A2A 双 Mock 常驻）。
+门禁基线（R0 时的 negatives=16 已过时，R2 复验时实测为 19；现行以「审查 R1 整改」尾行为准）：`CONTRACT GATE: PASS (schemas=8 examples=9 negatives=19 consumers=6 forbidden-hits=0)`；`DEPLOYABLE SCAN: PASS`；breaking 对 main 纯加法；CI module-contracts job（MCP+A2A 双 Mock 常驻）。
 
 ## 挂账
 
