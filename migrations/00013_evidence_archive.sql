@@ -48,3 +48,8 @@ CREATE TABLE IF NOT EXISTS saoaf.evidence_archive_checkpoint (
   last_record_id  BIGINT     NOT NULL,
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- +goose Down
+DROP TABLE IF EXISTS saoaf.evidence_archive_link;
+DROP TABLE IF EXISTS saoaf.evidence_archive_pack;
+DROP TABLE IF EXISTS saoaf.evidence_archive_checkpoint;

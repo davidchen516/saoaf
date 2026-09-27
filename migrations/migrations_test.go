@@ -840,13 +840,14 @@ func TestMigrationUpDownUpRoundTrip(t *testing.T) {
 
 	// up → down → up
 	gooseRun(t, db, "up")
-	// goose down rolls back the most recent migration (v7 → v6), exercising
-	// 00007's Down section (outbox worker scheduling columns + indexes)
+	// goose down rolls back the most recent migration (v13 → v12),
+	// exercising 00013's Down section (evidence archive pack/link/
+	// checkpoint tables)
 	if out, err := tryGooseRun(db, "down"); err != nil {
 		t.Fatalf("goose down failed (Down section broken): %v\n%s", err, out)
 	}
-	if v := queryVersion(t, db); v != 11 {
-		t.Fatalf("version after down = %d, want 11", v)
+	if v := queryVersion(t, db); v != 12 {
+		t.Fatalf("version after down = %d, want 12", v)
 	}
 	gooseRun(t, db, "up")
 	if v := queryVersion(t, db); v != 13 {
