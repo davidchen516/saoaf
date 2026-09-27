@@ -32,6 +32,23 @@ async function launchBrowser() {
   }
 }
 
+
+// stableRowCount: React dev-mode StrictMode double-invokes effects, so a
+// view can load rows, transiently null them, and reload — a plain
+// count-after-wait can land in the empty gap. Read until two consecutive
+// counts agree and satisfy the predicate.
+async function stableRowCount(page, selector, { min = 1, timeout = 15000 } = {}) {
+  const deadline = Date.now() + timeout
+  let last = -1
+  while (Date.now() < deadline) {
+    const n = await page.locator(selector).count()
+    if (n >= min && n === last) return n
+    last = n
+    await page.waitForTimeout(250)
+  }
+  throw new Error(`stableRowCount(${selector}) never reached a stable count >= ${min}`)
+}
+
 async function withPage(t, token, fn) {
   const browser = await launchBrowser()
   const ctx = await browser.newContext()
@@ -72,28 +89,25 @@ test('E2E: ops console renders every view with authoritative data', { timeout: 6
     assert.ok((await page.getByTestId('metric-unknown').count()) >= 1,
       'seeded UNKNOWN metric must show the explicit 未知 badge')
 
-    // broken evidence view: rows + explicit reasons
+    // broken evidence view: rows + explicit reasons (stable count — the
+    // dev-mode double-effect transient can empty the table briefly)
     await page.getByRole('button', { name: '证据断链' }).click()
-    // wait for ROW CONTENT, not the table container — the table renders
-    // before the API response lands (same race class as drill-detail)
-    await page.waitForSelector('[data-testid="ops-broken"] tbody tr', { timeout: 15000 })
-    const brokenRows = await page.locator('[data-testid="ops-broken"] tbody tr').count()
+    const brokenRows = await stableRowCount(page, '[data-testid="ops-broken"] tbody tr')
     assert.ok(brokenRows >= 1, `broken rows must render (got ${brokenRows})`)
 
     // alerts view
     await page.getByRole('button', { name: '风险' }).click()
-    await page.waitForSelector('[data-testid="ops-alerts"] tbody tr', { timeout: 15000 })
-    const alertRows = await page.locator('[data-testid="ops-alerts"] tbody tr').count()
+    const alertRows = await stableRowCount(page, '[data-testid="ops-alerts"] tbody tr')
     assert.ok(alertRows >= 1, 'alert rows must render')
 
     // exit packs: the seeded expired pack shows read-time EXPIRED
     await page.getByRole('button', { name: 'Exit Pack' }).click()
-    await page.waitForSelector('[data-testid="ops-packs"] tbody tr', { timeout: 15000 })
+    await stableRowCount(page, '[data-testid="ops-packs"] tbody tr')
     await page.waitForSelector('text=已过期（读取时判定）', { timeout: 15000 })
 
     // drills: detail + findings + audit trail
     await page.getByRole('button', { name: 'Drill / 整改' }).click()
-    await page.waitForSelector('[data-testid="ops-drills"] tbody tr', { timeout: 15000 })
+    await stableRowCount(page, '[data-testid="ops-drills"] tbody tr')
     await page.getByRole('button', { name: '详情' }).first().click()
     await page.waitForSelector('[data-testid="drill-detail"]', { timeout: 15000 })
     // the audit trail is a SECOND async load — wait for its content, not
