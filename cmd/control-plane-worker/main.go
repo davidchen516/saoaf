@@ -22,6 +22,7 @@ import (
 
 	"github.com/davidchen516/saoaf/internal/events"
 	"github.com/davidchen516/saoaf/internal/evidence"
+	"github.com/davidchen516/saoaf/internal/evidencepack"
 	"github.com/davidchen516/saoaf/internal/platform/httpapi"
 	"github.com/davidchen516/saoaf/internal/platform/worker"
 )
@@ -94,6 +95,50 @@ func main() {
 				}
 			}()
 			logger.Info("evidence consumer enabled", "consumer", evidenceConsumer.ConsumerID)
+		}
+
+		// I23 evidence WORM archive loop: enabled only when the database
+		// AND an S3-compatible WORM endpoint are configured; otherwise the
+		// archive chain stays unwired (fail-closed — packs never archive
+		// to nothing).
+		if endpoint := os.Getenv("SAOAF_WORM_ENDPOINT"); endpoint != "" {
+			objStore, err := evidencepack.NewMinIOStore(ctx, evidencepack.MinIOConfig{
+				Endpoint:        endpoint,
+				AccessKeyID:     os.Getenv("SAOAF_WORM_ACCESS_KEY"),
+				SecretAccessKey: os.Getenv("SAOAF_WORM_SECRET_KEY"),
+				UseTLS:          envInt("SAOAF_WORM_TLS", 0) == 1,
+				Bucket:          envOr("SAOAF_WORM_BUCKET", "saoaf-evidence"),
+			})
+			if err != nil {
+				logger.Error("worm object store init failed", "error", err)
+				os.Exit(1)
+			}
+			store := evidencepack.Store{Pool: pool}
+			archiveLoop := worker.NewLoop(
+				time.Duration(envInt("SAOAF_WORM_INTERVAL_MS", 30000))*time.Millisecond,
+				func(ctx2 context.Context) error {
+					packID, aerr := evidencepack.ArchiveOnce(ctx2, store, objStore,
+						envOr("SAOAF_WORM_CONSUMER_ID", "archive-1"),
+						int(envInt("SAOAF_WORM_BATCH", 100)),
+						envOr("SAOAF_WORM_POLICY_VERSION", "v1"),
+						int(envInt("SAOAF_WORM_RETENTION_DAYS", 3650)), time.Now)
+					if aerr != nil {
+						logger.Error("evidence archive failed", "pack", packID, "error", aerr)
+						// do not crash the worker: the pack ledger records
+						// RETRYABLE/QUARANTINED and the next tick retries
+						return nil
+					}
+					if packID != "" {
+						logger.Info("evidence pack archived", "pack", packID)
+					}
+					return nil
+				}, worker.WithLogger(logger))
+			go func() {
+				if err := archiveLoop.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+					logger.Error("evidence archive loop exited", "error", err)
+				}
+			}()
+			logger.Info("evidence WORM archive loop enabled", "endpoint", endpoint)
 		}
 	}
 

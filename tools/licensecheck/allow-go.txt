@@ -86,3 +86,13 @@ golang.org/x/term
 golang.org/x/crypto
 # github.com/klauspost/compress — BSD-3-Clause (nats.go transitive, I10)
 github.com/klauspost/compress
+
+# I23 WORM object storage client (Apache-2.0)
+github.com/minio/minio-go/v7
+github.com/rs/xid
+github.com/dustin/go-humanize
+github.com/go-ini/ini
+github.com/goccy/go-json
+github.com/google/uuid
+github.com/klauspost/cpuid/v2
+github.com/minio/md5-simd
