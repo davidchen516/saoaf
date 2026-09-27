@@ -57,7 +57,7 @@ var ValidTransitions = map[string][]string{
 	StatePending:     {StateWriting, StateRetryable, StateQuarantined},
 	StateWriting:     {StateLocked, StateRetryable, StateQuarantined},
 	StateRetryable:   {StateWriting, StateQuarantined},
-	StateLocked:      {StateVerified},
+	StateLocked:      {StateVerified, StateQuarantined},
 	StateQuarantined: {},
 	StateVerified:    {},
 }

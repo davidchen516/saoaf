@@ -897,3 +897,219 @@ func TestFilteredWindowPackRecoverConverges(t *testing.T) {
 		}
 	})
 }
+
+// ==== R3 review regressions ====
+
+// TestLockedPackSweptAndRecovered (R3 P1-1): a W3 crash (LOCKED, links
+// never committed) with NO new records — the sweep must adopt the LOCKED
+// pack and drive it to VERIFIED.
+func TestLockedPackSweptAndRecovered(t *testing.T) {
+	withDBP(t, func(dsn string, pool *pgxpool.Pool) {
+		seedRecords(t, pool, 3)
+		s := Store{Pool: pool}
+		obj := newMemStore()
+
+		packID, records, created, err := s.ClaimWindow(t.Context(), "w", 100, "v1", 365)
+		if err != nil || !created {
+			t.Fatalf("claim: %v", err)
+		}
+		// hand-drive to LOCKED (crash after W3)
+		if err := s.MarkWriting(t.Context(), packID, "saoaf-evidence", "packs/"+packID+"/manifest.json"); err != nil {
+			t.Fatal(err)
+		}
+		manifest := BuildManifest(packID, "v1", records, 365, testNow())
+		version, err := obj.PutLocked(t.Context(), "saoaf-evidence", "packs/"+packID+"/manifest.json",
+			manifest, "application/json", testNow().AddDate(0, 0, 365))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.MarkWritten(t.Context(), packID, version, "sha256:"+sha256Hex(manifest)); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.MarkLocked(t.Context(), packID, testNow().AddDate(0, 0, 365)); err != nil {
+			t.Fatal(err)
+		}
+		// production ticks with NO new records — sweep must adopt LOCKED
+		for i := 0; i < 3; i++ {
+			if _, err := ArchiveOnce(t.Context(), s, obj, "w", 100, "v1", 365, testNow); err != nil {
+				t.Fatalf("tick %d: %v", i, err)
+			}
+		}
+		p, _ := s.Get(t.Context(), packID)
+		if p.State != StateVerified {
+			t.Fatalf("LOCKED crashed pack state after sweep ticks = %s, want VERIFIED", p.State)
+		}
+		links, _ := s.LinkCount(t.Context(), packID)
+		if links != 3 {
+			t.Fatalf("links = %d, want 3", links)
+		}
+	})
+}
+
+// TestLockedFullBatchStallResolved (R3 P1-1 escalation): the crashed
+// window equals the batch size AND new records keep arriving — the
+// pipeline must NOT stall (pre-fix, the claim kept re-reading the same
+// window and the new records never entered the scan).
+func TestLockedFullBatchStallResolved(t *testing.T) {
+	withDBP(t, func(dsn string, pool *pgxpool.Pool) {
+		seedRecords(t, pool, 4) // batch == window
+		s := Store{Pool: pool}
+		obj := newMemStore()
+
+		packID, records, created, err := s.ClaimWindow(t.Context(), "w", 4, "v1", 365)
+		if err != nil || !created {
+			t.Fatalf("claim: %v", err)
+		}
+		if err := s.MarkWriting(t.Context(), packID, "saoaf-evidence", "packs/"+packID+"/manifest.json"); err != nil {
+			t.Fatal(err)
+		}
+		manifest := BuildManifest(packID, "v1", records, 365, testNow())
+		version, err := obj.PutLocked(t.Context(), "saoaf-evidence", "packs/"+packID+"/manifest.json",
+			manifest, "application/json", testNow().AddDate(0, 0, 365))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.MarkWritten(t.Context(), packID, version, "sha256:"+sha256Hex(manifest)); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.MarkLocked(t.Context(), packID, testNow().AddDate(0, 0, 365)); err != nil {
+			t.Fatal(err)
+		}
+		// new records arrive while the crash window == batch size
+		seedRecords(t, pool, 4)
+		for i := 0; i < 5; i++ {
+			if _, err := ArchiveOnce(t.Context(), s, obj, "w", 4, "v1", 365, testNow); err != nil {
+				t.Fatalf("tick %d: %v", i, err)
+			}
+		}
+		var unarchived int
+		if err := pool.QueryRow(t.Context(),
+			`SELECT count(*) FROM saoaf.evidence_record WHERE state='LINKED' AND worm_status <> 'ARCHIVED'`).
+			Scan(&unarchived); err != nil {
+			t.Fatal(err)
+		}
+		if unarchived != 0 {
+			t.Fatalf("unarchived LINKED records = %d, want 0 (pipeline must not stall)", unarchived)
+		}
+	})
+}
+
+// TestRecoverSetIdentityGuard (R3 P1-2): a LOCKED pack whose window
+// drifted to a SAME-COUNT DIFFERENT-SET reload must NOT verify — the
+// pack id (content digest) catches the swap and quarantines.
+func TestRecoverSetIdentityGuard(t *testing.T) {
+	withDBP(t, func(dsn string, pool *pgxpool.Pool) {
+		seedRecords(t, pool, 5)
+		// quarantine r2, r4, r5 pre-claim → window {r1,r3}, bounds [r1..r3]
+		var ids []int64
+		rows, err := pool.Query(t.Context(),
+			`SELECT id FROM saoaf.evidence_record WHERE state='LINKED' ORDER BY id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, id)
+		}
+		rows.Close()
+		if _, err := pool.Exec(t.Context(),
+			`UPDATE saoaf.evidence_record SET state='QUARANTINED', quarantine_reason='identity' WHERE id = ANY($1)`,
+			[]int64{ids[1], ids[3], ids[4]}); err != nil {
+			t.Fatal(err)
+		}
+		s := Store{Pool: pool}
+		obj := newMemStore()
+		packID, records, created, err := s.ClaimWindow(t.Context(), "w", 100, "v1", 365)
+		if err != nil || !created || len(records) != 2 {
+			t.Fatalf("claim: %v created=%v len=%d", err, created, len(records))
+		}
+		// drive to LOCKED with {r1,r3} in the manifest
+		if err := s.MarkWriting(t.Context(), packID, "saoaf-evidence", "packs/"+packID+"/manifest.json"); err != nil {
+			t.Fatal(err)
+		}
+		manifest := BuildManifest(packID, "v1", records, 365, testNow())
+		version, err := obj.PutLocked(t.Context(), "saoaf-evidence", "packs/"+packID+"/manifest.json",
+			manifest, "application/json", testNow().AddDate(0, 0, 365))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.MarkWritten(t.Context(), packID, version, "sha256:"+sha256Hex(manifest)); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.MarkLocked(t.Context(), packID, testNow().AddDate(0, 0, 365)); err != nil {
+			t.Fatal(err)
+		}
+		// SAME-COUNT SET SWAP inside the bounds: repair r2, quarantine r3
+		// → reload = {r1,r2} (count 2 == 2, set differs from {r1,r3})
+		if _, err := pool.Exec(t.Context(),
+			`UPDATE saoaf.evidence_record SET state='LINKED' WHERE id=$1`, ids[1]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(t.Context(),
+			`UPDATE saoaf.evidence_record SET state='QUARANTINED' WHERE id=$1`, ids[2]); err != nil {
+			t.Fatal(err)
+		}
+		// direct Recover: must quarantine via the identity guard
+		err = Recover(t.Context(), s, obj, packID, "v1", 365, testNow)
+		if err == nil {
+			t.Fatal("identity-drifted reload must not verify")
+		}
+		p, _ := s.Get(t.Context(), packID)
+		if p.State != StateQuarantined {
+			t.Fatalf("state after set-swap reload = %s, want QUARANTINED (identity guard)", p.State)
+		}
+		links, _ := s.LinkCount(t.Context(), packID)
+		if links != 0 {
+			t.Fatalf("quarantined-by-identity pack must have 0 links, got %d", links)
+		}
+	})
+}
+
+// TestRepairedRecordBehindScanArchived (R3 P2-2): a record quarantined
+// BEFORE the window claim, then repaired AFTER its peers were archived —
+// the completeness scan must pick it up (no forward-only cursor to hide
+// behind).
+func TestRepairedRecordBehindScanArchived(t *testing.T) {
+	withDBP(t, func(dsn string, pool *pgxpool.Pool) {
+		seedRecords(t, pool, 5)
+		var midID int64
+		if err := pool.QueryRow(t.Context(),
+			`SELECT id FROM saoaf.evidence_record WHERE state='LINKED' ORDER BY id OFFSET 2 LIMIT 1`).
+			Scan(&midID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(t.Context(),
+			`UPDATE saoaf.evidence_record SET state='QUARANTINED', quarantine_reason='repaired-later' WHERE id=$1`, midID); err != nil {
+			t.Fatal(err)
+		}
+		s := Store{Pool: pool}
+		obj := newMemStore()
+		// tick 1: archives the 4 LINKED peers (the quarantined one is skipped)
+		if _, err := ArchiveOnce(t.Context(), s, obj, "w", 100, "v1", 365, testNow); err != nil {
+			t.Fatalf("tick1: %v", err)
+		}
+		// repair the quarantined record (I12 lifecycle) — now LINKED and
+		// behind the archived peers
+		if _, err := pool.Exec(t.Context(),
+			`UPDATE saoaf.evidence_record SET state='LINKED' WHERE id=$1`, midID); err != nil {
+			t.Fatal(err)
+		}
+		// next ticks: the completeness scan must archive it
+		for i := 0; i < 3; i++ {
+			if _, err := ArchiveOnce(t.Context(), s, obj, "w", 100, "v1", 365, testNow); err != nil {
+				t.Fatalf("tick %d: %v", i+2, err)
+			}
+		}
+		var status string
+		if err := pool.QueryRow(t.Context(),
+			`SELECT worm_status FROM saoaf.evidence_record WHERE id=$1`, midID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status != "ARCHIVED" {
+			t.Fatalf("repaired-behind-scan record worm_status = %s, want ARCHIVED (completeness scan)", status)
+		}
+	})
+}

@@ -79,3 +79,17 @@ R1 全部 findings 亲证 FIXED（四探针重放绿）；R2 在整改新面上�
 | R2-P3-B checkpoint 越过慢事务提交间隙（当前单 consumer 顺序事务不可达成；ingest 并发化即升级丢档） | store.go checkpoint 注释 + evidence 本行**显式记录前置依赖**：**checkpoint 语义依赖 ingest 单 writer 顺序提交**——并发化 ingest 时必须重设计扫描边界 | 注释+本表 |
 
 整改后：`internal/evidencepack` **16/16**（真 PG -race：13 R1 后 + 3 R2 探针收编）。
+
+## 审查 R3 整改（CHANGES REQUESTED → 全项修复）
+
+R2 六项全部实质 FIXED（R3 亲证）；R3 在 LOCKED/Recover/扫描语义面上命中 4 缺陷，全部结构修复：
+
+| Finding | 修复 | 回归测试 |
+|---|---|---|
+| R3-P1-1 LOCKED 不进 sweep——W3 崩溃后静默丢档；**满 batch 时全管道停摆**（claim 每 tick 重读同一窗口→同 digest→created=false→新记录永不入扫） | **PendingPacks 纳入 LOCKED**（TryDriveLock 已防双驱动）；created=false 路径的虚假注释修正（sweep 现在真实覆盖 LOCKED） | TestLockedPackSweptAndRecovered（无新记录 3 tick → VERIFIED+3 links）+ TestLockedFullBatchStallResolved（崩溃窗口==batch、新记录持续到达 → unarchived=0） |
+| R3-P1-2 Recover(LOCKED) 同计数异集合穿透——在线索引对 WORM 锁定 manifest 撒谎（合规视图失实类） | **集合身份守卫**：重载后复核 `Digest(policyVersion, records) == packID`（pack id 即内容摘要），不符走隔离路径 | TestRecoverSetIdentityGuard（窗口内换集 {r1,r3}→{r1,r2}：QUARANTINED + 0 links） |
+| R3-P2-1 MarkFailed 拒绝 LOCKED——漂移的 LOCKED pack 无法终态化（sweep 每 tick 报错僵尸回归） | MarkFailed eligible 集加入 **LOCKED**；状态矩阵同步（LOCKED→QUARANTINED） | TestRecoverSetIdentityGuard 断言 QUARANTINED 落地（从 LOCKED） |
+| R3-P2-2 checkpoint 越过修复记录→永久漏档（I12 RepairQuarantined 今天即达；连带 R2-P3-B late-commit 同根） | **Claim 改为完整性扫描**：`state='LINKED' AND NOT EXISTS(link)` ORDER BY id LIMIT batch——不依赖前向游标；checkpoint 降级为进度观测（**单 writer 前置依赖由设计消除**，不再只是文档挂账） | TestRepairedRecordBehindScanArchived（隔离→归档同侪→修复→3 tick 后 ARCHIVED） |
+| R3-P3-1/OBS 声称的 checkpoint SQL 注释不存在（第 6 次声称/事实不符）+ PENDING 分支注释失实 | checkpoint 注释以 AdvanceCheckpoint 实文落地（观测语义）；PENDING 分支改为**接管递归**（转 RETRYABLE 后真驱动补完——原注释「drift 落 QUARANTINED」与事实不符） | 行为由 TestWorkerLoopRecoversCrashedPack（WRITING）与新 PENDING 接管路径覆盖 |
+
+整改后：`internal/evidencepack` **20/20**（真 PG -race：16 + 4 R3 探针收编）。

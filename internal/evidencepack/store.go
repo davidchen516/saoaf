@@ -17,11 +17,13 @@ type Store struct {
 	Pool *pgxpool.Pool
 }
 
-// ClaimWindow claims the next unarchived evidence window FOR THIS WORKER
-// (FOR UPDATE SKIP LOCKED): at-least-once scanning with DB dedup.
-// Returns the pack id (content digest), the records and whether a NEW
-// pack row was created (false = another worker already claimed the same
-// logical pack; the caller converges instead of re-archiving).
+// ClaimWindow claims the next unarchived evidence window. The scan is a
+// COMPLETENESS scan (review R3-P2-2): every LINKED record without an
+// archive link is eligible, regardless of its position relative to the
+// checkpoint — records repaired from quarantine (the I12 lifecycle) or
+// committed behind a slow transaction are picked up here instead of being
+// lost behind a forward-only cursor. The checkpoint table remains as
+// progress observability only.
 func (s Store) ClaimWindow(ctx context.Context, consumerID string, batchSize int, policyVersion string, retentionDays int) (packID string, records []Record, created bool, err error) {
 	if batchSize <= 0 {
 		batchSize = 100
@@ -32,20 +34,13 @@ func (s Store) ClaimWindow(ctx context.Context, consumerID string, batchSize int
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// forward-only checkpoint: records strictly after the last scan point
-	var lastID int64
-	if err := tx.QueryRow(ctx,
-		`SELECT last_record_id FROM saoaf.evidence_archive_checkpoint WHERE consumer_id = $1`,
-		consumerID).Scan(&lastID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return "", nil, false, err
-	}
-
 	rows, err := tx.Query(ctx, `
 		SELECT id, event_id, payload_digest, tenant_ref, occurred_at
-		FROM saoaf.evidence_record
-		WHERE id > $1 AND state = 'LINKED'
-		ORDER BY id
-		LIMIT $2`, lastID, batchSize)
+		FROM saoaf.evidence_record r
+		WHERE r.state = 'LINKED'
+		  AND NOT EXISTS (SELECT 1 FROM saoaf.evidence_archive_link l WHERE l.record_id = r.id)
+		ORDER BY r.id
+		LIMIT $1`, batchSize)
 	if err != nil {
 		return "", nil, false, err
 	}
@@ -63,45 +58,7 @@ func (s Store) ClaimWindow(ctx context.Context, consumerID string, batchSize int
 		return "", nil, false, err
 	}
 	if len(records) == 0 {
-		return "", nil, false, nil // nothing to archive
-	}
-
-	// skip records already archived (crash-after-link replay or steady-
-	// state re-scan): filter them OUT of the window instead of skipping the
-	// whole window (review R1 P1-1: the checkpoint never advanced on the
-	// success path, so mixed windows silently skipped unlinked records
-	// forever). Only records WITHOUT a link may join a pack.
-	linkedPrefixEnd := int64(0)
-	unlinked := records[:0]
-	for _, r := range records {
-		var has bool
-		if err := tx.QueryRow(ctx, `
-			SELECT EXISTS(SELECT 1 FROM saoaf.evidence_archive_link WHERE record_id = $1)`,
-			r.ID).Scan(&has); err != nil {
-			return "", nil, false, err
-		}
-		if has {
-			if r.ID > linkedPrefixEnd {
-				linkedPrefixEnd = r.ID
-			}
-			continue
-		}
-		unlinked = append(unlinked, r)
-	}
-	records = unlinked
-	if linkedPrefixEnd > 0 {
-		// advance the checkpoint past the already-archived prefix (forward
-		// only — the checkpoint never moves backwards)
-		if err := advanceCheckpointTx(ctx, tx, consumerID, linkedPrefixEnd); err != nil {
-			return "", nil, false, err
-		}
-	}
-	if len(records) == 0 {
-		// whole window already archived — nothing new to do; converge
-		if err := tx.Commit(ctx); err != nil {
-			return "", nil, false, err
-		}
-		return "", nil, false, nil
+		return "", nil, false, nil // nothing unarchived
 	}
 
 	packID = Digest(policyVersion, records)
@@ -281,7 +238,7 @@ func (s Store) MarkFailed(ctx context.Context, packID, state, reason string) err
 	tag, err := s.Pool.Exec(ctx, `
 		UPDATE saoaf.evidence_archive_pack
 		SET state = $2, error_reason = $3
-		WHERE pack_id = $1 AND state IN ('PENDING', 'WRITING', 'RETRYABLE')`,
+		WHERE pack_id = $1 AND state IN ('PENDING', 'WRITING', 'RETRYABLE', 'LOCKED')`,
 		packID, state, reason)
 	if err != nil {
 		return err
@@ -325,23 +282,9 @@ func (s Store) LinkCount(ctx context.Context, packID string) (int, error) {
 	return n, nil
 }
 
-// advanceCheckpointTx moves the forward-only scan cursor inside a
-// transaction (never backwards).
-func advanceCheckpointTx(ctx context.Context, tx pgx.Tx, consumerID string, lastID int64) error {
-	_, err := tx.Exec(ctx, `
-		INSERT INTO saoaf.evidence_archive_checkpoint (consumer_id, last_record_id)
-		VALUES ($1, $2)
-		ON CONFLICT (consumer_id) DO UPDATE
-		SET last_record_id = $2, updated_at = now()
-		WHERE saoaf.evidence_archive_checkpoint.last_record_id < $2`,
-		consumerID, lastID)
-	return err
-}
-
-// AdvanceCheckpoint moves the scan cursor after a successful archive
-// (review R1 P1-1: the success path must advance too, or steady-state
-// mixed windows keep re-containing linked records — the per-record link
-// filter now handles correctness; the checkpoint keeps the scan O(new)).
+// AdvanceCheckpoint records archive progress (observability only since
+// the R3 completeness-scan rework: claim correctness no longer depends on
+// the cursor).
 func (s Store) AdvanceCheckpoint(ctx context.Context, consumerID string, lastID int64) error {
 	tag, err := s.Pool.Exec(ctx, `
 		INSERT INTO saoaf.evidence_archive_checkpoint (consumer_id, last_record_id)
@@ -363,7 +306,7 @@ func (s Store) AdvanceCheckpoint(ctx context.Context, consumerID string, lastID 
 func (s Store) PendingPacks(ctx context.Context) ([]string, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT pack_id FROM saoaf.evidence_archive_pack
-		WHERE state IN ('PENDING', 'WRITING', 'RETRYABLE')
+		WHERE state IN ('PENDING', 'WRITING', 'RETRYABLE', 'LOCKED')
 		ORDER BY id`)
 	if err != nil {
 		return nil, err

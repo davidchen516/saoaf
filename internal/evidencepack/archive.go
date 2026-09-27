@@ -198,14 +198,16 @@ func Recover(ctx context.Context, s Store, obj ObjectStore, packID string, polic
 		// never claimed records — the normal batch loop converges the
 		// window into a fresh (post-filter) pack. The row itself must not
 		// linger as a sweep zombie (review R2 P3-A): transition it to
-		// RETRYABLE so the sweep drives it — with zero linked records the
-		// drive is a no-op that lands QUARANTINED via the drift check
-		// below (honest terminal state, honest error reason).
-		if err := s.MarkFailed(ctx, packID, StateRetryable, "PENDING pack abandoned before writing (crash between claim and MarkWriting); window re-packs via the normal loop"); err != nil {
+		// RETRYABLE so the sweep drives it. The drive below then RELOADS
+		// the claim records and completes the pack — which is exactly what
+		// a crashed-predecessor takeover wants (the window has not
+		// drifted: its records are still unlinked).
+		if err := s.MarkFailed(ctx, packID, StateRetryable, "PENDING pack adopted after crash between claim and MarkWriting"); err != nil {
 			return err
 		}
-		p.State = StateRetryable
-		return errT(ReasonInvalidTransition, "PENDING pack abandoned before writing; the window re-packs via the normal batch loop")
+		// Go cases do not fall through — re-enter as RETRYABLE (one level;
+		// the RETRYABLE case below drives the adopted pack)
+		return Recover(ctx, s, obj, packID, policyVersion, retentionDays, now)
 	default:
 		// WRITING / LOCKED / RETRYABLE: reload the pack's records. The
 		// claim-side window may be NON-CONTIGUOUS (per-record link
@@ -241,13 +243,27 @@ func Recover(ctx context.Context, s Store, obj ObjectStore, packID string, polic
 			// re-quarantined, or already archived elsewhere). The pack
 			// cannot be completed with a different set — quarantine it so
 			// the sweep converges it; the surviving records re-pack via
-			// the normal loop (coverage preserved, review R2 P2-A)
+			// the normal loop (coverage preserved, review R2 P2-A).
+			// LOCKED is failure-eligible since R3-P2-1.
 			if merr := s.MarkFailed(ctx, packID, StateQuarantined,
 				fmt.Sprintf("record window drift: pack %d, reloadable %d (window no longer claimable — records re-pack normally)", p.RecordCount, len(records))); merr != nil {
 				return merr
 			}
 			return errT(ReasonDigestMismatch,
 				fmt.Sprintf("record window drift: pack %d, reloadable %d", p.RecordCount, len(records)))
+		}
+		// SET-IDENTITY guard (review R3-P1-2): the pack id IS the content
+		// digest of the claimed record set — a same-COUNT different-SET
+		// reload would verify a WORM-locked manifest against records it
+		// never contained. Re-derive and compare; a mismatch follows the
+		// drift path above.
+		if reloaded := Digest(policyVersion, records); reloaded != packID {
+			if merr := s.MarkFailed(ctx, packID, StateQuarantined,
+				fmt.Sprintf("record set identity drift: pack %s reloaded %s", packID, reloaded)); merr != nil {
+				return merr
+			}
+			return errT(ReasonDigestMismatch,
+				fmt.Sprintf("record set identity drift: pack %s reloaded %s", packID, reloaded))
 		}
 		return archivePack(ctx, s, obj, packID, records, policyVersion, retentionDays, now)
 	}
