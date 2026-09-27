@@ -217,7 +217,7 @@ jobs:
         run: go test -race -count=1 -v ./migrations
 
   worm-archive:
-    name: evidence WORM archive (real PG + MinIO object lock)
+    name: evidence WORM archive (real PG + S3 object lock)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -229,21 +229,10 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 3s --health-retries 20
-      minio:
-        image: quay.io/minio/minio:RELEASE.2025-10-15T17-29-55Z
-        env:
-          MINIO_ROOT_USER: saoaf
-          MINIO_ROOT_PASSWORD: saoaf-test
-        ports:
-          - 127.0.0.1:4060:9000
-        options: >-
-          server /data
-          --health-cmd "curl -f http://localhost:9000/minio/health/live"
-          --health-interval 5s --health-timeout 3s --health-retries 20
     env:
       SAOAF_TEST_PG_DSN: postgres://postgres:postgres@127.0.0.1:5432/postgres
       SAOAF_TEST_MINIO: "1"
-      SAOAF_TEST_MINIO_ENDPOINT: 127.0.0.1:4060
+      SAOAF_TEST_MINIO_ENDPOINT: 127.0.0.1:8333
       SAOAF_TEST_MINIO_USER: saoaf
       SAOAF_TEST_MINIO_PASS: saoaf-test
     steps:
@@ -254,6 +243,18 @@ jobs:
           cache: true
       - name: install goose CLI (pinned)
         run: go install github.com/pressly/goose/v3/cmd/goose@v3.28.0
+      - name: run SeaweedFS S3 (object-lock capable; MinIO community server is archived/undistributable)
+        run: |
+          curl -fsSL -o weed.tar.gz "https://github.com/seaweedfs/seaweedfs/releases/download/4.47/linux_amd64.tar.gz"
+          tar -xzf weed.tar.gz
+          mkdir -p /tmp/seaweedfs/data
+          printf '%s\n' '{"identities":[{"name":"saoaf","credentials":[{"accessKey":"saoaf","secretKey":"saoaf-test"}],"actions":["Admin","Read","Write","List","Tagging"]}]}' > /tmp/seaweedfs/s3_config.json
+          ./weed server -s3 -ip=127.0.0.1 -s3.port=8333 -dir=/tmp/seaweedfs/data -volume.max=0 -master.volumeSizeLimitMB=2048 -s3.config=/tmp/seaweedfs/s3_config.json > /tmp/seaweedfs.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8333/status >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8333/status >/dev/null || { cat /tmp/seaweedfs.log; exit 1; }
       - name: run the evidencepack suite (PG ledger + S3 object lock integration)
         run: |
           export PATH="$(go env GOPATH)/bin:$PATH"

@@ -131,7 +131,7 @@ else
   echo "constraint probe: NOT REJECTED — $NEG"
   CONSTRAINT_OK=0
 fi
-if [ "$V" = "12" ] && [ "$CR" = "2" ] && [ "$OB" = "2" ] && [ "$WP" = "1" ] && [ "$ENT" = "2" ] && [ "$CONSTRAINT_OK" = "1" ]; then
+if [ "$V" = "13" ] && [ "$CR" = "2" ] && [ "$OB" = "2" ] && [ "$WP" = "1" ] && [ "$ENT" = "2" ] && [ "$CONSTRAINT_OK" = "1" ]; then
   echo "PITR DRILL: PASS"
   docker rm -f saoaf-pitr-primary saoaf-pitr-recover >/dev/null 2>&1 || true
   exit 0

@@ -43,3 +43,7 @@ issue 明文「Mock S3 API 或普通 versioning 不作为 WORM 合规证据」�
 - MinIO 集成测试在本地无 MinIO 时 SKIP（SAOAF_TEST_MINIO 门控）；CI worm-archive job（PG+MinIO services）常驻执行
 - `PutLocked` 不带 Expires（生命周期由 retention 治理——WORM 语义）
 - manifest 的租户标识为别名形（`t-<tenant_ref>`）——与 I12 索引红线口径一致
+
+## 存储后端说明（SeaweedFS 替换 MinIO）
+
+集成测试的 S3 Object Lock 后端使用 **SeaweedFS 4.47**（开源、活跃维护、S3 COMPLIANCE retention/legal hold/版本化齐全），原因：MinIO 开源服务器项目已归档下架（docker hub/quay/dl.min.io 均返回 410 Gone——社区版停止分发）。`minio_store_test.go` 的 4 项集成测试对 SeaweedFS 全绿：版本化 COMPLIANCE 写入+digest 读回+**删除被服务器拒绝**、retention extend-only（服务器拒绝缩短）、legal hold set/query/clear、端到端归档。与生产准入的关系不变：**任何开源/自建 S3 的协议验证都只是机械化验证**，WORM 合规证据以企业存储准入报告为准（挂账）。

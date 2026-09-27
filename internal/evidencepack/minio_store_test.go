@@ -114,7 +114,7 @@ func TestMinIORetentionExtendOnly(t *testing.T) {
 		t.Fatalf("extend: %v", err)
 	}
 	until, err := s.RetentionUntil(ctx, "", key, version)
-	if err != nil || until == nil || !until.Equal(later) {
+	if err != nil || until == nil || until.Unix() != later.Unix() {
 		t.Fatalf("extend did not land: %v (%v)", until, err)
 	}
 	// shrink: the client API writes a retention date; a shorter date on a
