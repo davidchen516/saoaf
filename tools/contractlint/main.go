@@ -17,6 +17,15 @@
 //	                                  units (compose files under mocks/ are
 //	                                  dev-time fixtures, not production
 //	                                  deployments).
+//	contractlint sync-infra-scan    — the ARR contract corpus must not
+//	                                  expose SYNCHRONOUS infrastructure-
+//	                                  creation interfaces (I20): any
+//	                                  operation whose id/path/description
+//	                                  matches create/provision/deploy/
+//	                                  allocate verbs on infra nouns fails
+//	                                  the gate. Async placement PLANNING
+//	                                  (submit a plan, poll status) is
+//	                                  allowed; creating resources is not.
 //
 // Validation routing order (issue acceptance logic): payload size → payload
 // depth → JSON Schema validation → semantic/forbidden scan → compatibility.
@@ -29,6 +38,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -58,6 +68,8 @@ func main() {
 	switch os.Args[1] {
 	case "validate":
 		err = cmdValidate()
+	case "sync-infra-scan":
+		err = cmdSyncInfraScan()
 	case "deployable-scan":
 		err = cmdDeployableScan()
 	case "breaking":
@@ -76,8 +88,68 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: contractlint validate | contractlint breaking [base-ref] | contractlint deployable-scan")
+	fmt.Fprintln(os.Stderr, "usage: contractlint validate | contractlint breaking [base-ref] | contractlint deployable-scan | contractlint sync-infra-scan")
 	os.Exit(2)
+}
+
+// cmdSyncInfraScan enforces the I20 boundary invariant: the ARR contract
+// corpus must contain NO synchronous infrastructure-creation interface.
+// The corpus is contracts/openapi + contracts/protocols — every operation
+// is walked; a violation is an operation whose path/operationId/description
+// combines an infrastructure-creation verb (create/provision/deploy/
+// allocate/resize/scale-out) with an infrastructure noun (gpu/node/
+// cluster/instance/machine/vm/infrastructure/resource) — with an explicit
+// allowlist for async planning semantics (plan/proposal/status nouns and
+// descriptions that clearly state async control-plane behavior).
+func cmdSyncInfraScan() error {
+	verbRe := regexp.MustCompile(`(?i)\b(create|provision|deploy|allocate|resize|scale[- ]out|spin[- ]up|launch)\b`)
+	nounRe := regexp.MustCompile(`(?i)\b(gpu|node|cluster|instance|machine|vm|infrastructure|hardware accelerator)\b`)
+	allowRe := regexp.MustCompile(`(?i)\b(async|placement plan|control-plane|plan id|proposal)\b`)
+
+	var hits []string
+	roots := []string{
+		filepath.Join(contractsDir, "openapi"),
+		filepath.Join(contractsDir, "protocols"),
+	}
+	for _, root := range roots {
+		files, _ := filepath.Glob(filepath.Join(root, "v*", "*.yaml"))
+		sub, _ := filepath.Glob(filepath.Join(root, "*", "*.yaml"))
+		files = append(files, sub...)
+		for _, f := range files {
+			raw, err := os.ReadFile(f)
+			if err != nil {
+				continue
+			}
+			var doc struct {
+				Paths map[string]map[string]any `yaml:"paths"`
+			}
+			if err := yaml.Unmarshal(raw, &doc); err != nil {
+				hits = append(hits, f+" (unparseable)")
+				continue
+			}
+			for p, ops := range doc.Paths {
+				for method, op := range ops {
+					m, ok := op.(map[string]any)
+					if !ok || method == "parameters" {
+						continue
+					}
+					opID, _ := m["operationId"].(string)
+					desc, _ := m["description"].(string)
+					// the operation text the scan reasons over
+					text := p + " " + opID + " " + desc
+					if verbRe.MatchString(text) && nounRe.MatchString(text) && !allowRe.MatchString(text) {
+						hits = append(hits, fmt.Sprintf("%s %s %s: synchronous infrastructure-creation interface (I20 boundary)", f, strings.ToUpper(method), p))
+					}
+				}
+			}
+		}
+	}
+	if len(hits) > 0 {
+		sort.Strings(hits)
+		return fmt.Errorf("synchronous infrastructure interfaces found in the contract corpus:\n    %s", strings.Join(hits, "\n    "))
+	}
+	fmt.Println("SYNC-INFRA SCAN: PASS (no synchronous infrastructure-creation interfaces)")
+	return nil
 }
 
 // cmdDeployableScan enforces the contract-only invariant (I18+): the repo

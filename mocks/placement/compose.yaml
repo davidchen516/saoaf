@@ -1,0 +1,9 @@
+services:
+  placement:
+    image: stoplight/prism:5.15.10
+    platform: linux/amd64
+    command: ["mock", "-h", "0.0.0.0", "--errors", "--multiprocess=false", "/contracts/openapi.yaml"]
+    ports:
+      - "127.0.0.1:4050:4010"
+    volumes:
+      - ../../contracts/protocols/placement/openapi.yaml:/contracts/openapi.yaml:ro
