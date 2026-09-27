@@ -259,13 +259,14 @@ func (s Store) MarkVerified(ctx context.Context, packID string, records []Record
 		return errT(ReasonInvalidTransition, "pack left LOCKED during verification")
 	}
 	// flip the online index worm_status in the SAME transaction (review
-	// R1 P3-4: the index and the archive view must agree — VERIFIED packs
-	// mark their records ARCHIVED atomically)
+	// R1 P3-4) — for EXACTLY this pack's linked records (review R2 P1-B:
+	// a bare BETWEEN flipped quarantined/foreign records inside the
+	// window; the links above define the precise set)
 	if _, err := tx.Exec(ctx, `
 		UPDATE saoaf.evidence_record
 		SET worm_status = 'ARCHIVED'
-		WHERE id BETWEEN $1 AND $2`,
-		records[0].ID, records[len(records)-1].ID); err != nil {
+		WHERE id IN (SELECT record_id FROM saoaf.evidence_archive_link WHERE pack_id = $1)`,
+		packID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -437,24 +438,26 @@ func (s Store) TryDriveLock(ctx context.Context, packID string) (release func(),
 	if err != nil {
 		return nil, false, err
 	}
-	unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	key := "evidencepack:drive:" + packID
 	var got bool
 	if err := conn.Conn().QueryRow(ctx,
 		`SELECT pg_try_advisory_lock(hashtext($1))`, key).Scan(&got); err != nil {
 		conn.Release()
-		cancel()
 		return nil, false, err
 	}
 	if !got {
 		conn.Release()
-		cancel()
 		return nil, false, nil
 	}
 	release = func() {
+		// fresh short context AT RELEASE TIME (review R2 P1-A: the
+		// original unlockCtx started counting at ACQUIRE time — any drive
+		// longer than 5s executed the unlock on an expired context and
+		// leaked the session-scoped advisory lock forever)
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_, _ = conn.Conn().Exec(unlockCtx, `SELECT pg_advisory_unlock(hashtext($1))`, key) //nolint:errcheck
-		conn.Release()
 		cancel()
+		conn.Release()
 	}
 	return release, true, nil
 }

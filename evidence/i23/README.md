@@ -65,3 +65,17 @@ issue 明文「Mock S3 API 或普通 versioning 不作为 WORM 合规证据」�
 | ——（整改中新发现）sweep 重开双驱动窗口 | **TryDriveLock**（pg_try_advisory_lock per pack）：sweep 与新 claim 路径都先取驱动锁，另一 worker 驱动时跳过——多进程 HA 亦成立 | TestArchiveConcurrentSingleLogicalPack 维持 4-worker 单 manifest 版本 |
 
 整改后：`internal/evidencepack` 13/13（真 PG -race，7 原有 + 6 新回归含四探针场景）；CI worm-archive（SeaweedFS 4.47 + md5 校验）。
+
+## 审查 R2 整改（CHANGES REQUESTED → 全项修复）
+
+R1 全部 findings 亲证 FIXED（四探针重放绿）；R2 在整改新面上命中 4 缺陷 + 1 测试死分支，全部修复：
+
+| Finding | 修复 | 回归测试 |
+|---|---|---|
+| R2-P1-A TryDriveLock 解锁 context 在获取时起算 5s——慢驱动（真实 S3 上传常态）泄漏 advisory lock，pack 全局不可驱动 | release 时**新建**短超时 context | TestDriveLockReleasedAfterSlowDrive（6s 驱动后独立 session 可重取锁） |
+| R2-P1-B MarkVerified 的 worm_status 用 BETWEEN 裸范围——窗口内 QUARANTINED/外部记录被翻成 ARCHIVED（合规台账对审计撒谎） | UPDATE 范围改为 **IN (SELECT record_id FROM link WHERE pack_id)**——精确到本 pack 的 linked 记录集 | TestQuarantinedRecordNotArchivedFlag（隔离记录保持 NONE、4 linked → ARCHIVED） |
+| R2-P2-A Recover 用 BETWEEN 重载与 claim 过滤窗口口径分叉——过滤窗口崩溃 pack 永久 WRITING 僵尸（每 tick 报错） | 重载镜像 claim 语义（BETWEEN + LINKED + NOT-EXISTS-link）；计数漂移时 **QUARANTINED 终态化**（诚实 reason；存活记录经正常循环重打包——覆盖无损失）；PENDING 崩溃行转 RETRYABLE（sweep 不再永扫僵尸，R2-P3-A 同修） | TestFilteredWindowPackRecoverConverges（过滤窗口+中途修复 → 终态 + unarchived=0） |
+| R2-P2-B TestW3RecoveryWithClockDrift 死分支（archivePack 直通 VERIFIED 后提前 return，延迟恢复分支从未执行——插桩 panic 不触发） | **重写**：手工驱动到 LOCKED（断言 setup 状态），再以 T0+1h 时钟 Recover | 新版真实到达延迟分支（setup 断言 LOCKED，不走 VERIFIED 短路） |
+| R2-P3-B checkpoint 越过慢事务提交间隙（当前单 consumer 顺序事务不可达成；ingest 并发化即升级丢档） | store.go checkpoint 注释 + evidence 本行**显式记录前置依赖**：**checkpoint 语义依赖 ingest 单 writer 顺序提交**——并发化 ingest 时必须重设计扫描边界 | 注释+本表 |
+
+整改后：`internal/evidencepack` **16/16**（真 PG -race：13 R1 后 + 3 R2 探针收编）。

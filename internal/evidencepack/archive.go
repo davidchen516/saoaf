@@ -195,15 +195,29 @@ func Recover(ctx context.Context, s Store, obj ObjectStore, packID string, polic
 	case StateVerified, StateQuarantined:
 		return nil // already terminal
 	case StatePending:
-		// never claimed records — re-claim via a fresh batch is the
-		// normal path; a direct recover re-runs the window
-		return errT(ReasonInvalidTransition, "PENDING pack recovers through the normal batch loop")
+		// never claimed records — the normal batch loop converges the
+		// window into a fresh (post-filter) pack. The row itself must not
+		// linger as a sweep zombie (review R2 P3-A): transition it to
+		// RETRYABLE so the sweep drives it — with zero linked records the
+		// drive is a no-op that lands QUARANTINED via the drift check
+		// below (honest terminal state, honest error reason).
+		if err := s.MarkFailed(ctx, packID, StateRetryable, "PENDING pack abandoned before writing (crash between claim and MarkWriting); window re-packs via the normal loop"); err != nil {
+			return err
+		}
+		p.State = StateRetryable
+		return errT(ReasonInvalidTransition, "PENDING pack abandoned before writing; the window re-packs via the normal batch loop")
 	default:
-		// WRITING / LOCKED / RETRYABLE: load the window records and re-drive
+		// WRITING / LOCKED / RETRYABLE: reload the pack's records. The
+		// claim-side window may be NON-CONTIGUOUS (per-record link
+		// filtering), so the reload mirrors the claim semantics EXACTLY:
+		// window bounds + LINKED + NOT-ALREADY-ARCHIVED (review R2 P2-A:
+		// a bare BETWEEN disagreed with the claim filter and left
+		// filtered-window packs as permanent zombies).
 		rows, err := s.Pool.Query(ctx, `
 			SELECT id, event_id, payload_digest, tenant_ref, occurred_at
 			FROM saoaf.evidence_record
 			WHERE id BETWEEN $1 AND $2 AND state = 'LINKED'
+			  AND NOT EXISTS (SELECT 1 FROM saoaf.evidence_archive_link l WHERE l.record_id = saoaf.evidence_record.id)
 			ORDER BY id`, p.FirstRecordID, p.LastRecordID)
 		if err != nil {
 			return err
@@ -223,8 +237,17 @@ func Recover(ctx context.Context, s Store, obj ObjectStore, packID string, polic
 			return err
 		}
 		if len(records) != p.RecordCount {
+			// the window no longer matches what was claimed (records
+			// re-quarantined, or already archived elsewhere). The pack
+			// cannot be completed with a different set — quarantine it so
+			// the sweep converges it; the surviving records re-pack via
+			// the normal loop (coverage preserved, review R2 P2-A)
+			if merr := s.MarkFailed(ctx, packID, StateQuarantined,
+				fmt.Sprintf("record window drift: pack %d, reloadable %d (window no longer claimable — records re-pack normally)", p.RecordCount, len(records))); merr != nil {
+				return merr
+			}
 			return errT(ReasonDigestMismatch,
-				fmt.Sprintf("record window drift: pack %d, recovered %d", p.RecordCount, len(records)))
+				fmt.Sprintf("record window drift: pack %d, reloadable %d", p.RecordCount, len(records)))
 		}
 		return archivePack(ctx, s, obj, packID, records, policyVersion, retentionDays, now)
 	}

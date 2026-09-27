@@ -663,10 +663,11 @@ func TestWorkerLoopRetriesRetryablePack(t *testing.T) {
 	})
 }
 
-// TestW3RecoveryWithClockDrift (R1 P1-3): the W3 window (locked, then
-// crash, then links) must recover even when the recovery happens MUCH
-// later than the crash — the retention check uses the LOCK- TIME
-// commitment from the pack row, not the recovery clock.
+// TestW3RecoveryWithClockDrift (R1 P1-3, rewritten after R2 P2-B): lock
+// the pack at T0, crash, then Recover at T0+1h — the delayed-recovery
+// branch is DRIVEN (hand-driven to LOCKED first; the review proved the
+// previous version short-circuited through VERIFIED and never reached
+// the branch it claimed to pin).
 func TestW3RecoveryWithClockDrift(t *testing.T) {
 	withDBP(t, func(dsn string, pool *pgxpool.Pool) {
 		seedRecords(t, pool, 3)
@@ -675,43 +676,36 @@ func TestW3RecoveryWithClockDrift(t *testing.T) {
 
 		packID, records, created, err := s.ClaimWindow(t.Context(), "w", 100, "v1", 365)
 		if err != nil || !created {
-			t.Fatalf("claim: %v", err)
+			t.Fatalf("claim: %v created=%v", err, created)
 		}
-		// drive to LOCKED with the ORIGINAL clock
+		// hand-drive to LOCKED under the ORIGINAL clock T0 (crash after W3)
 		lockTime := func() time.Time { return time.Date(2026, 9, 26, 0, 0, 0, 0, time.UTC) }
-		if err := archivePack(t.Context(), s, obj, packID, records, "v1", 365, lockTime); err != nil {
-			// archivePack drives through to VERIFIED — instead hand-drive
-			// only through LOCKED: claim writes the manifest + lock below
+		if err := s.MarkWriting(t.Context(), packID, "saoaf-evidence", "packs/"+packID+"/manifest.json"); err != nil {
+			t.Fatal(err)
 		}
-		p, err := s.Get(t.Context(), packID)
+		manifest := BuildManifest(packID, "v1", records, 365, lockTime())
+		digest := "sha256:" + sha256Hex(manifest)
+		version, err := obj.PutLocked(t.Context(), "saoaf-evidence", "packs/"+packID+"/manifest.json",
+			manifest, "application/json", lockTime().AddDate(0, 0, 365))
 		if err != nil {
 			t.Fatal(err)
 		}
-		// hand-drive to LOCKED under clock T0 if archivePack short-circuited
-		if p.State == StateVerified {
-			// archivePack already finished the pack — acceptable; the
-			// drift check below then exercises ExtendRetention on a
-			// VERIFIED row via the same recovery idempotence
-			_ = p
+		if err := s.MarkWritten(t.Context(), packID, version, digest); err != nil {
+			t.Fatal(err)
 		}
-
-		// simulate W3: leaving the pack LOCKED (verified above only
-		// happened in the trivial path — hand-drive if needed)
+		if err := s.MarkLocked(t.Context(), packID, lockTime().AddDate(0, 0, 365)); err != nil {
+			t.Fatal(err)
+		}
 		q, err := s.Get(t.Context(), packID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if q.State == StateVerified {
-			// everything landed atomically; nothing to recover — the drift
-			// assertion reduces to retention read-back on the row
-			until, err := obj.RetentionUntil(t.Context(), q.Bucket, q.ObjectKey, q.ObjectVersion)
-			if err != nil || until == nil {
-				t.Fatalf("retention read-back: %v (%v)", until, err)
-			}
-			return
+		if q.State != StateLocked {
+			t.Fatalf("setup state = %s, want LOCKED (the test must reach the delayed branch)", q.State)
 		}
-		// recover 10 minutes AFTER the crash with the LATER clock (the
-		// pre-fix bug recomputed the window from this clock and failed)
+
+		// recover ONE HOUR LATER with the later clock — the pre-R1 bug
+		// recomputed the retention window from this clock and failed
 		laterClock := func() time.Time { return time.Date(2026, 9, 26, 1, 0, 0, 0, time.UTC) }
 		if err := Recover(t.Context(), s, obj, packID, "v1", 365, laterClock); err != nil {
 			t.Fatalf("delayed W3 recovery: %v", err)
@@ -722,6 +716,10 @@ func TestW3RecoveryWithClockDrift(t *testing.T) {
 		}
 		if p2.State != StateVerified {
 			t.Fatalf("state after delayed recovery = %s, want VERIFIED", p2.State)
+		}
+		links, _ := s.LinkCount(t.Context(), packID)
+		if links != 3 {
+			t.Fatalf("links = %d, want 3", links)
 		}
 	})
 }
@@ -764,4 +762,138 @@ type staticGate struct{ allowClear bool }
 
 func (g staticGate) Authorized(ctx context.Context, actor string, clear bool) bool {
 	return clear == false || g.allowClear
+}
+
+// ==== R2 review regressions ====
+
+// TestDriveLockReleasedAfterSlowDrive (R2 P1-A): a drive longer than the
+// unlock timeout must still release the advisory lock — verified from an
+// INDEPENDENT session.
+func TestDriveLockReleasedAfterSlowDrive(t *testing.T) {
+	withDBP(t, func(dsn string, pool *pgxpool.Pool) {
+		s := Store{Pool: pool}
+		release, ok, err := s.TryDriveLock(t.Context(), "slow-pack")
+		if err != nil || !ok {
+			t.Fatalf("lock: %v ok=%v", err, ok)
+		}
+		time.Sleep(6 * time.Second) // exceeds the 5s unlock timeout budget
+		release()
+		// independent session must NOW be able to take the same lock
+		release2, ok2, err2 := s.TryDriveLock(t.Context(), "slow-pack")
+		if err2 != nil {
+			t.Fatalf("second lock attempt errored: %v", err2)
+		}
+		if !ok2 {
+			t.Fatal("advisory lock leaked after a slow drive (independent session cannot re-acquire)")
+		}
+		release2()
+	})
+}
+
+// TestQuarantinedRecordNotArchivedFlag (R2 P1-B): a QUARANTINED record
+// inside a pack's window must NOT read worm_status=ARCHIVED — the flip
+// is scoped to the pack's exact linked records.
+func TestQuarantinedRecordNotArchivedFlag(t *testing.T) {
+	withDBP(t, func(dsn string, pool *pgxpool.Pool) {
+		seedRecords(t, pool, 5)
+		// quarantine the middle record (id window [1..5] — the 3rd)
+		var midID int64
+		if err := pool.QueryRow(t.Context(),
+			`SELECT id FROM saoaf.evidence_record WHERE state='LINKED' ORDER BY id OFFSET 2 LIMIT 1`).
+			Scan(&midID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(t.Context(),
+			`UPDATE saoaf.evidence_record SET state='QUARANTINED', quarantine_reason='probe' WHERE id=$1`, midID); err != nil {
+			t.Fatal(err)
+		}
+		s := Store{Pool: pool}
+		obj := newMemStore()
+		packID, err := ArchiveOnce(t.Context(), s, obj, "w", 100, "v1", 365, testNow)
+		if err != nil || packID == "" {
+			t.Fatalf("archive: %v (pack %q)", err, packID)
+		}
+		p, _ := s.Get(t.Context(), packID)
+		if p.State != StateVerified {
+			t.Fatalf("state = %s, want VERIFIED", p.State)
+		}
+		// the quarantined record stays NONE (its pack membership is a stub
+		// — flipping it to ARCHIVED would be a compliance lie)
+		var status string
+		if err := pool.QueryRow(t.Context(),
+			`SELECT worm_status FROM saoaf.evidence_record WHERE id=$1`, midID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status == "ARCHIVED" {
+			t.Fatal("quarantined record (no archive link) flipped to ARCHIVED — over-flip regression")
+		}
+		// the four linked records ARE archived
+		var archived int
+		if err := pool.QueryRow(t.Context(),
+			`SELECT count(*) FROM saoaf.evidence_record WHERE worm_status='ARCHIVED'`).Scan(&archived); err != nil {
+			t.Fatal(err)
+		}
+		if archived != 4 {
+			t.Fatalf("archived count = %d, want 4", archived)
+		}
+	})
+}
+
+// TestFilteredWindowPackRecoverConverges (R2 P2-A): a pack claimed over a
+// FILTERED (non-contiguous) window crashes mid-WRITING — the sweep must
+// converge the pack to a terminal state instead of a permanent zombie.
+func TestFilteredWindowPackRecoverConverges(t *testing.T) {
+	withDBP(t, func(dsn string, pool *pgxpool.Pool) {
+		seedRecords(t, pool, 5)
+		// quarantine record #4 so the claim window is {1,2,3,5}
+		var qID int64
+		if err := pool.QueryRow(t.Context(),
+			`SELECT id FROM saoaf.evidence_record WHERE state='LINKED' ORDER BY id OFFSET 3 LIMIT 1`).
+			Scan(&qID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(t.Context(),
+			`UPDATE saoaf.evidence_record SET state='QUARANTINED', quarantine_reason='filtered-window' WHERE id=$1`, qID); err != nil {
+			t.Fatal(err)
+		}
+		s := Store{Pool: pool}
+		obj := newMemStore()
+
+		packID, _, created, err := s.ClaimWindow(t.Context(), "w", 100, "v1", 365)
+		if err != nil || !created {
+			t.Fatalf("claim: %v created=%v", err, created)
+		}
+		if err := s.MarkWriting(t.Context(), packID, "saoaf-evidence", "packs/"+packID+"/manifest.json"); err != nil {
+			t.Fatal(err)
+		}
+		// REPAIR the quarantined record mid-flight (the I12 lifecycle) —
+		// the reload now sees a DIFFERENT set than the claim did
+		if _, err := pool.Exec(t.Context(),
+			`UPDATE saoaf.evidence_record SET state='LINKED' WHERE id=$1`, qID); err != nil {
+			t.Fatal(err)
+		}
+		// worker ticks: the sweep must drive the drifted pack to a
+		// TERMINAL state (quarantined row, honest reason) — not a zombie
+		for i := 0; i < 3; i++ {
+			_, _ = ArchiveOnce(t.Context(), s, obj, "w", 100, "v1", 365, testNow) //nolint:errcheck // the sweep converges regardless
+		}
+		p, err := s.Get(t.Context(), packID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.State != StateVerified && p.State != StateQuarantined {
+			t.Fatalf("filtered-window crashed pack state = %s (want terminal: VERIFIED or QUARANTINED)", p.State)
+		}
+		// coverage: every LINKED record ends archived (the drifted window
+		// re-packs via the normal loop)
+		var unarchived int
+		if err := pool.QueryRow(t.Context(),
+			`SELECT count(*) FROM saoaf.evidence_record WHERE state='LINKED' AND worm_status <> 'ARCHIVED'`).
+			Scan(&unarchived); err != nil {
+			t.Fatal(err)
+		}
+		if unarchived != 0 {
+			t.Fatalf("unarchived LINKED records = %d, want 0", unarchived)
+		}
+	})
 }
