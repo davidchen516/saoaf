@@ -1,0 +1,14 @@
+{
+  "case": "placement-plan-ineligible-zone-without-reason",
+  "schema": "placement/placement-plan.json",
+  "input": {
+    "placement_plan_id": "pp-mock-001",
+    "profile_id": "profile.reasoning.serve",
+    "profile_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "policy_decision_ref": "policy:mock-001",
+    "zones_evaluated": [{"zone_id": "zone-b", "eligible": false}],
+    "state": "PROPOSED",
+    "submitted_at": "2026-09-27T00:00:00Z"
+  },
+  "expected_error_code": "VALIDATION_MISSING_REQUIRED"
+}

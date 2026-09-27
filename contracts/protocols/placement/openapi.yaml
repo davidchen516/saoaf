@@ -1,0 +1,406 @@
+# SAOAF Placement Fabric (03.7) contract — Portable Profile, zone and
+# Placement Plan boundary mock. Scope: profile validation (dual-zone,
+# same-bytes digest), async control-plane plan submission, plan status.
+# NO runtime: no Kubernetes/GPU/cross-cluster scheduling, cloud resource
+# creation or Placement Controller. The sync-infra scan (contractlint)
+# guarantees no synchronous infrastructure-creation interface exists
+# anywhere in the contract corpus — plans are ASYNC by design.
+openapi: 3.1.0
+info:
+  title: SAOAF Placement Fabric Mock
+  version: 1.0.0
+  description: >-
+    Contract mock for the placement boundary. Validation is a pure
+    function of (profile bytes, zone): the same Portable Profile with the
+    same digest validates identically in every zone. Plan submission is
+    an async control-plane operation; the AI Factory (not this contract)
+    performs deployments. Secrets are references only.
+servers:
+  - url: http://127.0.0.1:4050
+paths:
+  /control/v1/zones:
+    get:
+      operationId: listZones
+      description: The two example zones (the issue's dual-zone scenario).
+      responses:
+        '200':
+          description: Example zones with capability and capacity metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [zones]
+                properties:
+                  zones:
+                    type: array
+                    minItems: 2
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [zone_id, region, architectures, accelerator_classes, compliant]
+                      properties:
+                        zone_id: {type: string}
+                        region: {type: string}
+                        architectures: {type: array, items: {type: string, enum: [amd64, arm64]}}
+                        accelerator_classes: {type: array, items: {type: string}}
+                        compliant: {type: boolean, description: passes the sovereignty policy template (region/vendor/data/exit)}
+              example:
+                zones:
+                  - {zone_id: zone-a, region: cn-east, architectures: [amd64], accelerator_classes: [gpu-a100-80g, gpu-h100-80g], compliant: true}
+                  - {zone_id: zone-b, region: cn-north, architectures: [arm64, amd64], accelerator_classes: [gpu-l40s-48g], compliant: true}
+  /v1/profiles/validate:
+    post:
+      operationId: validatePortableProfile
+      description: >-
+        Validate a Portable Profile against a zone — a PURE, read-only
+        check (no infrastructure is created, synchronously or otherwise).
+        The same profile bytes produce the same digest and the same
+        verdict in every zone (the dual-zone same-bytes proof).
+      parameters:
+        - name: zone
+          in: query
+          required: true
+          schema: {type: string, minLength: 1}
+        - name: X-Tenant-Ref
+          in: header
+          required: true
+          schema: {type: string, minLength: 1}
+        - name: traceparent
+          in: header
+          required: true
+          schema: {type: string, pattern: '^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PortableProfile'}
+            example:
+              profile_id: profile.reasoning.serve
+              profile_version: v1
+              artifact: {oci_digest: 'sha256:0000000000000000000000000000000000000000000000000000000000000000', architecture: amd64, accelerator_class: gpu-a100-80g}
+              runtime_contract_ref: schema://runtime/serve-v1
+              configuration_schema_ref: schema://configuration/serve-v1
+              secrets: [{name: model-weights-key, ref: 'secret://tenant-a/model-weights'}]
+              data_dependencies: [{name: weights, digest: 'sha256:0000000000000000000000000000000000000000000000000000000000000000'}]
+              health_slo: {readiness_path: /readyz, liveness_path: /healthz, target_availability: 0.999}
+              export_procedure: {ref: 'schema://export/serve-v1', digest: 'sha256:0000000000000000000000000000000000000000000000000000000000000000'}
+              license_sbom: {ref: 'schema://license/serve-v1', digest: 'sha256:0000000000000000000000000000000000000000000000000000000000000000'}
+              profile_digest: 'sha256:1111111111111111111111111111111111111111111111111111111111111111'
+      responses:
+        '200':
+          description: Validation verdict with the profile digest (same bytes → same digest in every zone)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [zone_id, valid, profile_digest]
+                properties:
+                  zone_id: {type: string}
+                  valid: {type: boolean}
+                  profile_digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+                  reason_code: {type: string, enum: [INSUFFICIENT_CAPACITY, NOT_COMPLIANT_ZONE, ARTIFACT_INCOMPATIBLE]}
+              example:
+                zone_id: zone-a
+                valid: true
+                profile_digest: 'sha256:1111111111111111111111111111111111111111111111111111111111111111'
+        '400': {$ref: '#/components/responses/ArtifactIncompatible'}
+        '403': {$ref: '#/components/responses/SecretReferenceDenied'}
+        '409': {$ref: '#/components/responses/InsufficientCapacity'}
+  /v1/placement-plans:
+    post:
+      operationId: submitPlacementPlan
+      description: >-
+        Submit an ASYNC placement plan request (control-plane): Policy
+        evaluates compliant zones, the plan returns to the Owner, the
+        Owner applies it with the AI Factory. This operation never
+        creates infrastructure synchronously. Idempotent per
+        Idempotency-Key (same key → same pp- plan).
+      parameters:
+        - name: X-Tenant-Ref
+          in: header
+          required: true
+          schema: {type: string, minLength: 1}
+        - name: traceparent
+          in: header
+          required: true
+          schema: {type: string, pattern: '^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$'}
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: {type: string, minLength: 1}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [profile_id, profile_digest, requested_zones]
+              properties:
+                profile_id: {type: string}
+                profile_digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+                requested_zones:
+                  type: array
+                  minItems: 1
+                  items: {type: string, minLength: 1}
+            example:
+              profile_id: profile.reasoning.serve
+              profile_digest: 'sha256:1111111111111111111111111111111111111111111111111111111111111111'
+              requested_zones: [zone-a, zone-b]
+      responses:
+        '200':
+          description: Plan accepted (or idempotent replay — same pp- ID)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PlacementPlan'}
+              example:
+                placement_plan_id: pp-mock-001
+                profile_id: profile.reasoning.serve
+                profile_digest: 'sha256:1111111111111111111111111111111111111111111111111111111111111111'
+                policy_decision_ref: policy:mock-001
+                zones_evaluated:
+                  - {zone_id: zone-a, eligible: true}
+                  - {zone_id: zone-b, eligible: false, reason_code: ARTIFACT_INCOMPATIBLE}
+                state: PROPOSED
+                submitted_at: '2026-09-27T00:00:00Z'
+        '400': {$ref: '#/components/responses/ParameterValidationFailed'}
+        '403': {$ref: '#/components/responses/NoCompliantZone'}
+        '409': {$ref: '#/components/responses/InsufficientCapacity'}
+        '503': {$ref: '#/components/responses/FailbackFailed'}
+  /v1/placement-plans/{planId}:
+    get:
+      operationId: getPlacementPlanStatus
+      description: >-
+        Status query — the disconnect-recovery convergence point: after a
+        broken connection the consumer polls status and converges on the
+        authoritative plan state (APPLIED carries the deployment_ref).
+      parameters:
+        - name: planId
+          in: path
+          required: true
+          schema: {type: string, pattern: '^pp-[a-z0-9-]+$'}
+        - name: X-Tenant-Ref
+          in: header
+          required: true
+          schema: {type: string, minLength: 1}
+        - name: traceparent
+          in: header
+          required: true
+          schema: {type: string, pattern: '^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$'}
+      responses:
+        '200':
+          description: Plan evidence (authoritative state)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PlacementPlan'}
+              example:
+                placement_plan_id: pp-mock-001
+                profile_id: profile.reasoning.serve
+                profile_digest: 'sha256:1111111111111111111111111111111111111111111111111111111111111111'
+                policy_decision_ref: policy:mock-001
+                zones_evaluated:
+                  - {zone_id: zone-a, eligible: true}
+                state: APPLIED
+                deployment_ref: deployment:mock-001
+                submitted_at: '2026-09-27T00:00:00Z'
+                finished_at: '2026-09-27T00:05:00Z'
+        '400': {$ref: '#/components/responses/ParameterValidationFailed'}
+        '404': {$ref: '#/components/responses/PlanNotFound'}
+
+components:
+  schemas:
+    ErrorEnvelope:
+      # FROZEN contract: flat {error_code, message, request_id}
+      # (contracts/schemas/v1/error-envelope.json)
+      type: object
+      additionalProperties: false
+      required: [error_code, message, request_id]
+      properties:
+        error_code:
+          type: string
+          enum: [VALIDATION_UNKNOWN_FIELD, VALIDATION_INVALID_ENUM, VALIDATION_PAYLOAD_TOO_LARGE,
+                 VALIDATION_PAYLOAD_TOO_DEEP, VALIDATION_MISSING_REQUIRED, SEMANTIC_INVALID,
+                 COMPATIBILITY_BREAKING_CHANGE, FORBIDDEN_FIELD, NOT_FOUND, METHOD_NOT_ALLOWED,
+                 CONFLICT, INTERNAL]
+        message: {type: string, maxLength: 512}
+        request_id: {type: string, minLength: 1, maxLength: 128}
+    PortableProfile:
+      type: object
+      additionalProperties: false
+      description: mirrors schemas/v1/placement/portable-profile.json —
+        secrets are name+ref pairs ONLY; a plaintext value key is
+        structurally rejected (negative fixture).
+      required: [profile_id, profile_version, artifact, runtime_contract_ref, configuration_schema_ref, secrets, data_dependencies, health_slo, export_procedure, license_sbom, profile_digest]
+      properties:
+        profile_id: {type: string, pattern: '^profile\.[a-z0-9-]+(\.[a-z0-9-]+)*$'}
+        profile_version: {type: string, pattern: '^v[0-9]+$'}
+        artifact:
+          type: object
+          additionalProperties: false
+          required: [oci_digest, architecture, accelerator_class]
+          properties:
+            oci_digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+            architecture: {type: string, enum: [amd64, arm64]}
+            accelerator_class: {type: string, enum: [none, gpu-a100-80g, gpu-h100-80g, gpu-l40s-48g, tpu-v5e]}
+        runtime_contract_ref: {type: string, pattern: '^schema://runtime/'}
+        configuration_schema_ref: {type: string, pattern: '^schema://configuration/'}
+        secrets:
+          type: array
+          description: reference-only; plaintext value keys are rejected
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, ref]
+            properties:
+              name: {type: string}
+              ref: {type: string, pattern: '^secret://'}
+        data_dependencies:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, digest]
+            properties:
+              name: {type: string}
+              digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        health_slo:
+          type: object
+          additionalProperties: false
+          required: [readiness_path, liveness_path, target_availability]
+          properties:
+            readiness_path: {type: string}
+            liveness_path: {type: string}
+            target_availability: {type: number, minimum: 0, maximum: 1}
+        export_procedure:
+          type: object
+          additionalProperties: false
+          required: [ref, digest]
+          properties:
+            ref: {type: string}
+            digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        license_sbom:
+          type: object
+          additionalProperties: false
+          required: [ref, digest]
+          properties:
+            ref: {type: string}
+            digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        profile_digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+      allOf:
+        - if:
+            properties: {artifact: {properties: {accelerator_class: {const: none}}, required: [accelerator_class]}}
+            required: [artifact]
+          then:
+            properties: {secrets: {maxItems: 32}}
+    PlacementPlan:
+      type: object
+      additionalProperties: false
+      description: mirrors schemas/v1/placement/placement-plan.json —
+        async control-plane plan; terminal states require finished_at,
+        FAILED/FAILED_BACK require the error envelope, APPLIED requires
+        deployment_ref, and an ineligible zone requires a reason_code.
+      required: [placement_plan_id, profile_id, profile_digest, policy_decision_ref, zones_evaluated, state, submitted_at]
+      properties:
+        placement_plan_id: {type: string, pattern: '^pp-[a-z0-9-]+$'}
+        profile_id: {type: string}
+        profile_digest: {type: string}
+        policy_decision_ref: {type: string}
+        zones_evaluated:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [zone_id, eligible]
+            properties:
+              zone_id: {type: string}
+              eligible: {type: boolean}
+              reason_code: {type: string, enum: [INSUFFICIENT_CAPACITY, NOT_COMPLIANT_ZONE, ARTIFACT_INCOMPATIBLE, FAILBACK_FAILED]}
+            allOf:
+              - if:
+                  properties: {eligible: {const: false}}
+                  required: [eligible]
+                then:
+                  required: [reason_code]
+        state: {type: string, enum: [PROPOSED, APPROVED, APPLYING, APPLIED, FAILED, FAILED_BACK]}
+        deployment_ref: {type: string}
+        error:
+          type: object
+          additionalProperties: false
+          description: flat envelope SHAPE; error_code is a domain
+            classification, not the frozen HTTP enum.
+          required: [error_code, message, request_id]
+          properties:
+            error_code: {type: string}
+            message: {type: string, maxLength: 512}
+            request_id: {type: string, minLength: 1, maxLength: 128}
+        submitted_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+        trace_id: {type: string}
+      allOf:
+        - if:
+            properties: {state: {enum: [APPLIED, FAILED, FAILED_BACK]}}
+            required: [state]
+          then:
+            required: [finished_at]
+        - if:
+            properties: {state: {enum: [FAILED, FAILED_BACK]}}
+            required: [state]
+          then:
+            required: [error]
+        - if:
+            properties: {state: {const: APPLIED}}
+            required: [state]
+          then:
+            required: [deployment_ref]
+  responses:
+    Error:
+      description: Unified frozen error envelope
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: INTERNAL, message: unexpected error, request_id: req-mock-001}
+    InsufficientCapacity:
+      description: Zone has no remaining accelerator capacity (reason INSUFFICIENT_CAPACITY)
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: CONFLICT, message: 'insufficient capacity: zone accelerator pool exhausted', request_id: req-mock-001}
+    NoCompliantZone:
+      description: No requested zone passes the sovereignty policy (reason NOT_COMPLIANT_ZONE)
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: SEMANTIC_INVALID, message: no compliant zone for the requested placement, request_id: req-mock-001}
+    ArtifactIncompatible:
+      description: Profile artifact does not match the zone (architecture/accelerator — reason ARTIFACT_INCOMPATIBLE)
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: SEMANTIC_INVALID, message: 'artifact incompatible: profile architecture not available in zone', request_id: req-mock-001}
+    FailbackFailed:
+      description: Failback/rollback of a placement attempt failed (reason FAILBACK_FAILED)
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: INTERNAL, message: failback of the failed placement attempt failed, request_id: req-mock-001}
+    SecretReferenceDenied:
+      description: The caller is not authorized for a referenced secret (GWT#6)
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: SEMANTIC_INVALID, message: caller is not authorized for the referenced secret, request_id: req-mock-001}
+    ParameterValidationFailed:
+      description: Request failed contract validation
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: VALIDATION_MISSING_REQUIRED, message: missing required field, request_id: req-mock-001}
+    PlanNotFound:
+      description: Plan does not exist
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+          example: {error_code: NOT_FOUND, message: placement plan not found, request_id: req-mock-001}

@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.saoaf.dev/schemas/v1/placement/placement-plan.json",
+  "title": "Placement Plan（03.7 控制面异步安置计划）",
+  "description": "Placement Fabric 产出的异步安置计划：Owner 提交 Portable Profile + 安置诉求 → Policy 评估合规 zone → 计划返回 Owner → Owner 向 AI Factory apply → Factory 完成部署并发布快照。ARR 不在同步路径创建 GPU/部署/迁移：本对象是控制面异步产物；contractlint 的 sync-infra 扫描保证契约体系内不存在同步建基础设施接口。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "placement_plan_id",
+    "profile_id",
+    "profile_digest",
+    "policy_decision_ref",
+    "zones_evaluated",
+    "state",
+    "submitted_at"
+  ],
+  "properties": {
+    "placement_plan_id": {
+      "type": "string",
+      "pattern": "^pp-[a-z0-9-]+$",
+      "description": "计划标识（幂等重放返回同一 ID）。"
+    },
+    "profile_id": {
+      "type": "string"
+    },
+    "profile_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "被安置档案的字节 digest（与 portable-profile.profile_digest 一致——同字节证明）。"
+    },
+    "policy_decision_ref": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Policy 评估引用（region/vendor/data/exit 约束 → 合规 zone 集）。"
+    },
+    "zones_evaluated": {
+      "type": "array",
+      "minItems": 1,
+      "description": "逐 zone 评估结果（eligible=false 时 reason_code 必填——容量/合规/制品不兼容各有分类）。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "zone_id",
+          "eligible"
+        ],
+        "properties": {
+          "zone_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "eligible": {
+            "type": "boolean"
+          },
+          "reason_code": {
+            "type": "string",
+            "enum": [
+              "INSUFFICIENT_CAPACITY",
+              "NOT_COMPLIANT_ZONE",
+              "ARTIFACT_INCOMPATIBLE",
+              "FAILBACK_FAILED"
+            ],
+            "description": "不可安置原因分类（issue 四类负向各占一码）。"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "eligible": {
+                  "const": false
+                }
+              },
+              "required": [
+                "eligible"
+              ]
+            },
+            "then": {
+              "required": [
+                "reason_code"
+              ]
+            },
+            "$comment": "不可安置的 zone 必须给出原因分类（issue 四类负向各占一码）。"
+          }
+        ]
+      }
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "PROPOSED",
+        "APPROVED",
+        "APPLYING",
+        "APPLIED",
+        "FAILED",
+        "FAILED_BACK"
+      ],
+      "description": "计划状态机：PROPOSED → APPROVED（Owner 批准）→ APPLYING（Factory 异步执行）→ {APPLIED｜FAILED｜FAILED_BACK}；断线后经 GET status 语义收敛；重复 submit 以 Idempotency-Key 幂等。"
+    },
+    "deployment_ref": {
+      "type": "string",
+      "minLength": 1,
+      "description": "AI Factory 部署引用（APPLIED 必填——Factory 完成后发布 Provider/zone 快照）。"
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error_code",
+        "message",
+        "request_id"
+      ],
+      "description": "flat 信封形状；error_code 为域分类（非冻结 HTTP 枚举）。",
+      "properties": {
+        "error_code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "submitted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "终态时间戳（终态必填；在途不得伪造——见 allOf）。"
+    },
+    "trace_id": {
+      "type": "string"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "APPLIED",
+              "FAILED",
+              "FAILED_BACK"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "required": [
+          "finished_at"
+        ]
+      },
+      "$comment": "终态必带 finished_at。"
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "FAILED",
+              "FAILED_BACK"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "required": [
+          "error"
+        ]
+      },
+      "$comment": "FAILED/FAILED_BACK 必带 error 信封。"
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "APPLIED"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "required": [
+          "deployment_ref"
+        ]
+      },
+      "$comment": "APPLIED 必带 deployment_ref。"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "case": "placement-plan-failed-without-error-envelope",
+  "schema": "placement/placement-plan.json",
+  "input": {
+    "placement_plan_id": "pp-mock-001",
+    "profile_id": "profile.reasoning.serve",
+    "profile_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "policy_decision_ref": "policy:mock-001",
+    "zones_evaluated": [{"zone_id": "zone-a", "eligible": true}],
+    "state": "FAILED",
+    "submitted_at": "2026-09-27T00:00:00Z",
+    "finished_at": "2026-09-27T00:05:00Z"
+  },
+  "expected_error_code": "VALIDATION_MISSING_REQUIRED"
+}

@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.saoaf.dev/schemas/v1/placement/portable-profile.json",
+  "title": "Portable Deployment Profile（03.7 可移植部署档案）",
+  "description": "Workload/Model Owner 提交给 Placement Fabric 的可移植部署档案：与具体 zone 无关、字节级可移植（同 digest 在任意 zone 验证同一结果）。Secret 只允许引用（04 工程签发/管理）——明文值被本 Schema 结构性拒绝（additionalProperties:false）。配置与导出流程以引用表达，正文不进入契约仓库。ARR 不在同步路径创建基础设施：本契约体系内只有异步 Placement Plan（见 placement-plan.json）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile_id", "profile_version", "artifact", "runtime_contract_ref", "configuration_schema_ref", "secrets", "data_dependencies", "health_slo", "export_procedure", "license_sbom", "profile_digest"],
+  "properties": {
+    "profile_id": {
+      "type": "string",
+      "pattern": "^profile\\.[a-z0-9-]+(\\.[a-z0-9-]+)*$",
+      "description": "档案标识。"
+    },
+    "profile_version": { "type": "string", "pattern": "^v[0-9]+$" },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "制品定位与硬件兼容面（OCI digest 寻址——不依赖 tag 可变性）。",
+      "required": ["oci_digest", "architecture", "accelerator_class"],
+      "properties": {
+        "oci_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "OCI 制品内容寻址 digest。"
+        },
+        "architecture": { "type": "string", "enum": ["amd64", "arm64"] },
+        "accelerator_class": {
+          "type": "string",
+          "enum": ["none", "gpu-a100-80g", "gpu-h100-80g", "gpu-l40s-48g", "tpu-v5e"],
+          "description": "加速器类别（zone 以此匹配容量与兼容）。"
+        }
+      }
+    },
+    "runtime_contract_ref": {
+      "type": "string",
+      "pattern": "^schema://runtime/[^\\s]+$",
+      "description": "运行时契约引用（启动命令/端口/探针约定——引用式）。"
+    },
+    "configuration_schema_ref": {
+      "type": "string",
+      "pattern": "^schema://configuration/[^\\s]+$",
+      "description": "配置 Schema 引用（配置正文不进契约仓库）。"
+    },
+    "secrets": {
+      "type": "array",
+      "description": "Secret 引用清单——只允许 name+ref，明文 value 被结构性拒绝（负向夹具钉住）。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "ref"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "ref": {
+            "type": "string",
+            "pattern": "^secret://[^\\s]+$",
+            "description": "04 工程/密钥管理的引用（运行时由部署面解析）。"
+          }
+        }
+      }
+    },
+    "data_dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "digest"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "health_slo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["readiness_path", "liveness_path", "target_availability"],
+      "properties": {
+        "readiness_path": { "type": "string", "pattern": "^/" },
+        "liveness_path": { "type": "string", "pattern": "^/" },
+        "target_availability": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "SLO 目标可用率（0-1）。"
+        }
+      }
+    },
+    "export_procedure": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "出口流程引用（退出权保障——引用+digest，步骤正文不进契约）。",
+      "required": ["ref", "digest"],
+      "properties": {
+        "ref": { "type": "string", "pattern": "^schema://export/[^\\s]+$" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "license_sbom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "digest"],
+      "properties": {
+        "ref": { "type": "string", "pattern": "^schema://license/[^\\s]+$" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "profile_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "档案规范字节 digest（双 zone 验证一致性的锚点——同字节证明）。"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "artifact": { "properties": { "accelerator_class": { "const": "none" } }, "required": ["accelerator_class"] } }, "required": ["artifact"] },
+      "then": { "properties": { "secrets": { "maxItems": 32 } } },
+      "$comment": "无加速器纯 CPU 负载的 secret 清单上限收紧（示例性不变量：profile 类目约束可枚举冻结）。"
+    }
+  ]
+}
