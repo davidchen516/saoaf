@@ -124,8 +124,11 @@ func main() {
 						int(envInt("SAOAF_WORM_RETENTION_DAYS", 3650)), time.Now)
 					if aerr != nil {
 						logger.Error("evidence archive failed", "pack", packID, "error", aerr)
-						// do not crash the worker: the pack ledger records
-						// RETRYABLE/QUARANTINED and the next tick retries
+						// do not crash the worker: the failure is classified
+						// in the pack ledger (RETRYABLE/QUARANTINED) and the
+						// NEXT tick's recovery sweep re-drives every
+						// non-terminal pack (ArchiveOnce sweeps first, then
+						// takes new windows)
 						return nil
 					}
 					if packID != "" {

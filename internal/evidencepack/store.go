@@ -66,32 +66,45 @@ func (s Store) ClaimWindow(ctx context.Context, consumerID string, batchSize int
 		return "", nil, false, nil // nothing to archive
 	}
 
-	packID = Digest(policyVersion, records)
-
-	// skip records already archived (crash-after-link replay): the UNIQUE
-	// record link guarantees at most one pack per record
-	var existing int
-	if err := tx.QueryRow(ctx, `
-		SELECT count(*) FROM saoaf.evidence_archive_link
-		WHERE record_id BETWEEN $1 AND $2`,
-		records[0].ID, records[len(records)-1].ID).Scan(&existing); err != nil {
-		return "", nil, false, err
-	}
-	if existing > 0 {
-		// advance the checkpoint past the already-archived window and
-		// report no new pack (idempotent convergence)
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO saoaf.evidence_archive_checkpoint (consumer_id, last_record_id)
-			VALUES ($1, $2)
-			ON CONFLICT (consumer_id) DO UPDATE SET last_record_id = $2, updated_at = now()`,
-			consumerID, records[len(records)-1].ID); err != nil {
+	// skip records already archived (crash-after-link replay or steady-
+	// state re-scan): filter them OUT of the window instead of skipping the
+	// whole window (review R1 P1-1: the checkpoint never advanced on the
+	// success path, so mixed windows silently skipped unlinked records
+	// forever). Only records WITHOUT a link may join a pack.
+	linkedPrefixEnd := int64(0)
+	unlinked := records[:0]
+	for _, r := range records {
+		var has bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS(SELECT 1 FROM saoaf.evidence_archive_link WHERE record_id = $1)`,
+			r.ID).Scan(&has); err != nil {
 			return "", nil, false, err
 		}
+		if has {
+			if r.ID > linkedPrefixEnd {
+				linkedPrefixEnd = r.ID
+			}
+			continue
+		}
+		unlinked = append(unlinked, r)
+	}
+	records = unlinked
+	if linkedPrefixEnd > 0 {
+		// advance the checkpoint past the already-archived prefix (forward
+		// only — the checkpoint never moves backwards)
+		if err := advanceCheckpointTx(ctx, tx, consumerID, linkedPrefixEnd); err != nil {
+			return "", nil, false, err
+		}
+	}
+	if len(records) == 0 {
+		// whole window already archived — nothing new to do; converge
 		if err := tx.Commit(ctx); err != nil {
 			return "", nil, false, err
 		}
-		return packID, nil, false, nil
+		return "", nil, false, nil
 	}
+
+	packID = Digest(policyVersion, records)
 
 	// create the pack row (PENDING) — unique pack_id makes concurrent
 	// claims of the SAME window converge to one row
@@ -245,6 +258,16 @@ func (s Store) MarkVerified(ctx context.Context, packID string, records []Record
 	if tag.RowsAffected() == 0 {
 		return errT(ReasonInvalidTransition, "pack left LOCKED during verification")
 	}
+	// flip the online index worm_status in the SAME transaction (review
+	// R1 P3-4: the index and the archive view must agree — VERIFIED packs
+	// mark their records ARCHIVED atomically)
+	if _, err := tx.Exec(ctx, `
+		UPDATE saoaf.evidence_record
+		SET worm_status = 'ARCHIVED'
+		WHERE id BETWEEN $1 AND $2`,
+		records[0].ID, records[len(records)-1].ID); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -299,4 +322,139 @@ func (s Store) LinkCount(ctx context.Context, packID string) (int, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+// advanceCheckpointTx moves the forward-only scan cursor inside a
+// transaction (never backwards).
+func advanceCheckpointTx(ctx context.Context, tx pgx.Tx, consumerID string, lastID int64) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO saoaf.evidence_archive_checkpoint (consumer_id, last_record_id)
+		VALUES ($1, $2)
+		ON CONFLICT (consumer_id) DO UPDATE
+		SET last_record_id = $2, updated_at = now()
+		WHERE saoaf.evidence_archive_checkpoint.last_record_id < $2`,
+		consumerID, lastID)
+	return err
+}
+
+// AdvanceCheckpoint moves the scan cursor after a successful archive
+// (review R1 P1-1: the success path must advance too, or steady-state
+// mixed windows keep re-containing linked records — the per-record link
+// filter now handles correctness; the checkpoint keeps the scan O(new)).
+func (s Store) AdvanceCheckpoint(ctx context.Context, consumerID string, lastID int64) error {
+	tag, err := s.Pool.Exec(ctx, `
+		INSERT INTO saoaf.evidence_archive_checkpoint (consumer_id, last_record_id)
+		VALUES ($1, $2)
+		ON CONFLICT (consumer_id) DO UPDATE
+		SET last_record_id = $2, updated_at = now()
+		WHERE saoaf.evidence_archive_checkpoint.last_record_id < $2`,
+		consumerID, lastID)
+	if err != nil {
+		return err
+	}
+	_ = tag
+	return nil
+}
+
+// PendingPacks lists non-terminal packs (PENDING/WRITING/RETRYABLE) for
+// the recovery sweep — the worker drives each to a terminal state every
+// tick (review R1 P1-2: Recover had zero production callers).
+func (s Store) PendingPacks(ctx context.Context) ([]string, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT pack_id FROM saoaf.evidence_archive_pack
+		WHERE state IN ('PENDING', 'WRITING', 'RETRYABLE')
+		ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// HoldGate authorizes legal-hold operations: the caller must supply BOTH
+// a separation-of-duties authorizer and the operator identity. Clearing a
+// hold requires explicit authorization (review R1 P2-1).
+type HoldGate interface {
+	// Authorized reports whether actor may perform the hold operation.
+	Authorized(ctx context.Context, actor string, clear bool) bool
+}
+
+// SetHold records a legal-hold transition in the pack ledger AND applies
+// it to the stored object. Clearing requires the HoldGate's blessing; a
+// hold always outranks lifecycle cleanup (the object store enforces the
+// hold semantics; the ledger mirrors the state for audit).
+func (s Store) SetHold(ctx context.Context, obj ObjectStore, gate HoldGate, packID, actor string, hold bool) error {
+	if gate == nil {
+		return fmt.Errorf("evidencepack: hold gate is required")
+	}
+	if !gate.Authorized(ctx, actor, !hold) {
+		return errT("EVIDENCEPACK_HOLD_UNAUTHORIZED",
+			fmt.Sprintf("actor %q is not authorized for hold operations (clear=%v)", actor, !hold))
+	}
+	p, err := s.Get(ctx, packID)
+	if err != nil {
+		return err
+	}
+	if p.State != StateVerified && p.State != StateLocked {
+		return errT(ReasonInvalidTransition, "legal hold applies to locked/verified packs only")
+	}
+	if p.ObjectVersion == "" {
+		return errT(ReasonDigestMismatch, "pack has no object version to hold")
+	}
+	if err := obj.SetLegalHold(ctx, p.Bucket, p.ObjectKey, p.ObjectVersion, hold); err != nil {
+		return err
+	}
+	tag, err := s.Pool.Exec(ctx, `
+		UPDATE saoaf.evidence_archive_pack
+		SET legal_hold = $2
+		WHERE pack_id = $1 AND state IN ('LOCKED', 'VERIFIED')`,
+		packID, hold)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errT(ReasonInvalidTransition, "pack left LOCKED/VERIFIED during hold update")
+	}
+	return nil
+}
+
+// TryDriveLock takes a session-scoped advisory lock for driving ONE pack
+// so concurrent workers (or multi-instance processes) never double-drive
+// the same non-terminal pack (review R1: the recovery sweep re-opened a
+// double-drive window the original single-creator claim avoided). Returns
+// ok=false when another driver holds the lock — the caller must SKIP the
+// pack (the holder sweeps it).
+func (s Store) TryDriveLock(ctx context.Context, packID string) (release func(), ok bool, err error) {
+	conn, err := s.Pool.Acquire(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	key := "evidencepack:drive:" + packID
+	var got bool
+	if err := conn.Conn().QueryRow(ctx,
+		`SELECT pg_try_advisory_lock(hashtext($1))`, key).Scan(&got); err != nil {
+		conn.Release()
+		cancel()
+		return nil, false, err
+	}
+	if !got {
+		conn.Release()
+		cancel()
+		return nil, false, nil
+	}
+	release = func() {
+		_, _ = conn.Conn().Exec(unlockCtx, `SELECT pg_advisory_unlock(hashtext($1))`, key) //nolint:errcheck
+		conn.Release()
+		cancel()
+	}
+	return release, true, nil
 }

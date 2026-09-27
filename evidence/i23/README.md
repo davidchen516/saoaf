@@ -8,7 +8,7 @@
 
 - **Pack 状态机**（迁移 00013）：`PENDING → WRITING → LOCKED → VERIFIED`；失败分类 `RETRYABLE`（存储瞬态）/`QUARANTINED`（digest 不符/数据级）。**未锁定对象绝不标记 VERIFIED**（MarkVerified 只在 LOCKED 状态 + 已记录 object_version 上转移）。
 - **幂等逻辑 pack**：`pack_id` 内容寻址（窗口记录排序规范化 + policy version 的 SHA-256 派生）——同窗口永远同 pack；并发 worker 竞争同一窗口 → **单逻辑结果**（唯一 pack_id + ON CONFLICT + record 级 UNIQUE link）。
-- **归档编排**（archive.go）：claim（FOR UPDATE SKIP LOCKED + 前向 checkpoint）→ 写 manifest（仅允许元数据：record id/digest/租户别名/policy 版本/retention）→ **PutLocked（COMPLIANCE 保留）** → 服务端 digest 核对 → 锁定账本状态 → **VERIFIED 转移与 index link 原子提交**（同一事务——link 永不指向未锁定/未验证版本）。
+- **归档编排**（archive.go）：claim（pack_id ON CONFLICT + record 级 link 去重 + 前向 checkpoint）→ 写 manifest（仅允许元数据：record id/digest/租户别名/policy 版本/retention）→ **PutLocked（COMPLIANCE 保留）** → 服务端 digest 核对 → 锁定账本状态 → **VERIFIED 转移与 index link 原子提交**（同一事务——link 永不指向未锁定/未验证版本）。
 - **四窗口崩溃恢复**（issue 核心场景）：W1 manifest 上传后/MarkWritten 前、W2 MarkWritten 后/锁定前、W3 锁定后/link 前、W4 link 后/VERIFIED 前（结构性消除——MarkVerified 原子）。`Recover` 从任意在途状态收敛到 VERIFIED，无丢失/无重复/无未验证伪成功——**四窗口各一测试**（真 PG）。
 - **S3 对象存储抽象**（ObjectStore 接口 + MinIO 实现）：版本化写入、COMPLIANCE 保留、digest 读回、**retention 只可延长**（ledger 与对象存储双层拒绝缩短）、legal hold set/query/clear。
 - **worker 接线**（env 门控）：`SAOAF_WORM_ENDPOINT` 等配置齐备才启用归档循环；失败不崩溃 worker（pack 账本记录 RETRYABLE/QUARANTINED，下轮 tick 重试）。
@@ -42,8 +42,26 @@ issue 明文「Mock S3 API 或普通 versioning 不作为 WORM 合规证据」�
 
 - MinIO 集成测试在本地无 MinIO 时 SKIP（SAOAF_TEST_MINIO 门控）；CI worm-archive job（PG+MinIO services）常驻执行
 - `PutLocked` 不带 Expires（生命周期由 retention 治理——WORM 语义）
-- manifest 的租户标识为别名形（`t-<tenant_ref>`）——与 I12 索引红线口径一致
+- manifest 的租户标识为可配口径（当前 `t-<tenant_ref>` 带租户引用——**非匿名化**，企业准入时按合规要求定正式别名规则；与 I12 索引红线口径一致）
+- **legal hold / 权限分离**：`Store.SetHold`（HoldGate 授权接口——clear 需显式授权拒绝 unauthorized）+ ledger `legal_hold` 列双写；**归档写入者/验证者/hold 解除者的角色分离接入企业 IdP 后实装**（企业准入挂账项的一部分）
 
 ## 存储后端说明（SeaweedFS 替换 MinIO）
 
 集成测试的 S3 Object Lock 后端使用 **SeaweedFS 4.47**（开源、活跃维护、S3 COMPLIANCE retention/legal hold/版本化齐全），原因：MinIO 开源服务器项目已归档下架（docker hub/quay/dl.min.io 均返回 410 Gone——社区版停止分发）。`minio_store_test.go` 的 4 项集成测试对 SeaweedFS 全绿：版本化 COMPLIANCE 写入+digest 读回+**删除被服务器拒绝**、retention extend-only（服务器拒绝缩短）、legal hold set/query/clear、端到端归档。与生产准入的关系不变：**任何开源/自建 S3 的协议验证都只是机械化验证**，WORM 合规证据以企业存储准入报告为准（挂账）。
+
+## 审查 R1 整改（CHANGES REQUESTED → 全项修复）
+
+| Finding | 修复 | 回归测试 |
+|---|---|---|
+| P1-1 稳态约一半记录永久跳过（checkpoint 只在 existing>0 分支推进，成功路径从不推进） | ClaimWindow **按 link 存在性过滤窗口**（只把未归档记录组包；已归档前缀只推进 checkpoint——绝不整窗跳过）；归档成功后 **AdvanceCheckpoint** 推进到 last_record_id | TestSteadyStateArchivesEveryRecord：三轮 tick（5+5+0 记录）→ 10/10 ARCHIVED、2 个 VERIFIED pack、0 跳过 |
+| P1-2 Recover 零生产调用方（崩溃/RETRYABLE pack 永不恢复；注释宣称「下轮 tick 重试」与事实相反） | **ArchiveOnce 开头接入 PendingPacks sweep**：每个 tick 先把全部非终态 pack 驱动到终态再取新窗口；worker 注释改为如实描述机制 | TestWorkerLoopRecoversCrashedPack（WRITING 崩溃 + 10 tick 无新记录 → VERIFIED）+ TestWorkerLoopRetriesRetryablePack（存储故障→RETRYABLE→恢复→VERIFIED） |
+| P1-3 W3 真实时钟下永久卡死（锁定后恢复用恢复时钟重算 retention 窗口——晚 1 分钟即失败） | 锁定校验改为 **pack 行记录的 retention_until（锁定时承诺）** 为基准；对象锁低于承诺时 **ExtendRetention 补足**（retention 只增，WORM 合法）后再验 | TestW3RecoveryWithClockDrift（锁定时钟 T0、恢复时钟 T0+1h → VERIFIED） |
+| P2-1 权限分离/legal hold 未交付 | **Store.SetHold**：HoldGate 授权接口（clear 需显式授权）+ ledger legal_hold 列 + 对象存储双写；未授权 clear → EVIDENCEPACK_HOLD_UNAUTHORIZED 且 ledger 不变 | TestHoldGateAuthorizesAndDenies（set 过、未授权 clear 拒绝+ledger 不变） |
+| P3-1 「FOR UPDATE SKIP LOCKED」虚假声称 | 注释与 evidence 改为如实机制（pack_id ON CONFLICT + link 去重 + drive-lock 仲裁） | 文本 |
+| P3-2 状态矩阵与 SQL 漂移 | ValidTransitions 对齐 SQL WHERE 单一执法源（PENDING→RETRYABLE/QUARANTINED 补入、LOCKED→RETRYABLE 移除） | 文本 |
+| P3-3 RetentionUntil 吞掉非「无 retention」错误 | 仅 NoSuchObjectLockConfiguration 归 nil；auth/网络错误传播 | 代码路径 |
+| P3-4 worm_status 不更新 | **MarkVerified 同事务**把窗口内 evidence_record.worm_status 置 ARCHIVED | TestSteadyStateArchivesEveryRecord 断言 worm_status=ARCHIVED |
+| P3-5 CI weed 无校验和 | md5sum -c release 资产校验 | CI |
+| ——（整改中新发现）sweep 重开双驱动窗口 | **TryDriveLock**（pg_try_advisory_lock per pack）：sweep 与新 claim 路径都先取驱动锁，另一 worker 驱动时跳过——多进程 HA 亦成立 | TestArchiveConcurrentSingleLogicalPack 维持 4-worker 单 manifest 版本 |
+
+整改后：`internal/evidencepack` 13/13（真 PG -race，7 原有 + 6 新回归含四探针场景）；CI worm-archive（SeaweedFS 4.47 + md5 校验）。

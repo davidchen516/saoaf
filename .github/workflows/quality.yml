@@ -246,6 +246,8 @@ jobs:
       - name: run SeaweedFS S3 (object-lock capable; MinIO community server is archived/undistributable)
         run: |
           curl -fsSL -o weed.tar.gz "https://github.com/seaweedfs/seaweedfs/releases/download/4.47/linux_amd64.tar.gz"
+          curl -fsSL -o weed.tar.gz.md5 "https://github.com/seaweedfs/seaweedfs/releases/download/4.47/linux_amd64.tar.gz.md5"
+          md5sum -c weed.tar.gz.md5
           tar -xzf weed.tar.gz
           mkdir -p /tmp/seaweedfs/data
           printf '%s\n' '{"identities":[{"name":"saoaf","credentials":[{"accessKey":"saoaf","secretKey":"saoaf-test"}],"actions":["Admin","Read","Write","List","Tagging"]}]}' > /tmp/seaweedfs/s3_config.json

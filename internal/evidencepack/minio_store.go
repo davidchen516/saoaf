@@ -116,9 +116,12 @@ func (s *MinIOStore) SetLegalHold(ctx context.Context, bucket, key, version stri
 func (s *MinIOStore) RetentionUntil(ctx context.Context, bucket, key, version string) (*time.Time, error) {
 	mode, retainUntil, err := s.cli.GetObjectRetention(ctx, s.bucket, key, version)
 	if err != nil {
-		// no retention configured (e.g. plain Put) reads as nil
+		// ONLY the "no retention configured" error reads as nil (a plain
+		// Put, never our PutLocked path); auth/bucket/network failures stay
+		// errors — review R1 P3-3: swallowing them made the archive loop
+		// misclassify outages as digest failures
 		var resp minio.ErrorResponse
-		if errors.As(err, &resp) {
+		if errors.As(err, &resp) && resp.Code == "NoSuchObjectLockConfiguration" {
 			return nil, nil
 		}
 		return nil, err

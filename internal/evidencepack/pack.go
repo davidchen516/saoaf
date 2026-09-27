@@ -50,12 +50,14 @@ const (
 	StateQuarantined = "QUARANTINED"
 )
 
-// ValidTransitions is the pack lifecycle matrix.
+// ValidTransitions documents the pack lifecycle matrix — the ENFORCEMENT
+// authority is the SQL WHERE clauses in store.go (single source); this
+// matrix mirrors them exactly for readability and test-time validation.
 var ValidTransitions = map[string][]string{
-	StatePending:     {StateWriting},
+	StatePending:     {StateWriting, StateRetryable, StateQuarantined},
 	StateWriting:     {StateLocked, StateRetryable, StateQuarantined},
 	StateRetryable:   {StateWriting, StateQuarantined},
-	StateLocked:      {StateVerified, StateRetryable},
+	StateLocked:      {StateVerified},
 	StateQuarantined: {},
 	StateVerified:    {},
 }

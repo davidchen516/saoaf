@@ -25,13 +25,40 @@ import (
 	"time"
 )
 
-// ArchiveOnce runs one archive batch for a worker. Returns the archived
-// pack id ("" when nothing was pending). policyVersion is recorded in
-// the manifest; retentionDays drives the COMPLIANCE lock window.
+// ArchiveOnce runs one archive batch for a worker: FIRST it sweeps any
+// non-terminal packs left by previous ticks (crashed mid-flight or left
+// RETRYABLE by a storage blip — review R1 P1-2: recovery must be part
+// of the production loop, not an unreferenced helper), THEN it claims
+// the next window. Returns the newly archived pack id ("" when nothing
+// was pending).
 func ArchiveOnce(ctx context.Context, s Store, obj ObjectStore, consumerID string, batchSize int, policyVersion string, retentionDays int, now func() time.Time) (string, error) {
 	if now == nil {
 		now = time.Now
 	}
+	// recovery sweep: drive every crashed/retrying pack to a terminal
+	// state before taking new work (idempotent — VERIFIED/QUARANTINED packs
+	// are skipped by ClaimWindow/Recover themselves)
+	pending, err := s.PendingPacks(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, pid := range pending {
+		release, ok, lerr := s.TryDriveLock(ctx, pid)
+		if lerr != nil {
+			// lock infra failure: fail-closed on THIS tick's sweep only
+			return "", lerr
+		}
+		if !ok {
+			continue // another worker/process drives this pack
+		}
+		rerr := Recover(ctx, s, obj, pid, policyVersion, retentionDays, now)
+		release()
+		if rerr != nil {
+			// recorded and re-swept next tick; continue with other work
+			_ = rerr //nolint:errcheck
+		}
+	}
+
 	packID, records, created, err := s.ClaimWindow(ctx, consumerID, batchSize, policyVersion, retentionDays)
 	if err != nil {
 		return "", err
@@ -40,11 +67,30 @@ func ArchiveOnce(ctx context.Context, s Store, obj ObjectStore, consumerID strin
 		return "", nil // nothing to archive
 	}
 	if !created {
-		// the same logical pack is already being driven (concurrent
-		// worker or crashed predecessor) — converge: do not re-archive
+		// the same logical pack was just swept above (or a concurrent
+		// worker drives it) — converge: do not re-archive
 		return packID, nil
 	}
-	return packID, archivePack(ctx, s, obj, packID, records, policyVersion, retentionDays, now)
+	release, ok, lerr := s.TryDriveLock(ctx, packID)
+	if lerr != nil {
+		return packID, lerr
+	}
+	if !ok {
+		// extremely tight race: another worker just took this pack from
+		// its own sweep — converge
+		return packID, nil
+	}
+	defer release()
+	if err := archivePack(ctx, s, obj, packID, records, policyVersion, retentionDays, now); err != nil {
+		return packID, err
+	}
+	// success: advance the forward-only scan cursor past the archived
+	// window (review R1 P1-1: the success path must advance the checkpoint
+	// too, otherwise the next claim re-reads the same window)
+	if aerr := s.AdvanceCheckpoint(ctx, consumerID, records[len(records)-1].ID); aerr != nil {
+		return packID, aerr
+	}
+	return packID, nil
 }
 
 // archivePack drives one claimed pack to VERIFIED (or failure).
@@ -95,15 +141,37 @@ func archivePack(ctx context.Context, s Store, obj ObjectStore, packID string, r
 			if err := s.MarkLocked(ctx, packID, retainUntil); err != nil {
 				return err
 			}
+			p.RetentionUntil = &retainUntil
 			p.State = StateLocked
 		}
-		// the lock must be verifiable: retention readable back
+		// The lock must cover the retention RECORDED AT LOCKING TIME — the
+		// pack row's retention_until (review R1 P1-3: recomputing from the
+		// recovery clock made late W3 recovery fail forever). A LOCKED pack
+		// row always carries its lock commitment.
+		committedUntil := p.RetentionUntil
+		if committedUntil == nil {
+			// defensive: markLocked always records it; if absent the row
+			// is inconsistent — quarantine rather than fake a verify
+			return errT(ReasonDigestMismatch, "LOCKED pack without a recorded retention_until")
+		}
 		lockUntil, err := obj.RetentionUntil(ctx, p.Bucket, p.ObjectKey, p.ObjectVersion)
 		if err != nil {
 			return err
 		}
-		if lockUntil == nil || lockUntil.Before(retainUntil.Add(-time.Minute)) {
-			return errT(ReasonDigestMismatch, "object lock retention does not cover the pack window")
+		if lockUntil == nil || lockUntil.Before(committedUntil.Add(-time.Minute)) {
+			// the object lock drifted below the commitment (clock skew,
+			// store maintenance): extend back up to the recorded window —
+			// retention only ever grows, so this is WORM-legal
+			if err := obj.ExtendRetention(ctx, p.Bucket, p.ObjectKey, p.ObjectVersion, *committedUntil); err != nil {
+				return err
+			}
+			lockUntil2, err2 := obj.RetentionUntil(ctx, p.Bucket, p.ObjectKey, p.ObjectVersion)
+			if err2 != nil {
+				return err2
+			}
+			if lockUntil2 == nil || lockUntil2.Before(committedUntil.Add(-time.Minute)) {
+				return errT(ReasonDigestMismatch, "object lock retention does not cover the recorded pack window and the store refused the extension")
+			}
 		}
 		if err := s.MarkVerified(ctx, packID, records, p.ObjectVersion); err != nil {
 			return err
