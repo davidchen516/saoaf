@@ -50,3 +50,29 @@
 - 外部反馈（Enterprise AI Factory/制品库/基础设施平台接口）：start rule 只约束后续兼容变更/新 major
 - zone 评估/Policy 检查/部署执行：03.7 运行时批次
 - 信封 v2 403 码收敛：维持挂账（冻结枚举 major 批次）
+
+## 审查 R1 整改（CHANGES REQUESTED → 全项修复）
+
+| Finding | 修复 | 验证 |
+|---|---|---|
+| P1 sync-infra-scan 对 canonical 形态全盲（camelCase/复数/REST POST-on-noun 七变体中 4 个放行）+ **evidence 红运行按记载形态重放为绿**（R1 原注入带了 "Synchronously" 描述词——文档未记载全形，不可复现） | 扫描器重写：camelCase 规范化拆词、复数感知名词、**POST/PUT/PATCH 于基建名词路径即违规**（REST canonical 形态无需动词）、summary 纳入扫描面；决策提取为 `syncInfraViolation` 可测函数 + **单测钉死 9 案例**（6 违规形态 + 3 合法异步操作）；evidence 红运行表按本轮 7 变体重写（如实：原 A 形态当初实际带描述词才红） | **7/7 变体注入全红**（含 A 原形、C camel、E async-绕过、F REST-noun）；单测 PASS；正常契约绿 |
+| P2 allowlist 措辞绕过（description 写一个 "async" 词豁免同步端点） | allowlist 仅作用于 **prose 分支**；path/operationId 命中与 POST-on-noun 信号**不可被措辞豁免**（结构性） | 变体 E：createGpuNode+async 描述 → **红** |
+| P3-1 OpenAPI PortableProfile 镜像弱于 JSON Schema | 补 profile_id/profile_version/runtime/configuration 四 pattern + CPU-secret-cap allOf 镜像 | Prism 请求侧：profile_version "x1" → 400 |
+| P3-2 CPU-secret-cap 不变量无夹具 | 负向夹具 placement-portable-profile-cpu-secret-cap（none + 33 secrets → SEMANTIC_INVALID） | **蓝军红**：删 schema allOf 节点 → 夹具 unexpectedly PASSED；恢复绿 |
+| P3-3 双 zone 同 digest 断言 mock 层不可证伪 | mocks/placement/README 披露（example-selection echo；同字节语义在契约 schema；运行时 equality 属 03.7）；evidence GWT#1 行补注 | 文本 |
+| P3-4 GET plan 状态未声明 400 | 声明 '400' ParameterValidationFailed | OpenAPI lint 绿（4xx 信封引用检查通过） |
+
+整改后基线：`CONTRACT GATE: PASS (schemas=10 examples=11 negatives=25 consumers=8 forbidden-hits=0)`；`DEPLOYABLE SCAN: PASS`；`SYNC-INFRA SCAN: PASS`；contractlint 单测全绿（含 shrinkage + sync-infra 9 案例钉）。
+
+**红运行复现表（R1 后重写，逐条亲证）**：
+
+| 注入变体 | sync-infra-scan |
+|---|---|
+| A `POST /v1/zones/{z}/gpus` + createGpuNode（无描述） | **红** |
+| B 同上 + "Create a GPU node synchronously." | **红** |
+| C `operationId: provisionNode`（camelCase 无描述） | **红** |
+| D `operationId: create-gpu-node`（kebab） | **红** |
+| E createGpuNode + 描述含 "async"（绕过尝试） | **红**（allowlist 不能豁免命名级命中） |
+| F `POST /v1/gpu-nodes` + createGpuNode（REST canonical） | **红**（POST-on-noun） |
+| G 描述 "scale-out the cluster" | **红**（prose 分支） |
+| 对照：submitPlacementPlan / validatePortableProfile / getPlacementPlanStatus（合法异步/只读） | **绿** |

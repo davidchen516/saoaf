@@ -24,6 +24,13 @@ Placement Controller). The `sync-infra-scan` gate guarantees the
 contract corpus never grows a synchronous infrastructure-creation
 interface.
 
+Prism returns the EXAMPLE body for validation responses: the
+`profile_digest` equality assertion in the consumer test therefore
+cannot FAIL against this mock (an example-selection echo, not a
+server-side computation). The same-bytes/digest semantics live in the
+CONTRACT (request/response schemas + the profile_digest pattern); the
+runtime-zone equality is 03.7 runtime responsibility.
+
 This mock validates the SAOAF/placement boundary. It does not schedule
 anything. No deployable unit exists for 03.7: the `deployable-scan`
 gate enforces that this stays contract-only.

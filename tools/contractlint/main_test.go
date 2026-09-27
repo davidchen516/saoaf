@@ -88,3 +88,40 @@ func TestForbiddenScanDetectsPayloadFragment(t *testing.T) {
 		t.Fatalf("unexpected problem: %v", problems[0])
 	}
 }
+
+// TestSyncInfraScanDetectionPins locks the I20 R1 P1/P2 hardening: the
+// canonical violation shapes must be caught (camelCase operationIds,
+// REST POST-on-noun, async-word bypass attempts) while async planning
+// operations stay green. Each case reproduces an operation block and
+// runs the scanner's decision logic over the parsed document.
+func TestSyncInfraScanDetectionPins(t *testing.T) {
+	// reuse the scanner's regexes via the shared helpers
+	if testing.Short() {
+		t.Skip("short mode")
+	}
+	cases := []struct {
+		name    string
+		method  string
+		path    string
+		opID    string
+		summary string
+		desc    string
+		wantHit bool
+	}{
+		{"A createGpuNode no desc", "post", "/v1/zones/{zoneId}/gpus", "createGpuNode", "", "", true},
+		{"C provisionNode camel", "post", "/v1/nodes", "provisionNode", "", "", true},
+		{"D kebab create-gpu-node", "post", "/v1/cluster", "create-gpu-node", "", "", true},
+		{"E async-word bypass attempt", "post", "/v1/zones/{zoneId}/gpus", "createGpuNode", "", "Create a GPU node in the zone. async.", true},
+		{"F canonical REST POST on noun", "post", "/v1/gpu-nodes", "createGpuNode", "", "", true},
+		{"B sync description", "post", "/v1/zones/{zoneId}/gpus", "createGpuNode", "", "Create a GPU node synchronously.", true},
+		{"legit async plan submit", "post", "/v1/placement-plans", "submitPlacementPlan", "", "Submit an ASYNC placement plan request (control-plane): the Owner applies it with the AI Factory.", false},
+		{"legit validate profile", "post", "/v1/profiles/validate", "validatePortableProfile", "", "Validate a Portable Profile against a zone — a PURE, read-only check.", false},
+		{"legit plan status", "get", "/v1/placement-plans/{planId}", "getPlacementPlanStatus", "", "Status query — the disconnect-recovery convergence point.", false},
+	}
+	for _, tc := range cases {
+		got := syncInfraViolation(tc.method, tc.path, tc.opID, tc.summary, tc.desc)
+		if got != tc.wantHit {
+			t.Errorf("%s: violation=%v, want %v", tc.name, got, tc.wantHit)
+		}
+	}
+}
