@@ -230,7 +230,7 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 3s --health-retries 20
       minio:
-        image: minio/minio:RELEASE.2025-01-24T17-27-22Z
+        image: minio/minio:RELEASE.2025-10-15T17-29-55Z
         env:
           MINIO_ROOT_USER: saoaf
           MINIO_ROOT_PASSWORD: saoaf-test

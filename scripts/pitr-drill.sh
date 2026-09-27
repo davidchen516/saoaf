@@ -117,7 +117,7 @@ CR=$(echo 'SELECT count(*) FROM saoaf.change_record;' | psql_rec)
 OB=$(echo 'SELECT count(*) FROM saoaf.outbox_event;' | psql_rec)
 WP=$(echo 'SELECT max(published_seq) FROM saoaf.outbox_event;' | psql_rec)
 ENT=$(echo "SELECT count(*) FROM saoaf.change_record WHERE entity_id IN ('cap-t0','cap-t1');" | psql_rec)
-echo "schema version : $V (want 12)"
+echo "schema version : $V (want 13)"
 echo "change_record   : $CR rows (want 2 — T0+T1, disaster excluded)"
 echo "outbox_event    : $OB rows (want 2)"
 echo "outbox watermark: $WP (want 1 — evt-t1 published_seq)"
