@@ -16,10 +16,16 @@ package registry
 // internal model/provider routing detail (禁止字段 boundary).
 
 import (
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -33,6 +39,12 @@ type SnapshotAPIConfig struct {
 	Store            *Store
 	WorkloadVerifier *workload.Verifier
 	ExpectedIdentity string // e.g. spiffe://saoaf.test/ns/mmr/sa/publisher
+	// PublisherKey (I11 mock closure, ledger #2) verifies the snapshot
+	// signature: Ed25519 over the digest string bytes, base64-encoded in
+	// the request. Nil keeps presence-only checking (Phase 0 Mock
+	// transports relied on mTLS alone; David's mock-closure directive
+	// wires a test keypair in tests — production wires MMR's real key).
+	PublisherKey ed25519.PublicKey
 	// ExpectedContractMajor is the ARR-side accepted contract major for MMR
 	// snapshots (spec §3.2) — configured, never derived from the request
 	// itself (review R1 P3-3: the previous self-referential check passed
@@ -48,10 +60,47 @@ var profileStateSet = map[string]bool{
 
 var digestFormat = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
+// SnapshotDigest computes the content-addressed digest over the canonical
+// snapshot content (ledger #2): the request minus the digest/signature
+// transport fields, JSON-marshaled with stable struct field order.
+func SnapshotDigest(req *IngestRequest) string {
+	content := struct {
+		ProviderID      string          `json:"provider_id"`
+		SnapshotVersion int             `json:"snapshot_version"`
+		ContractVersion string          `json:"contract_version"`
+		GeneratedAt     string          `json:"generated_at"`
+		ValidUntil      string          `json:"valid_until"`
+		Profiles        []IngestProfile `json:"profiles"`
+	}{req.ProviderID, int(req.SnapshotVersion), req.ContractVersion, req.GeneratedAt, req.ValidUntil, req.Profiles}
+	b, err := json.Marshal(content)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// UnmarshalJSON accepts snapshot_version as a JSON number (the DB chain's
+// int) OR a numeric string (the contract/Prism example form, ledger #3) —
+// non-numeric strings are a typed validation rejection downstream.
+func (v *SnapshotVersion) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	s = strings.Trim(s, `"`)
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return fmt.Errorf("snapshot_version must be numeric (got %q)", string(b))
+	}
+	*v = SnapshotVersion(n)
+	return nil
+}
+
+// SnapshotVersion lets UnmarshalJSON live on the named type.
+type SnapshotVersion int
+
 // IngestRequest is the MMR-facing snapshot body (specs §3.1).
 type IngestRequest struct {
 	ProviderID      string          `json:"provider_id"`
-	SnapshotVersion int             `json:"snapshot_version"`
+	SnapshotVersion SnapshotVersion `json:"snapshot_version"` // accepts JSON number OR numeric string (ledger #3)
 	ContractVersion string          `json:"contract_version"`
 	GeneratedAt     string          `json:"generated_at"`
 	ValidUntil      string          `json:"valid_until"`
@@ -125,7 +174,7 @@ func (cfg SnapshotAPIConfig) handleIngest(w http.ResponseWriter, r *http.Request
 	providerKey := chi.URLParam(r, "provider_key")
 
 	// 3. spec §3.2 validation
-	if rej := validateIngest(&req, providerKey); rej != nil {
+	if rej := validateIngest(cfg, &req, providerKey); rej != nil {
 		httpapi.WriteJSON(w, rej.Status, map[string]any{
 			"error_code": rej.Code,
 			"message":    rej.Message,
@@ -134,7 +183,7 @@ func (cfg SnapshotAPIConfig) handleIngest(w http.ResponseWriter, r *http.Request
 	}
 
 	// 4. monotonic version + idempotency + version/digest conflict
-	verdict, err := cfg.Store.CheckSnapshotIngest(r.Context(), providerKey, req.SnapshotVersion, req.Digest)
+	verdict, err := cfg.Store.CheckSnapshotIngest(r.Context(), providerKey, int(req.SnapshotVersion), req.Digest)
 	if err != nil {
 		httpapi.WriteJSON(w, http.StatusInternalServerError, map[string]any{
 			"error_code": "REGISTRY_UNAVAILABLE", "message": "registry store failed",
@@ -202,7 +251,7 @@ func (cfg SnapshotAPIConfig) handleIngest(w http.ResponseWriter, r *http.Request
 	}
 	snap := &Snapshot{
 		ProviderID:       provider.ID,
-		SnapshotVersion:  req.SnapshotVersion,
+		SnapshotVersion:  int(req.SnapshotVersion),
 		ContractVersion:  req.ContractVersion,
 		Digest:           req.Digest,
 		Signature:        req.Signature,
@@ -238,7 +287,7 @@ func (cfg SnapshotAPIConfig) handleIngest(w http.ResponseWriter, r *http.Request
 			// concurrent same-version submit won the race (review R1
 			// P2-2): re-classify against the committed row instead of
 			// surfacing a raw unique-violation as an opaque 400
-			reclass, rerr := cfg.Store.CheckSnapshotIngest(ctx, providerKey, req.SnapshotVersion, req.Digest)
+			reclass, rerr := cfg.Store.CheckSnapshotIngest(ctx, providerKey, int(req.SnapshotVersion), req.Digest)
 			if rerr != nil {
 				httpapi.WriteJSON(w, http.StatusBadRequest, map[string]any{
 					"error_code": "SNAPSHOT_REJECTED", "message": err.Error(),
@@ -289,7 +338,7 @@ func (cfg SnapshotAPIConfig) handleIngest(w http.ResponseWriter, r *http.Request
 }
 
 // validateIngest applies spec §3.2 rules; nil means OK.
-func validateIngest(req *IngestRequest, providerKey string) *rejectReason {
+func validateIngest(cfg SnapshotAPIConfig, req *IngestRequest, providerKey string) *rejectReason {
 	if req.ProviderID != providerKey {
 		return &rejectReason{"PROVIDER_MISMATCH", http.StatusBadRequest,
 			fmt.Sprintf("body provider_id %q does not match path", req.ProviderID)}
@@ -297,8 +346,23 @@ func validateIngest(req *IngestRequest, providerKey string) *rejectReason {
 	if !digestFormat.MatchString(req.Digest) {
 		return &rejectReason{"INVALID_DIGEST", http.StatusBadRequest, "digest must be sha256:<64hex>"}
 	}
+	// content recompute (ledger #2): the digest must bind the snapshot
+	// content — a stale/foreign digest is a contract drift, not metadata
+	if computed := SnapshotDigest(req); computed != req.Digest {
+		return &rejectReason{"DIGEST_MISMATCH", http.StatusBadRequest,
+			"digest does not match the snapshot content (recompute failed)"}
+	}
 	if req.Signature == "" {
 		return &rejectReason{"SIGNATURE_REQUIRED", http.StatusBadRequest, "signature required"}
+	}
+	if cfg.PublisherKey != nil {
+		sig, serr := base64.StdEncoding.DecodeString(req.Signature)
+		if serr != nil {
+			return &rejectReason{"SIGNATURE_INVALID", http.StatusBadRequest, "signature must be base64"}
+		}
+		if len(sig) != ed25519.SignatureSize || !ed25519.Verify(cfg.PublisherKey, []byte(req.Digest), sig) {
+			return &rejectReason{"SIGNATURE_INVALID", http.StatusBadRequest, "signature verification failed"}
+		}
 	}
 	if req.SnapshotVersion < 1 {
 		return &rejectReason{"INVALID_VERSION", http.StatusBadRequest, "snapshot_version must be >= 1"}

@@ -7,11 +7,13 @@ package registry
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -112,7 +114,14 @@ func newMTLSHarnessCfg(t *testing.T, dsn, contractMajor string) *mtlsHarness {
 	return newMTLSHarnessFull(t, dsn, contractMajor, "spiffe://saoaf.test/ns/mmr/sa/publisher")
 }
 
-func newMTLSHarnessFull(t *testing.T, dsn, contractMajor, publisherSAN string) *mtlsHarness {
+// newMTLSHarnessPublisherKey wires a publisher Ed25519 key (ledger #2
+// signature verification path).
+func newMTLSHarnessPublisherKey(t *testing.T, dsn string, pub ed25519.PublicKey) *mtlsHarness {
+	t.Helper()
+	return newMTLSHarnessFull(t, dsn, "", "spiffe://saoaf.test/ns/mmr/sa/publisher", pub)
+}
+
+func newMTLSHarnessFull(t *testing.T, dsn, contractMajor, publisherSAN string, publisherKey ...ed25519.PublicKey) *mtlsHarness {
 	t.Helper()
 	// CA
 	caKey, _ := rsa.GenerateKey(rand.Reader, 2048)
@@ -154,12 +163,16 @@ func newMTLSHarnessFull(t *testing.T, dsn, contractMajor, publisherSAN string) *
 	}
 
 	r := chi.NewRouter()
-	MountSnapshotAPI(r, SnapshotAPIConfig{
+	apiCfg := SnapshotAPIConfig{
 		Store:                 &Store{DSN: dsn},
 		WorkloadVerifier:      verifier,
 		ExpectedIdentity:      "spiffe://saoaf.test/ns/mmr/sa/publisher",
 		ExpectedContractMajor: contractMajor,
-	})
+	}
+	if len(publisherKey) > 0 {
+		apiCfg.PublisherKey = publisherKey[0]
+	}
+	MountSnapshotAPI(r, apiCfg)
 	_ = publisherSAN // the CLIENT cert carries this SAN; the server accepts only the publisher one
 	// server leaf signed by the same CA (the client trusts only this CA)
 	serverKey, _ := rsa.GenerateKey(rand.Reader, 2048)
@@ -204,7 +217,7 @@ func newMTLSHarnessFull(t *testing.T, dsn, contractMajor, publisherSAN string) *
 }
 
 func ingestBody(version int, digest string) map[string]any {
-	return map[string]any{
+	body := map[string]any{
 		"provider_id": "mmr-test", "snapshot_version": version,
 		"contract_version": "2026.09",
 		"generated_at":     time.Now().UTC().Format(time.RFC3339),
@@ -215,8 +228,37 @@ func ingestBody(version int, digest string) map[string]any {
 			"features": map[string]any{"streaming": false}, "constraint_schema_version": "1.0",
 			"status": "AVAILABLE",
 		}},
-		"digest": digest, "signature": "sig-mock",
+		"digest": "", "signature": "sig-mock",
 	}
+	if digest == "" {
+		// content-addressed by construction: round-trip through the request
+		// struct and digest the canonical content (ledger #2 — publishers
+		// that follow the documented canonicalization always match)
+		b, _ := json.Marshal(body)
+		var req IngestRequest
+		if err := json.Unmarshal(b, &req); err != nil {
+			panic("test ingest body round-trip: " + err.Error())
+		}
+		body["digest"] = SnapshotDigest(&req)
+	} else {
+		body["digest"] = digest
+	}
+	return body
+}
+
+// digestFor recomputes the content-addressed digest for a body map (the
+// test-side publisher contract, same as ingestBody's built-in path).
+func digestFor(t *testing.T, body map[string]any) string {
+	t.Helper()
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req IngestRequest
+	if err := json.Unmarshal(b, &req); err != nil {
+		t.Fatal(err)
+	}
+	return SnapshotDigest(&req)
 }
 
 func post(t *testing.T, h *mtlsHarness, body map[string]any) int {
@@ -239,10 +281,9 @@ func TestSnapshotIngestFlow(t *testing.T) {
 	withDBReg(t, func(dsn string) {
 		seedProviderReg(t, dsn, "mmr-test")
 		h := newMTLSHarness(t, dsn)
-		digest := "sha256:" + fmt.Sprintf("%064d", 1)
 
 		// first ingest: submit + activate + snapshot-changed outbox event
-		if code := post(t, h, ingestBody(1, digest)); code != http.StatusOK {
+		if code := post(t, h, ingestBody(1, "")); code != http.StatusOK {
 			t.Fatalf("first ingest = %d", code)
 		}
 		ctx := context.Background()
@@ -262,7 +303,7 @@ func TestSnapshotIngestFlow(t *testing.T) {
 		}
 
 		// idempotent replay (same version + digest) → 200 no-op
-		if code := post(t, h, ingestBody(1, digest)); code != http.StatusOK {
+		if code := post(t, h, ingestBody(1, "")); code != http.StatusOK {
 			t.Fatalf("idempotent replay = %d", code)
 		}
 		var rows int
@@ -272,18 +313,35 @@ func TestSnapshotIngestFlow(t *testing.T) {
 			t.Fatalf("rows after replay = %d, want 1 (idempotent)", rows)
 		}
 
-		// same version + DIFFERENT digest → 409 (契约漂移告警语义)
-		if code := post(t, h, ingestBody(1, "sha256:"+fmt.Sprintf("%064d", 2))); code != http.StatusConflict {
+		// same version + different content → recomputed digest differs from
+		// the committed row → 409 契约漂移告警 (content addressing bounds
+		// the digest — it can never be a stale/foreign string)
+		drift := ingestBody(1, "")
+		drift["valid_until"] = time.Now().UTC().Add(2 * time.Hour).Format(time.RFC3339)
+		// recompute over the MUTATED content: the digest is honest for what
+		// is sent — the conflict comes from the committed row (same version,
+		// different content digest), not from a stale string
+		if raw, merr := json.Marshal(drift); merr == nil {
+			var r IngestRequest
+			if json.Unmarshal(raw, &r) == nil {
+				drift["digest"] = SnapshotDigest(&r)
+			}
+		}
+		if code := post(t, h, drift); code != http.StatusConflict {
 			t.Fatalf("digest conflict = %d, want 409", code)
+		}
+		// version 2 is a NEW version with its own content digest → 200
+		if code := post(t, h, ingestBody(2, "")); code != http.StatusOK {
+			t.Fatalf("new version = %d, want 200", code)
 		}
 
 		// version regression → 409
-		if code := post(t, h, ingestBody(0, digest)); code != http.StatusBadRequest {
+		if code := post(t, h, ingestBody(0, "")); code != http.StatusBadRequest {
 			t.Fatalf("version 0 = %d, want 400", code)
 		}
 
 		// new higher version is fine
-		if code := post(t, h, ingestBody(2, "sha256:"+fmt.Sprintf("%064d", 2))); code != http.StatusOK {
+		if code := post(t, h, ingestBody(2, "")); code != http.StatusOK {
 			t.Fatalf("version 2 ingest = %d", code)
 		}
 	})
@@ -299,14 +357,15 @@ func TestSnapshotIngestValidation(t *testing.T) {
 		if code := post(t, h, bad); code != http.StatusBadRequest {
 			t.Fatalf("bad digest = %d", code)
 		}
-		// empty signature
-		bad = ingestBody(1, "sha256:"+fmt.Sprintf("%064d", 1))
+		// empty signature (content-matching digest: the SIGNATURE branch fires)
+		bad = ingestBody(1, "")
 		bad["signature"] = ""
 		if code := post(t, h, bad); code != http.StatusBadRequest {
 			t.Fatalf("no signature = %d", code)
 		}
-		// invalid profile state
-		bad = ingestBody(1, "sha256:"+fmt.Sprintf("%064d", 1))
+		// invalid profile state (content-matching digest recomputed over the
+		// bad profiles — the INVALID_PROFILE_STATE branch fires)
+		bad = ingestBody(1, "")
 		bad["profiles"] = []map[string]any{{
 			"profile_id": "p", "capability_keys": []string{"x"}, "regions": []string{"r"},
 			"data_classification_max": "CONFIDENTIAL", "features": map[string]any{},
@@ -316,14 +375,22 @@ func TestSnapshotIngestValidation(t *testing.T) {
 			t.Fatalf("bad profile state = %d", code)
 		}
 		// provider mismatch (body vs path)
-		bad = ingestBody(1, "sha256:"+fmt.Sprintf("%064d", 1))
+		bad = ingestBody(1, "sha256:"+fmt.Sprintf("%064d", 9))
 		bad["provider_id"] = "other-provider"
 		if code := post(t, h, bad); code != http.StatusBadRequest {
 			t.Fatalf("provider mismatch = %d", code)
 		}
 		// unknown provider
-		b := ingestBody(1, "sha256:"+fmt.Sprintf("%064d", 1))
+		b := ingestBody(1, "")
 		b["provider_id"] = "mmr-unknown"
+		// recompute the digest over the CHANGED content so the rejection
+		// exercises the unknown-provider branch, not DIGEST_MISMATCH
+		if raw, merr := json.Marshal(b); merr == nil {
+			var r IngestRequest
+			if json.Unmarshal(raw, &r) == nil {
+				b["digest"] = SnapshotDigest(&r)
+			}
+		}
 		jb, _ := json.Marshal(b)
 		resp, err := h.client.Post(h.srv.URL+"/providers/mmr-unknown/snapshots", "application/json", bytes.NewReader(jb))
 		if err != nil {
@@ -346,7 +413,7 @@ func TestSnapshotIngestWorkloadIdentity(t *testing.T) {
 		insecure := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true, // no client cert
 		}}}
-		b, _ := json.Marshal(ingestBody(1, "sha256:"+fmt.Sprintf("%064d", 1)))
+		b, _ := json.Marshal(ingestBody(1, ""))
 		resp, err := insecure.Post(h.srv.URL+"/providers/mmr-test/snapshots", "application/json", bytes.NewReader(b))
 		if err == nil {
 			_ = resp.Body.Close()
@@ -363,7 +430,11 @@ func TestSnapshotIngestHalfCommitReplayResumes(t *testing.T) {
 	withDBReg(t, func(dsn string) {
 		seedProviderReg(t, dsn, "mmr-test")
 		h := newMTLSHarness(t, dsn)
-		digest := "sha256:" + fmt.Sprintf("%064d", 7)
+		// content-addressed: the half-committed DRAFT row must carry the
+		// SAME digest the replay will send, so compute it from the ingest
+		// body content for version 5
+		replayBody := ingestBody(5, "")
+		digest := digestFor(t, replayBody)
 
 		// half commit: the row lands via the store path but activation
 		// never runs (simulating a crash between submit and activate)
@@ -389,7 +460,7 @@ func TestSnapshotIngestHalfCommitReplayResumes(t *testing.T) {
 
 		// replay the same (version, digest): NOT idempotent — activation
 		// resumes and completes
-		if code := post(t, h, ingestBody(5, digest)); code != http.StatusOK {
+		if code := post(t, h, replayBody); code != http.StatusOK {
 			t.Fatalf("resumption ingest = %d (want activation retry, not fake idempotent)", code)
 		}
 		_ = conn.QueryRow(context.Background(),
@@ -416,7 +487,7 @@ func TestSnapshotIngestHalfCommitReplayResumes(t *testing.T) {
 		// the replay carries the SAME expired window as the seeded row —
 		// the P1 bug reported "idempotent 200" here; the fix must reject
 		// honestly (window check) instead of faking success
-		body := ingestBody(6, "sha256:"+fmt.Sprintf("%064d", 8))
+		body := ingestBody(6, "")
 		body["generated_at"] = now.Add(-2 * time.Hour).UTC().Format(time.RFC3339)
 		body["valid_until"] = now.Add(-time.Hour).UTC().Format(time.RFC3339)
 		b, _ := json.Marshal(body)
@@ -443,8 +514,7 @@ func TestSnapshotIngestConcurrentSameKeyConverges(t *testing.T) {
 	withDBReg(t, func(dsn string) {
 		seedProviderReg(t, dsn, "mmr-test")
 		h := newMTLSHarness(t, dsn)
-		digest := "sha256:" + fmt.Sprintf("%064d", 9)
-		body := ingestBody(3, digest)
+		body := ingestBody(3, "") // content-addressed
 
 		var wg sync.WaitGroup
 		codes := make([]int, 2)
@@ -485,14 +555,14 @@ func TestSnapshotIngestVersionRegression409(t *testing.T) {
 	withDBReg(t, func(dsn string) {
 		seedProviderReg(t, dsn, "mmr-test")
 		h := newMTLSHarness(t, dsn)
-		if code := post(t, h, ingestBody(1, "sha256:"+fmt.Sprintf("%064d", 1))); code != http.StatusOK {
+		if code := post(t, h, ingestBody(1, "")); code != http.StatusOK {
 			t.Fatalf("v1 = %d", code)
 		}
-		if code := post(t, h, ingestBody(3, "sha256:"+fmt.Sprintf("%064d", 3))); code != http.StatusOK {
+		if code := post(t, h, ingestBody(3, "")); code != http.StatusOK {
 			t.Fatalf("v3 = %d", code)
 		}
 		// v2 has no row but is below the current max (3)
-		b, _ := json.Marshal(ingestBody(2, "sha256:"+fmt.Sprintf("%064d", 2)))
+		b, _ := json.Marshal(ingestBody(2, ""))
 		resp, err := h.client.Post(h.srv.URL+"/providers/mmr-test/snapshots", "application/json", bytes.NewReader(b))
 		if err != nil {
 			t.Fatal(err)
@@ -517,14 +587,17 @@ func TestSnapshotIngestContractMajorConfig(t *testing.T) {
 		seedProviderReg(t, dsn, "mmr-test")
 		h := newMTLSHarnessCfg(t, dsn, "2026")
 		// matching major passes
-		body := ingestBody(1, "sha256:"+fmt.Sprintf("%064d", 1))
+		body := ingestBody(1, "")
 		if code := post(t, h, body); code != http.StatusOK {
 			t.Fatalf("matching major = %d", code)
 		}
 		// mismatch rejected BEFORE any write — no garbage DRAFT row
 		// (R2 review probe M adopted; P3-3 check moved ahead of submit)
-		bad := ingestBody(2, "sha256:"+fmt.Sprintf("%064d", 2))
+		bad := ingestBody(2, "")
 		bad["contract_version"] = "1999.01"
+		// recompute over the mutated content so the rejection exercises
+		// the CONTRACT_MAJOR branch, not DIGEST_MISMATCH
+		bad["digest"] = digestFor(t, bad)
 		b, _ := json.Marshal(bad)
 		resp, err := h.client.Post(h.srv.URL+"/providers/mmr-test/snapshots", "application/json", bytes.NewReader(b))
 		if err != nil {
@@ -557,7 +630,7 @@ func TestSnapshotIngestWrongSAN403(t *testing.T) {
 		seedProviderReg(t, dsn, "mmr-test")
 		// harness with a client cert carrying a DIFFERENT SPIFFE SAN
 		h := newMTLSHarnessWithSAN(t, dsn, "spiffe://saoaf.test/ns/other/sa/publisher")
-		b, _ := json.Marshal(ingestBody(1, "sha256:"+fmt.Sprintf("%064d", 1)))
+		b, _ := json.Marshal(ingestBody(1, ""))
 		resp, err := h.client.Post(h.srv.URL+"/providers/mmr-test/snapshots", "application/json", bytes.NewReader(b))
 		if err != nil {
 			t.Fatal(err)
@@ -565,6 +638,91 @@ func TestSnapshotIngestWrongSAN403(t *testing.T) {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusForbidden {
 			t.Fatalf("wrong-SAN ingest = %d, want 403", resp.StatusCode)
+		}
+	})
+}
+
+// I11 mock-closure regressions (David 2026-09-28 directive).
+
+// TestSnapshotIngestDigestRecompute (ledger #2): a syntactically valid digest
+// that does NOT bind the content is rejected — blue-team: dropping the
+// recompute check lets a stale digest ride.
+func TestSnapshotIngestDigestRecompute(t *testing.T) {
+	withDBReg(t, func(dsn string) {
+		seedProviderReg(t, dsn, "mmr-test")
+		h := newMTLSHarness(t, dsn)
+		// foreign digest (valid format, wrong content) → DIGEST_MISMATCH
+		if code := post(t, h, ingestBody(1, "sha256:"+fmt.Sprintf("%064d", 42))); code != http.StatusBadRequest {
+			t.Fatalf("foreign digest = %d, want 400 DIGEST_MISMATCH", code)
+		}
+		// matching digest → 200
+		if code := post(t, h, ingestBody(1, "")); code != http.StatusOK {
+			t.Fatalf("content digest = %d, want 200", code)
+		}
+	})
+}
+
+// TestSnapshotIngestSignatureVerify (ledger #2): with a configured publisher
+// key, an invalid signature is rejected; the properly signed snapshot passes.
+func TestSnapshotIngestSignatureVerify(t *testing.T) {
+	withDBReg(t, func(dsn string) {
+		seedProviderReg(t, dsn, "mmr-test")
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h := newMTLSHarnessPublisherKey(t, dsn, pub)
+		body := ingestBody(1, "")
+		// unsigned (presence-only string) → SIGNATURE_INVALID
+		if code := post(t, h, body); code != http.StatusBadRequest {
+			t.Fatalf("unverified signature = %d, want 400", code)
+		}
+		// properly signed over the digest → 200
+		sig := ed25519.Sign(priv, []byte(body["digest"].(string)))
+		body["signature"] = base64.StdEncoding.EncodeToString(sig)
+		if code := post(t, h, body); code != http.StatusOK {
+			t.Fatalf("signed ingest = %d, want 200", code)
+		}
+	})
+}
+
+// TestSnapshotVersionStringForm (ledger #3): snapshot_version arrives as a
+// JSON string (the contract/mock form "1") — accepted and stored as int;
+// non-numeric strings are a typed rejection.
+func TestSnapshotVersionStringForm(t *testing.T) {
+	withDBReg(t, func(dsn string) {
+		seedProviderReg(t, dsn, "mmr-test")
+		h := newMTLSHarness(t, dsn)
+		// string-form numeric version
+		body := ingestBody(1, "")
+		b, _ := json.Marshal(body)
+		b = bytes.Replace(b, []byte(`"snapshot_version":1`), []byte(`"snapshot_version":"1"`), 1)
+		var r IngestRequest
+		if err := json.Unmarshal(b, &r); err != nil {
+			t.Fatalf("string version decode: %v", err)
+		}
+		body["digest"] = SnapshotDigest(&r)
+		b, _ = json.Marshal(body)
+		resp, err := h.client.Post(h.srv.URL+"/providers/mmr-test/snapshots", "application/json", bytes.NewReader(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("string-form version = %d, want 200 (type unification)", resp.StatusCode)
+		}
+		// non-numeric string → typed rejection (mutate the MAP, not the
+		// marshaled bytes — a second Marshal would revert the edit)
+		bad := ingestBody(2, "")
+		bad["snapshot_version"] = "mock-9"
+		bb, _ := json.Marshal(bad)
+		resp2, err := h.client.Post(h.srv.URL+"/providers/mmr-test/snapshots", "application/json", bytes.NewReader(bb))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp2.Body.Close()
+		if resp2.StatusCode != http.StatusBadRequest {
+			t.Fatalf("non-numeric version = %d, want 400", resp2.StatusCode)
 		}
 	})
 }

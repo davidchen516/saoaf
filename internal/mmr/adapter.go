@@ -272,3 +272,25 @@ func (s ModeStore) SetMode(ctx context.Context, m RoutingMode, expectedFrom stri
 	}
 	return tx.Commit(ctx)
 }
+
+// OutcomeFromBody reports the correlation outcome for a 200 MMR response by
+// reading the response body's status field: SUCCEEDED stays SUCCEEDED;
+// FALLBACK marks a fallback-backend serve (the mock's named `fallback`
+// example, ledger #4 — the 5th outcome now has a contract-level case).
+// Non-200 statuses use OutcomeForStatus; this helper never opens the body
+// twice — callers pass the already-read bytes.
+func OutcomeFromBody(status int, body []byte) string {
+	if status != http.StatusOK {
+		return OutcomeForStatus(status)
+	}
+	var parsed struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return OutcomeSucceeded // body unreadable: the 200 stays SUCCEEDED
+	}
+	if parsed.Status == OutcomeFallback {
+		return OutcomeFallback
+	}
+	return OutcomeSucceeded
+}

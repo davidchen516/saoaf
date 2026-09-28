@@ -91,6 +91,23 @@ paths:
                 resource_plan_id: plan-mock-001
                 status: SUCCEEDED
                 usage_ref: usage-mock-001
+              examples:
+                fallback:
+                  summary: Served via fallback backend (correlation outcome FALLBACK)
+                  value:
+                    id: chatcmpl-mock-fallback
+                    object: chat.completion
+                    created: 1789984800
+                    model: reasoning-high-v1
+                    choices:
+                      - index: 0
+                        message: {role: assistant, content: 'MMR mock fallback response'}
+                        finish_reason: stop
+                    usage: {prompt_tokens: 2, completion_tokens: 3, total_tokens: 5}
+                    model_route_decision_id: mrd-mock-fallback
+                    resource_plan_id: plan-mock-001
+                    status: FALLBACK
+                    usage_ref: usage-mock-fallback
         '400': {$ref: '#/components/responses/ProfileNotFound'}
         '429':
           description: Quota exhausted
@@ -157,7 +174,7 @@ components:
         usage: {type: object, additionalProperties: true}
         model_route_decision_id: {type: string}
         resource_plan_id: {type: string}
-        status: {type: string, enum: [SUCCEEDED]}
+        status: {type: string, enum: [SUCCEEDED, FALLBACK]}
         usage_ref: {type: string}
       additionalProperties: true
     ErrorResponse:
