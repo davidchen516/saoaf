@@ -279,6 +279,10 @@ jobs:
         run: |
           export PATH="$(go env GOPATH)/bin:$PATH"
           go test -race -count=1 ./internal/registry/
+      - name: run the composed MMR closure suite (cmd layer: resolver + binding + registry, real PG -race)
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          go test -race -count=1 -v -run "TestClosure" ./cmd/control-plane-api/
 
   identity-contract:
     name: identity contract (real Keycloak + AuthZEN + approval)

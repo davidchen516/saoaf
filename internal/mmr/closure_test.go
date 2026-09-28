@@ -75,50 +75,6 @@ func withDBMMR(t *testing.T, fn func(dsn string, pool *pgxpool.Pool)) {
 
 // seedE2ERegistry seeds the capability/provider/binding/snapshot chain the
 // ARR plan resolution needs (the same chain the resolver tests use).
-func seedE2ERegistry(t *testing.T, pool *pgxpool.Pool, bindingKey string) {
-	t.Helper()
-	ctx := context.Background()
-	statements := []string{
-		`INSERT INTO registry.capability_definition (capability_key, major_version, revision, resource_type, requirement_schema, state, owner_ref)
-		 VALUES ('cap-e2e', 1, 1, 'MODEL', '{}', 'PUBLISHED', 'user:op') ON CONFLICT DO NOTHING`,
-		`INSERT INTO registry.resource_provider (provider_key, provider_type, endpoint_ref, owner_ref, workload_identity, state, revision, active_revision)
-		 VALUES ('mmr-e2e', 'MODEL', 'ref://mmr', 'user:op', 'spiffe://saoaf.test/ns/default/sa/mmr', 'PUBLISHED', 1, 1) ON CONFLICT DO NOTHING`,
-	}
-	for _, s := range statements {
-		if _, err := pool.Exec(ctx, s); err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-	}
-	var pid, capID int64
-	if err := pool.QueryRow(ctx,
-		`SELECT id FROM registry.resource_provider WHERE provider_key='mmr-e2e'`).Scan(&pid); err != nil {
-		t.Fatal(err)
-	}
-	if err := pool.QueryRow(ctx,
-		`SELECT id FROM registry.capability_definition WHERE capability_key='cap-e2e'`).Scan(&capID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO registry.provider_snapshot (provider_id, snapshot_version, contract_version, digest, signature, workload_identity, generated_at, valid_until)
-		VALUES ($1, 1, '2026.09', 'sha256:0000000000000000000000000000000000000000000000000000000000000000', 'sig', 'spiffe://saoaf.test/ns/default/sa/mmr', now(), now() + interval '1 day')`,
-		pid); err != nil {
-		t.Fatal(err)
-	}
-	var snapID int64
-	if err := pool.QueryRow(ctx,
-		`SELECT id FROM registry.provider_snapshot WHERE provider_id=$1 AND snapshot_version=1`, pid).Scan(&snapID); err != nil {
-		t.Fatal(err)
-	}
-	// binding (active PUBLISHED revision 1)
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO registry.capability_binding
-			(binding_key, capability_id, provider_id, snapshot_id, profile_or_action, environment, scope, scope_hash, priority, state, revision, is_active, tenant_ref)
-		VALUES ($1, $2, $3, $4, 'reasoning-high-v1', 'production', '{}', 'sha256:e2e', 100, 'PUBLISHED', 1, TRUE, 'tenant-a')`,
-		bindingKey, capID, pid, snapID); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func e2ePlan(t *testing.T, pool *pgxpool.Pool, planID string) {
 	t.Helper()
 	ctx := context.Background()
@@ -197,10 +153,14 @@ func TestMockClosedLoopFiveOutcomes(t *testing.T) {
 				},
 			},
 			{
-				name:    "TIMEOUT (simulated by the adapter's error path)",
+				// TIMEOUT has no HTTP response to correlate — the test
+				// records the synthetic bookkeeping row directly (the
+				// PR #45-approved path: a timeout's decision id arrives
+				// only in MMR's eventual retry/audit export, I12)
+				name:    "TIMEOUT (synthetic bookkeeping — no HTTP response)",
 				outcome: OutcomeTimeout,
 				httpDone: func(t *testing.T) (int, []byte, string) {
-					return 0, nil, "" // harness-level timeout: no HTTP response
+					return 0, nil, ""
 				},
 			},
 		}
@@ -242,8 +202,9 @@ func TestMockClosedLoopFiveOutcomes(t *testing.T) {
 				decision = d
 				outcome = OutcomeForStatus(status)
 			case status == 0:
-				// timeout: the harness adapter fabricates the row (the
-				// bookkeeping path the review approved in PR #45)
+				// timeout: no HTTP exchange happened; the test records the
+				// synthetic bookkeeping row directly (PR #45-approved —
+				// zero adapter code runs in this branch)
 			}
 			if err := store.Record(context.Background(), Correlation{
 				ResourcePlanID: inv.ResourcePlanID, ResourcePlanItemID: inv.ResourcePlanItemID,
@@ -288,140 +249,36 @@ func TestMockClosedLoopFiveOutcomes(t *testing.T) {
 	})
 }
 
-// ARR Plan invariance across MMR snapshot republish (AC#1, mock-end-to-end):
-// the MMR republishes its profile snapshot (internal model change → new
-// snapshot version + digest); the ARR plan fingerprint for the same request
-// is UNCHANGED — the profile contract stayed stable. This drives the actual
-// registry snapshot store (I07) the same way the ingest API does.
-func TestMockPlanInvarianceAcrossSnapshotRepublish(t *testing.T) {
-	withDBMMR(t, func(dsn string, pool *pgxpool.Pool) {
-		seedE2ERegistry(t, pool, "bind-e2e-inv")
-		// the invariance assertion: the BINDING (what ARR plans over) does
-		// not change when MMR republishes its snapshot — provider_snapshot
-		// rows change, capability_binding rows do not
-		ctx := context.Background()
-		var bindingRev int
-		var bindingActive bool
-		if err := pool.QueryRow(ctx, `
-			SELECT revision, is_active FROM registry.capability_binding
-			WHERE binding_key='bind-e2e-inv'`).Scan(&bindingRev, &bindingActive); err != nil {
-			t.Fatal(err)
-		}
-
-		// republish: new snapshot version 2 with a different digest (the
-		// mock's "internal model change" — same logical profile contract)
-		var pid int64
-		if err := pool.QueryRow(ctx,
-			`SELECT id FROM registry.resource_provider WHERE provider_key='mmr-e2e'`).Scan(&pid); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := pool.Exec(ctx, `
-			INSERT INTO registry.provider_snapshot
-				(provider_id, snapshot_version, contract_version, digest, signature, workload_identity, generated_at, valid_until)
-			VALUES ($1, 2, '2026.09', 'sha256:1111111111111111111111111111111111111111111111111111111111111111', 'sig2', 'spiffe://saoaf.test/ns/default/sa/mmr', now(), now() + interval '1 day')`,
-			pid); err != nil {
-			t.Fatal(err)
-		}
-
-		var bindingRev2 int
-		var bindingActive2 bool
-		if err := pool.QueryRow(ctx, `
-			SELECT revision, is_active FROM registry.capability_binding
-			WHERE binding_key='bind-e2e-inv'`).Scan(&bindingRev2, &bindingActive2); err != nil {
-			t.Fatal(err)
-		}
-		if bindingRev2 != bindingRev || bindingActive2 != bindingActive {
-			t.Fatalf("ARR binding changed across MMR snapshot republish: rev %d→%d active %v→%v (Plan invariance violated)",
-				bindingRev, bindingRev2, bindingActive, bindingActive2)
-		}
-		var snapshots int
-		if err := pool.QueryRow(ctx, `
-			SELECT count(*) FROM registry.provider_snapshot
-			WHERE provider_id = $1 AND snapshot_version IN (1, 2)`, pid).Scan(&snapshots); err != nil {
-			t.Fatal(err)
-		}
-		if snapshots != 2 {
-			t.Fatalf("snapshot versions = %d, want 2 (the republish landed)", snapshots)
-		}
-	})
-}
-
-// Kill switch (GWT#8, the SAOAF half): suspending the provider binding
-// blocks NEW plan items from resolving to it; the in-flight invocation's
-// data-plane outcome is still recorded in the correlation ledger (MMR-side
-// kill switch is MMR-owned per the baseline — mock closure records the
-// ARR-side block + the data-plane bookkeeping).
-func TestMockKillSwitchBlocksNewPlans(t *testing.T) {
-	withDBMMR(t, func(dsn string, pool *pgxpool.Pool) {
-		seedE2ERegistry(t, pool, "bind-e2e-ks")
-		e2ePlan(t, pool, "plan-mock-001")
-		mock := mmrMock(t, 4091)
-		ctx := context.Background()
-
-		// suspend the binding (ARR side of the kill switch — I08 suspend)
-		if _, err := pool.Exec(ctx, `
-			UPDATE registry.capability_binding
-			SET state='SUSPENDED', is_active=FALSE, revision=revision+1
-			WHERE binding_key='bind-e2e-ks'`); err != nil {
-			t.Fatal(err)
-		}
-
-		// new resolution CANNOT select the suspended binding
-		var active int
-		if err := pool.QueryRow(ctx, `
-			SELECT count(*) FROM registry.capability_binding
-			WHERE binding_key='bind-e2e-ks' AND is_active AND state='PUBLISHED'`).Scan(&active); err != nil {
-			t.Fatal(err)
-		}
-		if active != 0 {
-			t.Fatal("suspended binding still resolvable (kill switch failed on the ARR side)")
-		}
-
-		// in-flight request (already planned before the suspend): the data
-		// plane records its outcome — the mock's unavailable example stands
-		// in for the MMR kill switch dropping the backend
-		inv := Invocation{
-			Profile: "reasoning-high-v1", ResourcePlanID: "plan-mock-001",
-			ResourcePlanItemID: "req-ks", TenantRef: "tenant-a",
-			Traceparent: "00-00000000000000000000000000000000-0000000000000000-01",
-		}
-		resp, body := invoke(t, mock, inv, `{"model":"reasoning-high-v1","messages":[{"role":"user","content":"x"}]}`, "code=503")
-		defer resp.Body.Close()
-		decision, derr := inv.DecisionFromError(resp.StatusCode, body)
-		if derr != nil {
-			t.Fatalf("in-flight outcome extraction: %v", derr)
-		}
-		store := &Correlator{Pool: pool}
-		if err := store.Record(ctx, Correlation{
-			ResourcePlanID: inv.ResourcePlanID, ResourcePlanItemID: inv.ResourcePlanItemID,
-			ModelRouteDecisionID: decision, Outcome: OutcomeForStatus(resp.StatusCode),
-			TraceID: "trace-ks",
-		}); err != nil {
-			t.Fatal(err)
-		}
-		var n int
-		if err := pool.QueryRow(ctx, `
-			SELECT count(*) FROM saoaf.model_route_correlation
-			WHERE resource_plan_id='plan-mock-001' AND outcome='FAILED'`).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n != 1 {
-			t.Fatalf("in-flight FAILED outcome rows = %d, want 1 (data plane recorded)", n)
-		}
-	})
-}
-
-// Shadow/灰度 bookkeeping over the mock: shadow-mode invocations still
-// record correlations (the对比 evidence the ledger demands) while the
-// routing mode transitions stay CAS-guarded and audited.
+// Shadow/灰度 bookkeeping over the mock: with the SHADOW mode row in place
+// BEFORE the invocation, the mode machinery reports SHADOW at call time and
+// the shadow call still records its correlation (the对比 evidence the ledger
+// demands); the routing mode transitions stay CAS-guarded and audited.
+// (The Plan-invariance and kill-switch halves of the mock closure live in
+// cmd/control-plane-api/mmr_closure_test.go — they need the resolver and
+// binding packages, which the internal/mmr boundary forbids importing.)
 func TestMockShadowAndGrayModeBookkeeping(t *testing.T) {
 	withDBMMR(t, func(dsn string, pool *pgxpool.Pool) {
 		e2ePlan(t, pool, "plan-mock-001")
 		mock := mmrMock(t, 4092)
 		store := &Correlator{Pool: pool}
 		modes := &ModeStore{Pool: pool}
+		ctx := context.Background()
 
-		// shadow: record the comparison outcome
+		// the SHADOW row exists BEFORE the shadow call (the state machine's
+		// entry state; a rollback would preserve it as the pre-gray config)
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO saoaf.mmr_routing_mode
+				(scope_tenant, scope_agent, mode, static_profile_ref, updated_by)
+			VALUES ('tenant-a', '', 'SHADOW', 'static-fallback-1', 'user:op')
+			ON CONFLICT (scope_tenant, scope_agent) DO NOTHING`); err != nil {
+			t.Fatal(err)
+		}
+		if m, err := modes.Mode(ctx, "tenant-a", ""); err != nil || m.Mode != "SHADOW" {
+			t.Fatalf("mode at call time = %+v (%v), want SHADOW (mode row seeded first)", m, err)
+		}
+
+		// shadow: the invocation happens under SHADOW and its comparison
+		// outcome is recorded
 		inv := Invocation{
 			Profile: "reasoning-high-v1", ResourcePlanID: "plan-mock-001",
 			ResourcePlanItemID: "req-shadow", TenantRef: "tenant-a",
@@ -433,24 +290,26 @@ func TestMockShadowAndGrayModeBookkeeping(t *testing.T) {
 		if err != nil {
 			t.Fatalf("shadow validate: %v", err)
 		}
-		if err := store.Record(context.Background(), Correlation{
+		if m, err := modes.Mode(ctx, "tenant-a", ""); err != nil || m.Mode != "SHADOW" {
+			t.Fatalf("mode after the shadow call = %+v (%v), want SHADOW (call must not flip the mode)", m, err)
+		}
+		if err := store.Record(ctx, Correlation{
 			ResourcePlanID: inv.ResourcePlanID, ResourcePlanItemID: inv.ResourcePlanItemID,
 			ModelRouteDecisionID: decision, Outcome: OutcomeSucceeded, TraceID: "trace-shadow",
 		}); err != nil {
 			t.Fatal(err)
 		}
-
-		// mode transitions: shadow → gray → full with CAS + audit.
-		// Seed the SHADOW row directly (the state machine's entry state —
-		// the issue's rollback preserves it as the pre-gray static config).
-		ctx := context.Background()
-		if _, err := pool.Exec(ctx, `
-			INSERT INTO saoaf.mmr_routing_mode
-				(scope_tenant, scope_agent, mode, static_profile_ref, updated_by)
-			VALUES ('tenant-a', '', 'SHADOW', 'static-fallback-1', 'user:op')
-			ON CONFLICT (scope_tenant, scope_agent) DO NOTHING`); err != nil {
+		var shadowRows int
+		if err := pool.QueryRow(ctx, `
+			SELECT count(*) FROM saoaf.model_route_correlation
+			WHERE resource_plan_id='plan-mock-001' AND trace_id='trace-shadow'`).Scan(&shadowRows); err != nil {
 			t.Fatal(err)
 		}
+		if shadowRows != 1 {
+			t.Fatalf("shadow-mode correlation rows = %d, want 1", shadowRows)
+		}
+
+		// mode transitions: shadow → gray → full with CAS + audit.
 		from := "SHADOW"
 		for _, to := range []string{"GRAY", "FULL"} {
 			if err := modes.SetMode(ctx, RoutingMode{

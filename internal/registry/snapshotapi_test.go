@@ -663,7 +663,10 @@ func TestSnapshotIngestDigestRecompute(t *testing.T) {
 }
 
 // TestSnapshotIngestSignatureVerify (ledger #2): with a configured publisher
-// key, an invalid signature is rejected; the properly signed snapshot passes.
+// key, only a valid ed25519 signature over the digest passes — an unsigned
+// presence-only string AND a properly-formed signature from the WRONG key
+// are both rejected (the wrong-key case is what makes the ed25519.Verify
+// call itself falsifiable).
 func TestSnapshotIngestSignatureVerify(t *testing.T) {
 	withDBReg(t, func(dsn string) {
 		seedProviderReg(t, dsn, "mmr-test")
@@ -672,10 +675,22 @@ func TestSnapshotIngestSignatureVerify(t *testing.T) {
 			t.Fatal(err)
 		}
 		h := newMTLSHarnessPublisherKey(t, dsn, pub)
-		body := ingestBody(1, "")
 		// unsigned (presence-only string) → SIGNATURE_INVALID
+		body := ingestBody(1, "")
 		if code := post(t, h, body); code != http.StatusBadRequest {
 			t.Fatalf("unverified signature = %d, want 400", code)
+		}
+		// wrong key: valid base64, 64 bytes, signed by a different keypair —
+		// only the ed25519.Verify call can catch this one
+		_, wrongPriv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wrong := ingestBody(1, "")
+		wrong["signature"] = base64.StdEncoding.EncodeToString(
+			ed25519.Sign(wrongPriv, []byte(wrong["digest"].(string))))
+		if code := post(t, h, wrong); code != http.StatusBadRequest {
+			t.Fatalf("wrong-key signature = %d, want 400 SIGNATURE_INVALID", code)
 		}
 		// properly signed over the digest → 200
 		sig := ed25519.Sign(priv, []byte(body["digest"].(string)))
@@ -687,22 +702,21 @@ func TestSnapshotIngestSignatureVerify(t *testing.T) {
 }
 
 // TestSnapshotVersionStringForm (ledger #3): snapshot_version arrives as a
-// JSON string (the contract/mock form "1") — accepted and stored as int;
-// non-numeric strings are a typed rejection.
+// JSON string on the wire (the contract/mock form "1") — accepted, stored as
+// int; non-numeric strings are a typed rejection.
 func TestSnapshotVersionStringForm(t *testing.T) {
 	withDBReg(t, func(dsn string) {
 		seedProviderReg(t, dsn, "mmr-test")
 		h := newMTLSHarness(t, dsn)
-		// string-form numeric version
+		// string-form numeric version, POSTed as raw bytes (no re-marshal,
+		// which would revert the edit): the digest binds the DECODED content,
+		// identical for both forms, so ingestBody's digest stays valid
 		body := ingestBody(1, "")
-		b, _ := json.Marshal(body)
-		b = bytes.Replace(b, []byte(`"snapshot_version":1`), []byte(`"snapshot_version":"1"`), 1)
-		var r IngestRequest
-		if err := json.Unmarshal(b, &r); err != nil {
-			t.Fatalf("string version decode: %v", err)
+		b, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
 		}
-		body["digest"] = SnapshotDigest(&r)
-		b, _ = json.Marshal(body)
+		b = bytes.Replace(b, []byte(`"snapshot_version":1`), []byte(`"snapshot_version":"1"`), 1)
 		resp, err := h.client.Post(h.srv.URL+"/providers/mmr-test/snapshots", "application/json", bytes.NewReader(b))
 		if err != nil {
 			t.Fatal(err)
@@ -710,6 +724,22 @@ func TestSnapshotVersionStringForm(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("string-form version = %d, want 200 (type unification)", resp.StatusCode)
+		}
+		// stored as int: the string form lands as integer 1 in the DB chain
+		ctx := context.Background()
+		conn, err := pgx.Connect(ctx, dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close(ctx)
+		var stored int
+		if err := conn.QueryRow(ctx,
+			`SELECT snapshot_version FROM registry.provider_snapshot WHERE provider_id =
+			 (SELECT id FROM registry.resource_provider WHERE provider_key='mmr-test')`).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored != 1 {
+			t.Fatalf("stored snapshot_version = %d (type %T), want int 1", stored, stored)
 		}
 		// non-numeric string → typed rejection (mutate the MAP, not the
 		// marshaled bytes — a second Marshal would revert the edit)

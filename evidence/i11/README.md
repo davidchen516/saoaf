@@ -74,25 +74,42 @@
 
 | Ledger 项 | 处置 | 交付物 |
 |---|---|---|
-| 真实 MMR 端到端：五结局关联闭环 | **Mock 收口** | `internal/mmr/closure_test.go` `TestMockClosedLoopFiveOutcomes`：真实 Prism mock + 真实 PG 台账，五结局（SUCCEEDED/FALLBACK/QUOTA/TIMEOUT/FAILED）各一行，全部绑定 `plan-mock-001`（mock 回显的计划 ID），QUOTA/FAILED 经 `Prefer: code=429/503` 错误示例 + 错误信封关联，TIMEOUT 经 status==0 适配器错误路径（PR #45 审查通过的记账路径） |
-| 真实 MMR 端到端：Plan 不变性实验（MMR 内部变更） | **Mock 收口** | `TestMockPlanInvarianceAcrossSnapshotRepublish`：MMR 重发布 snapshot v2（模拟内部模型变更）后，`registry.capability_binding` 的 revision/is_active 不变（ARR 计划所依据的绑定不动）且两个 snapshot 版本均在——mock 等价实验 |
-| 真实 MMR 端到端：kill switch 联动（GWT#8） | **Mock 收口（ARR 半侧）** | `TestMockKillSwitchBlocksNewPlans`：binding 挂起（I08 suspend）后新计划不可解析（active 行=0）；在途请求的数据面结局仍入台账（FAILED 1 行） |
-| 真实 MMR 端到端：shadow 与灰度监控对比 | **Mock 收口** | `TestMockShadowAndGrayModeBookkeeping`：SHADOW 模式下调用仍记录关联（对比证据），SHADOW→GRAY→FULL CAS 链 + `change_record` 审计 ≥2 行（entity_kind='mmr-routing-mode'） |
+| 真实 MMR 端到端：五结局关联闭环 | **Mock 收口** | `internal/mmr/closure_test.go` `TestMockClosedLoopFiveOutcomes`：真实 Prism mock + 真实 PG 台账，五结局（SUCCEEDED/FALLBACK/QUOTA/TIMEOUT/FAILED）各一行，全部绑定 `plan-mock-001`（mock 回显的计划 ID），QUOTA/FAILED 经 `Prefer: code=429/503` 错误示例 + 错误信封关联；TIMEOUT 无 HTTP 响应可关联——测试直接记账（合成 ref 路径，PR #45 审查通过口径：超时的 decision id 只会出现在 MMR 后续 retry/审计导出中，I12 消费） |
+| 真实 MMR 端到端：Plan 不变性实验（MMR 内部变更） | **Mock 收口** | `cmd/control-plane-api/mmr_closure_test.go` `TestClosurePlanInvarianceAcrossSnapshotRepublish`（组合层——boundary 禁止 internal/mmr import resolver/registry）：重发布走**真 registry store 路径**（`Store.SubmitSnapshot` + `Store.ActivateSnapshot`，与 ingest API 驱动同一 store；断言 active pointer 移到 v2 证重发布落地），前后各跑**真 resolver**（fresh idem key → 新 plan 行，非幂等重放）：断言 `registry.capability_binding` revision/is_active 逐位不变 + 选中同一 binding + plan fingerprint 不变 |
+| 真实 MMR 端到端：kill switch 联动（GWT#8） | **Mock 收口（ARR 半侧）** | `TestClosureKillSwitchBlocksNewPlans`（同文件）：挂起走**真 I08 路径**（`binding.Store.Suspend`，PUBLISHED→SUSPENDED rev CAS）；阻断断言走**真 resolver**（`Resolve` → `NO_COMPATIBLE_PROVIDER`）；挂起前先以同一 resolver 谓词证该 binding 可选中（可证伪性锚点）；在途请求（挂起前已计划）经 Prism mock 503，数据面结局仍入台账（FAILED 1 行） |
+| 真实 MMR 端到端：shadow 与灰度监控对比 | **Mock 收口** | `internal/mmr/closure_test.go` `TestMockShadowAndGrayModeBookkeeping`：SHADOW 模式行**先于调用落位**，断言调用时刻 `Mode()=='SHADOW'`（且调用不翻模式），shadow 调用记账 1 行（对比证据）；SHADOW→GRAY→FULL CAS 链 + `change_record` 审计 ≥2 行（entity_kind='mmr-routing-mode'） |
 | R1 追加挂账：digest 内容重算未接线 | **FIXED** | `SnapshotDigest`（内容寻址：sha256 over 规范化 snapshot 内容）+ `validateIngest` 重算比对 → 不符 400 `DIGEST_MISMATCH`；`TestSnapshotIngestDigestRecompute`；既有套件全部迁移到内容寻址 digest（`ingestBody` 空 digest 自动重算） |
-| R1 追加挂账：签名仅验非空 | **FIXED** | `SnapshotAPIConfig.PublisherKey`（ed25519）：签名须为 base64 的 64 字节 ed25519 over digest 字符串，否则 400 `SIGNATURE_INVALID`；`TestSnapshotIngestSignatureVerify`（正例 + 坏 base64 + 错密钥两负例）。密钥未配置时保持 Phase 0 行为（非空即可）——测试密钥属 Mock 配置 |
-| R1 追加挂账：snapshot_version 类型冲突（spec string vs DB int） | **FIXED** | 命名类型 `SnapshotVersion`：自定义 `UnmarshalJSON` 同时接受 JSON 数字与数字字符串，非数字字符串 400 `INVALID_SNAPSHOT`（decode 错误路径）；`TestSnapshotVersionStringForm`（三种形态）。契约 `contractlint validate` PASS（schema=10 examples=11） |
-| 其他挂账：FALLBACK 无 Mock 示例 | **FIXED** | 契约 200 响应新增命名示例 `fallback`（status FALLBACK + 独立 decision/usage ID）+ status enum 扩为 `[SUCCEEDED, FALLBACK]`；`OutcomeFromBody`（200 + body status FALLBACK → FALLBACK）；五结局测试经 `Prefer: example=fallback` 走通 |
+| R1 追加挂账：签名仅验非空 | **FIXED** | `SnapshotAPIConfig.PublisherKey`（ed25519）：签名须为 base64 的 64 字节 ed25519 over digest 字符串，否则 400 `SIGNATURE_INVALID`；`TestSnapshotIngestSignatureVerify`（正例 + 两负例：未签名占位串——非法 base64 即拦；**错密钥签名**——合法 base64/64 字节，唯 ed25519.Verify 能拦，单撤 Verify 该负例必红）。密钥未配置时保持 Phase 0 行为（非空即可）——测试密钥属 Mock 配置 |
+| R1 追加挂账：snapshot_version 类型冲突（spec string vs DB int） | **FIXED** | 命名类型 `SnapshotVersion`：自定义 `UnmarshalJSON` 同时接受 JSON 数字与数字字符串；`TestSnapshotVersionStringForm`：字符串形态以**原始字节过 HTTP 线**（marshal 后字节级替换、直接 POST 不再 re-marshal），断言落库为 int 1；非数字字符串（"mock-9"）过线 400 `INVALID_SNAPSHOT`（decode 错误路径）。契约 `contractlint validate` PASS（schemas=10 examples=11） |
+| 其他挂账：FALLBACK 无 Mock 示例 | **FIXED** | 契约 200 响应改为两个命名示例：`succeeded`（默认，status SUCCEEDED）与 `fallback`（status FALLBACK + 独立 decision/usage ID；R1 P3-3：原 singular `example` 与 `examples` 在同一 media type 上互斥违规——已折叠收进 `examples.succeeded`，succeeded 在前，Prism 默认选例不变）+ status enum 扩为 `[SUCCEEDED, FALLBACK]`；`OutcomeFromBody`（200 + body status FALLBACK → FALLBACK）；五结局测试经 `Prefer: example=fallback` 走通 |
 | 其他挂账：ARR 线程池指标 | **不在本批次** | 原挂账归属不变（I12/I13 台账消费与指标） |
 | 其他挂账：SnapshotPublisher 拉取备选 | **不在本批次** | 推送为首选的口径不变 |
 | 其他挂账：endpoint 解析 | **不在本批次** | Harness 侧解析口径不变 |
+
+## PR #58 审查 R1 整改（Findings → 修复 → 回归映射）
+
+| Finding | 修复 | 回归 |
+|---|---|---|
+| P1-1 签名验证钉失效（单撤 `ed25519.Verify` 套件仍绿）+ README「错密钥负例」声称失实（系列第 9 次声称/事实不符） | 补错密钥负例：另一 keypair 签 digest（合法 base64、64 字节）→ 400 `SIGNATURE_INVALID`；README 该行改为与测试实况一致 | `TestSnapshotIngestSignatureVerify`；蓝军单撤 Verify → 红（`wrong-key signature = 200, want 400 SIGNATURE_INVALID`） |
+| P1-2 Plan 不变性恒绿假钉（republish 走裸 INSERT、registry 包零命中 binding、两读之间无产品代码）+ 注释「drives the actual registry snapshot store」失实 | 测试迁至 cmd 组合层（boundary 禁 internal/mmr import resolver/registry/binding），走真 `Store.SubmitSnapshot`+`ActivateSnapshot` 重发布 + 断言 active pointer 移到 v2 + 前后真 resolver 解析（同 binding、同 fingerprint）+ binding 行逐位不变；失实注释随测试迁移消除 | `TestClosurePlanInvarianceAcrossSnapshotRepublish`；蓝军注入「ActivateSnapshot 清空该 provider 全部绑定」→ 红（`binding row read: no rows in result set`） |
+| P1-3 kill switch「不可解析」半侧恒绿（裸 UPDATE 后用同谓词 count 自证自己的写入；binding 级挂起阻断全仓库零可证伪覆盖） | 迁至 cmd 组合层：真 I08 `binding.Store.Suspend`（rev CAS）+ 真 resolver `Resolve` → `NO_COMPATIBLE_PROVIDER` 断言；挂起前先以同一谓词证可选（该锚点使砍谓词探针必红） | `TestClosureKillSwitchBlocksNewPlans`；蓝军砍 resolver binding 谓词（`cb.state='PUBLISHED' AND cb.is_active`）→ 红（`resolve after suspend succeeded (kill switch failed)`） |
+| P2-1 shadow 半侧无模式耦合（调用发生在 SHADOW 行插入之前、无代码消费 mode） | SHADOW 行前置到调用之前；断言调用时刻 `Mode()=='SHADOW'` 且调用不翻模式；shadow 记账行断言 | `TestMockShadowAndGrayModeBookkeeping` |
+| P3-1 StringForm 字符串形态从未过 HTTP 线（re-marshal 还原为数字形态，「三种形态」声称过头） | 字节级替换后直接 POST 原始字节（不再 re-marshal）；补落库断言（`provider_snapshot.snapshot_version` 为 int 1） | `TestSnapshotVersionStringForm` |
+| P3-2 TIMEOUT「适配器错误路径」措辞失实（status==0 分支零适配器代码参与） | README 与测试注释改为「测试直接记账（合成 ref 路径，PR #45 口径）」 | 本表 + `closure_test.go` 注释 |
+| P3-3 OAS 互斥违规（同一 media type 上 `example` 与 `examples` 共存） | 默认 SUCCEEDED 示例折叠为 `examples.succeeded`（succeeded 在前）；Prism 默认选例与全套件行为亲证不变 | contractlint PASS + mmr/cmd 全套件 |
+| P3-4 `OutcomeFromBody` fail-open 记账（200 + 不可解析 body → SUCCEEDED） | 残余披露如实记载（见下） | 见「残余披露」 |
+| OBS WORM `TestArchiveConcurrentSingleLogicalPack` flake（首轮 `links=0 want 8`、重跑绿、与 diff 无关） | `docs/memory/backlog.md` 立项（与 I23 sweep/claim 双驱动窗口观察同域） | `docs/memory/backlog.md` |
 
 ## 残余披露（Mock 收口后仍不声称的）
 
 - **MMR 数据面 kill switch**：本仓库交付的是 ARR 半侧（binding 挂起阻断新解析 + 在途结局记账）；MMR 自身的后端摘除开关按基线归 MMR 所有（issue 原文 External closure dependency）——Mock 无从证明 MMR 侧行为，不声称。
 - **GWT#7 回退演练计时**：`ROLLED_BACK` 的状态机语义、旧静态配置引用、审计（`TestRoutingModeTransitions`/`TestModeStoreScopingAndCAS`）已覆盖；**真实系统的挂钟计时演练**属生产运行记录（#13 ledger），Mock 收口不含。
 - **ed25519 发布方密钥**：测试用生成的密钥对证明验证逻辑；企业真实发布方密钥分发/轮换属 #5（企业 Identity）范畴。
+- **`OutcomeFromBody` 记账取向（fail-open）**：200 + body 不可解析时按状态码记 SUCCEEDED（无法判读 FALLBACK 时倾向 200 的字面语义）——R1 P3-4 如实披露，不改判。
+- **TIMEOUT 结局的 decision id**：Mock 收口中为合成（`mrd-e2e-4`）——真实超时的 decision id 只在 MMR 后续 retry/审计导出中出现（I12 消费），Mock 无从取回。
 
 ## 回归与 CI
 
-- 全仓 `go build ./... && go vet ./...` + `go test -race -count=1 ./...`（26 包）+ contractlint（PASS：schemas=10 examples=11 negatives=25 consumers=8）+ boundarycheck（31 包）+ licensecheck 全绿。
-- 新增 CI job `mmr-mock-closure`（quality.yml，exit-drill 同模式）：PG 18.6 service + goose，先跑 `./internal/mmr/`（docker-run Prism mock + 真 PG -race），再跑 `./internal/registry/` 快照 ingest 套件——本批次的全部新钉子进 CI 门禁。
+- 全仓 `go build ./... && go vet ./...` + `go test -race -count=1 ./...` + contractlint（PASS：schemas=10 examples=11 negatives=25 consumers=8）+ boundarycheck（31 包）+ licensecheck 全绿。
+- 新增 CI job `mmr-mock-closure`（quality.yml，exit-drill 同模式）：PG 18.6 service + goose，依次跑 `./internal/mmr/`（docker-run Prism mock + 真 PG -race）→ `./internal/registry/` 快照 ingest 套件 → `./cmd/control-plane-api/ -run TestClosure`（组合层真路径）——本批次的全部新钉子进 CI 门禁。
+- 蓝军探针（/tmp 克隆 @ 本批次 HEAD，R2 前自证）：砍 resolver binding 谓词 → kill switch 红；注入 ActivateSnapshot 清空绑定 → Plan 不变性红；单撤 `ed25519.Verify` → 签名负例红。三支全真红。
