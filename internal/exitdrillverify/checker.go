@@ -115,8 +115,10 @@ func (c Checker) VerifyDrillChainScoped(ctx context.Context, drillKey string, pl
 	}
 	// A completion state without finished_at leaves the attribution window
 	// open-ended (COALESCE(finished_at, now()) would absorb traffic forever
-	// — review R3 P3). The datum is untrustworthy: break.
-	if drillState == "SUCCEEDED" || drillState == "CLOSED" {
+	// — review R3 P3; R4 extended the guard to ALL completion states: the
+	// REMEDIATION_OPEN hole let a 30-day-old drill claim today's traffic).
+	// The datum is untrustworthy: break.
+	if drillState == "SUCCEEDED" || drillState == "REMEDIATION_OPEN" || drillState == "CLOSED" {
 		var finished *time.Time
 		if ferr := c.Pool.QueryRow(ctx,
 			`SELECT finished_at FROM saoaf.exit_drill WHERE drill_key = $1`, drillKey).

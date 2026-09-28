@@ -52,7 +52,7 @@
 | P2-2 14MB 二进制误提交 | git rm + .gitignore（历史清洗待 David 决策） | — |
 | P3-1 exit_pack 忽略 drill.exit_pack_key（错误指针被 vendor 兜底吞掉） | JOIN **drill 自己的 pack 指针**（legacy 空指针才 vendor 兜底）+ state ∈ ACTIVE/VALIDATED 过滤 | TestDrillPackPointerHonored（SUPERSEDED 指针 → break） |
 | P3-2 audit 只数行数（单行伪造通过） | 必须存在 **→APPROVED 且 actor 非空** 的转移（I15 审批人≠发起人不变量） | TestAuditRequiresApprovalStep |
-| P3-3 psql local 分支硬编码 host/port | 修为 **DSN 解析 host:port+password**（TCP 强制）——CI 兼容 | CI 绿 |
+| P3-3 psql local 分支硬编码 host/port | 修为：解析 **password** + 强制 TCP（host 127.0.0.1，**端口默认 5432**——CI service 布局）；非 5432 部署走 docker fallback 分支（该分支解析端口）。R3 复验揭穿本行旧口径「DSN 解析 host:port+password」为不实——R4 已改 | 脚本注释 + 本行 |
 | P3-4 「六类 typed error」措辞失实 | 包注释改为如实：drill 缺失=typed error；**其余断链=具名 Chain.Breaks + NO-GO**；实现统一 | 文本 |
 
 整改后：检查器 **14/14**（真 PG -race：原 10 + 四个 R1 探针收编）；彩排 8/8（归因对齐）。
@@ -78,7 +78,7 @@ R2 核心命中：归因修复的「双向钉子」声称与事实不符（悬�
 |---|---|---|
 | R3-P2-A 导出物零归因披露（exact/fallback 不可区分；-plan 不留痕） | **Chain 增 attribution_mode + attribution_plans 字段**（JSON 导出常驻——签字审的就是这份 artifact）；洗白/瞒报探针的关联面由此可审计 | TestChainExportDisclosesAttribution（两模式导出 + JSON 往返保字段） |
 | R3-P1 legacy 修复声称不实 + 恒绿假钉 + 掩蔽 fixture（第 7 次声称/事实不符） | **真修**：correlation 查询 substitute 分支的 COALESCE 真对齐 step 2（vendor 兜底 pack 参与归因）；假钉重写为**双向硬断言**；fixture 用真 vendor-v 场景（不再绕分支） | 重写版 TestLegacyDrillFallbackScope |
-| R3-P3 finished_at NULL 窗口开放（完成态吸收永远流量） | 完成态（SUCCEEDED/CLOSED）缺 finished_at → **break**（数据不可信） | TestCompletionWithoutFinishedAtBreaks |
+| R3-P3 finished_at NULL 窗口开放（完成态吸收永远流量） | **全部三个完成态**（SUCCEEDED/REMEDIATION_OPEN/CLOSED）缺 finished_at → **break**（R4 探针揭穿 REMEDIATION_OPEN 残洞——本轮补齐） | TestCompletionWithoutFinishedAtBreaks + REMEDIATION_OPEN 变体 |
 | R3-P3 psql/悬挂/R2 表行三处措辞 | 上方三行修正（R1 旧行删除、口径与行为一致） | 文本 |
 
 整改后：检查器 **19/19**（真 PG -race：17 + 导出披露 + finished_at）；彩排 8/8。

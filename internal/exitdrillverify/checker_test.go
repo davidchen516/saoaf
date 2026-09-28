@@ -673,3 +673,35 @@ func TestCompletionWithoutFinishedAtBreaks(t *testing.T) {
 		}
 	})
 }
+
+// TestRemediationOpenWithoutFinishedAtBreaks (R4 probe collected): the
+// REMEDIATION_OPEN completion state previously escaped the finished_at
+// guard — a 30-day-old drill could claim today's traffic for a GO.
+func TestRemediationOpenWithoutFinishedAtBreaks(t *testing.T) {
+	withDBV(t, func(dsn string, pool *pgxpool.Pool) {
+		seedFullChain(t, pool)
+		ctx := context.Background()
+		if _, err := pool.Exec(ctx, `
+			UPDATE saoaf.exit_drill
+			SET state='REMEDIATION_OPEN', finished_at=NULL
+			WHERE drill_key='drill-v'`); err != nil {
+			t.Fatal(err)
+		}
+		ch, err := (Checker{Pool: pool}).VerifyDrillChain(ctx, "drill-v")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ch.Complete {
+			t.Fatal("REMEDIATION_OPEN without finished_at passed (unbounded window — R4 probe)")
+		}
+		found := false
+		for _, b := range ch.Breaks {
+			if strings.Contains(b, "finished_at") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected the finished_at break; got %v", ch.Breaks)
+		}
+	})
+}
