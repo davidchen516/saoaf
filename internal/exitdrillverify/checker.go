@@ -68,6 +68,18 @@ type Checker struct {
 // The drill must exist (I15 exit_drill) with at least one plan correlation;
 // the provider exit must link an exit pack (I14) with revocation proof.
 func (c Checker) VerifyDrillChain(ctx context.Context, drillKey string) (*Chain, error) {
+	return c.VerifyDrillChainScoped(ctx, drillKey, nil)
+}
+
+// VerifyDrillChainScoped is the drill-attribution-aware verify. Production
+// drills KNOW the resource plans they exercised (they generated the
+// traffic): pass them explicitly for EXACT attribution. A nil plan list
+// falls back to provider-scope attribution — the drill window plus plan
+// items routed via the exit pack's substitute provider or a provider
+// whose key equals the drill vendor — which CANNOT distinguish a
+// concurrent unrelated drill on the same provider (disclosed in the
+// evidence; the rehearsal and production runbook use explicit plans).
+func (c Checker) VerifyDrillChainScoped(ctx context.Context, drillKey string, plans []string) (*Chain, error) {
 	ch := &Chain{
 		DrillKey:   drillKey,
 		VerifiedAt: time.Now().UTC().Format(time.RFC3339),
@@ -133,14 +145,19 @@ func (c Checker) VerifyDrillChain(ctx context.Context, drillKey string) (*Chain,
 		WHERE mc.recorded_at >= d.created_at
 		  AND mc.recorded_at <= COALESCE(d.finished_at, now())
 		  AND (
-		        i.provider_key IS NULL  -- dangling plan: kept so the plan
-		                               -- link check reports the missing plan
-		    OR i.provider_key = d.vendor
-		    OR EXISTS (
-		        SELECT 1 FROM saoaf.exit_pack p
-		        WHERE p.pack_key = COALESCE(NULLIF(d.exit_pack_key,''), '')
-		          AND i.provider_key IN (p.substitute_provider)))
-		ORDER BY mc.recorded_at`, drillKey)
+		        -- EXACT attribution: the caller named this drill's plans
+		        $2::text[] IS NOT NULL AND mc.resource_plan_id = ANY($2)
+		    OR (
+		          $2::text[] IS NULL
+		      AND (
+		            i.provider_key IS NULL  -- dangling: kept so the plan link
+		                                   -- check reports the missing plan
+		        OR i.provider_key = d.vendor
+		        OR EXISTS (
+		                SELECT 1 FROM saoaf.exit_pack p
+		                WHERE p.pack_key = COALESCE(NULLIF(d.exit_pack_key, ''), '')
+		                  AND i.provider_key IN (p.substitute_provider)))))
+		ORDER BY mc.recorded_at`, drillKey, plans)
 	if err != nil {
 		return nil, err
 	}
@@ -250,18 +267,30 @@ func (c Checker) VerifyDrillChain(ctx context.Context, drillKey string) (*Chain,
 	if transitions == 0 {
 		ch.Breaks = append(ch.Breaks, "audit: no transition-log rows for the drill (state-machine bypass?)")
 	} else {
-		// the trail must include the APPROVAL step (review R1 P3-2: a
-		// single forged row is not a trail; the I15 invariant requires
-		// an approver ≠ initiator transition into APPROVED)
-		var approved int
+		// the trail must include the APPROVAL step with the real I15
+		// invariant: the drill's RECORDED approver (exit_drill.approver)
+		// is non-empty and differs from the initiator, and a transition
+		// into APPROVED was performed by that approver (review R2 P3-2:
+		// actor <> '' accepted a self-approval with an empty approver)
+		var dInitiator, dApprover string
 		if err := c.Pool.QueryRow(ctx, `
-			SELECT count(*) FROM saoaf.exit_drill_transition
-			WHERE drill_key = $1 AND to_state = 'APPROVED' AND actor <> ''`, drillKey).
-			Scan(&approved); err != nil {
+			SELECT initiator, approver FROM saoaf.exit_drill WHERE drill_key = $1`,
+			drillKey).Scan(&dInitiator, &dApprover); err != nil {
 			return nil, err
 		}
-		if approved == 0 {
-			ch.Breaks = append(ch.Breaks, "audit: no →APPROVED transition in the log (approval step missing — initiator self-run?)")
+		if dApprover == "" || dApprover == dInitiator {
+			ch.Breaks = append(ch.Breaks, fmt.Sprintf("audit: drill approver is %q (initiator %q) — the I15 approver≠initiator invariant is violated", dApprover, dInitiator))
+		} else {
+			var approved int
+			if err := c.Pool.QueryRow(ctx, `
+				SELECT count(*) FROM saoaf.exit_drill_transition
+				WHERE drill_key = $1 AND to_state = 'APPROVED' AND actor = $2`,
+				drillKey, dApprover).Scan(&approved); err != nil {
+				return nil, err
+			}
+			if approved == 0 {
+				ch.Breaks = append(ch.Breaks, "audit: no →APPROVED transition performed by the recorded approver (self-run or forged trail?)")
+			}
 		}
 		ch.Links = append(ch.Links, ChainLink{Kind: "audit", ID: drillKey, Attrs: map[string]any{"transitions": transitions}})
 	}

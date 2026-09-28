@@ -180,8 +180,10 @@ SAOAF_TEST_PG_DSN=... GOOSE_BIN=... ./scripts/exit-drill-rehearsal.sh
 生产演练后导出并核验证据链（Go/No-Go 输入）：
 
 ```bash
-exit-chain-verify -dsn <prod-dsn> -drill <drill-key>            # 核验 + 导出（NO-GO until sign-off）
-exit-chain-verify -dsn <prod-dsn> -drill <drill-key> -arr-zero -agent-zero  # 操作者签字后
+# 显式归因（推荐：生产演练登记它驱动的 plan 集——provider-scope fallback
+# 无法区分同 provider 上的并发流量）
+exit-chain-verify -dsn <prod-dsn> -drill <drill-key> -plan <plan1,plan2>   # 核验 + 导出（NO-GO until sign-off）
+exit-chain-verify -dsn <prod-dsn> -drill <drill-key> -plan <plan1,plan2> -arr-zero -agent-zero  # 操作者签字后
 ```
 
 零变更对比（签字前置）：

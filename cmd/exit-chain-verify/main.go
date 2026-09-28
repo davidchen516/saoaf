@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,6 +31,7 @@ import (
 func main() {
 	dsn := flag.String("dsn", os.Getenv("SAOAF_DB_DSN"), "PostgreSQL DSN (or SAOAF_DB_DSN)")
 	drill := flag.String("drill", "", "exit drill key to verify")
+	plans := flag.String("plan", "", "comma-separated resource plan ids this drill exercised (EXACT attribution; empty = provider-scope fallback — see the runbook)")
 	arrZero := flag.Bool("arr-zero", false, "ARR config zero-change proof signed off (run the runbook diff first)")
 	agentZero := flag.Bool("agent-zero", false, "Agent code zero-change proof signed off (run the runbook diff first)")
 	flag.Parse()
@@ -48,7 +50,15 @@ func main() {
 	}
 	defer pool.Close()
 
-	ch, err := (exitdrillverify.Checker{Pool: pool}).VerifyDrillChain(ctx, *drill)
+	var planList []string
+	if *plans != "" {
+		for _, p := range strings.Split(*plans, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				planList = append(planList, p)
+			}
+		}
+	}
+	ch, err := (exitdrillverify.Checker{Pool: pool}).VerifyDrillChainScoped(ctx, *drill, planList)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "chain verify failed: %v\n", err)
 		os.Exit(1)

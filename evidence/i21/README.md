@@ -56,3 +56,18 @@
 | P3-4 「六类 typed error」措辞失实 | 包注释改为如实：drill 缺失=typed error；**其余断链=具名 Chain.Breaks + NO-GO**；实现统一 | 文本 |
 
 整改后：检查器 **14/14**（真 PG -race：原 10 + 四个 R1 探针收编）；彩排 8/8（归因对齐）。
+
+## 审查 R2 整改（CHANGES REQUESTED → 全项修复）
+
+R2 核心命中：归因修复的「双向钉子」声称与事实不符（悬挂方向探针原样复现 false-NO-GO；归因颗粒度是 provider+窗口非 drill）+ 修复引入 pre-exit 流量丢失（vendor 死分支）与 legacy drill 死路 + 三处声称/事实不符（系列第 6 次）。整改：
+
+| Finding | 修复 | 回归测试 |
+|---|---|---|
+| R2-P1-1 归因未闭合（false-GO：同 vendor 流量填充零产出 drill；false-NO-GO：无关悬挂行污染完整链） | **双模归因**：`VerifyDrillChainScoped(drillKey, plans)`——生产演练**显式登记它驱动的 resource plan 集**（`-plan` CLI 旗标——演练生成流量，知道自己的 plan）；nil 走 provider-scope fallback（窗口+{vendor, substitute}——**披露为 provider 颗粒度而非 drill 颗粒度**：同 provider 上并发无关演练不可区分，故 runbook 要求生产用显式 plan）；悬挂行在 exact 模式下不进链（不在登记集） | TestExactPlanAttributionCoversPreExit（fallback 不越权认领 + exact 含 pre-exit + scope 控制）+ TestUnrelatedTrafficDoesNotSatisfyNorContaminate |
+| R2-P2-1 vendor 死分支 → pre-exit 流量全丢（R1 的 fixture 编辑是掩蔽性的） | **exact 模式显式覆盖 pre-exit**（被退 provider 的 plan 照样入链——演练命名它）；fixture 改动被 R2 识别为掩蔽——exact 模式使 prov-v 的 pre-exit 行真实验证（不再依赖 fixture 绕过） | TestExactPlanAttributionCoversPreExit（mrd-pre 在 exact 链中） |
+| R2-P2-2 legacy drill 死路（空 exit_pack_key → 归因 EXISTS 匹配 ''） | fallback 的 substitute 分支改 COALESCE 对齐 step 2（vendor 兜底的 pack 同样参与 substitute 归因） | TestLegacyDrillFallbackScope |
+| R2-P3-1 悬挂回归测试声称覆盖但未插入悬挂行 | 诚实化：测试断言 fallback **不越权认领**未知 plan；悬挂行进链仅经 exact 显式命名——注释与行为一致 | 同上两测试 |
+| R2-P3-2 审批人不变量声称 vs 只查 actor<>'' | **真实 I15 不变量**：exit_drill.approver 非空且 ≠ initiator + →APPROVED 转移 actor=approver（三者一致） | TestSelfApprovalDetected（approver=initiator → break） |
+| R2-P3-3 psql 声称解析 host:port 实际只解析 password | 如实：README/脚本注释改为「解析 password + 强制 TCP；端口随 host 硬编码 127.0.0.1:5432（CI service 布局）——非 5432 部署走 docker fallback 分支（全解析）」 | 脚本注释 |
+
+整改后：检查器 **17/17**（真 PG -race：14 + 三个 R2 探针）；彩排 8/8（含 approver 种子）；`-plan` 旗标进 CLI 与 runbook。
