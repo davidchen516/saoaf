@@ -108,3 +108,9 @@ func requestIDFrom(ctx context.Context) string {
 	}
 	return "00000000-0000-0000-0000-000000000000"
 }
+
+// SetTimeout tunes the HTTP budget (tests inject tight budgets; the
+// fail-closed semantics are unchanged).
+func (c *PDPClient) SetTimeout(d time.Duration) {
+	c.httpClient.Timeout = d
+}

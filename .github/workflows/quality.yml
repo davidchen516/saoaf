@@ -216,6 +216,45 @@ jobs:
       - name: run migration gate (empty + upgrade + interrupt + permissions + constraints)
         run: go test -race -count=1 -v ./migrations
 
+  identity-contract:
+    name: identity contract (real Keycloak + AuthZEN + approval)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: run the identity mock stack (Keycloak realm import + Prism contracts)
+        run: |
+          docker network create identity-e2e || true
+          docker run -d --name kc --network identity-e2e \
+            -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
+            -v "$PWD/mocks/identity/keycloak/realm-saoaf-dev.json:/opt/keycloak/data/import/realm-saoaf-dev.json:ro" \
+            -p 127.0.0.1:8080:8080 quay.io/keycloak/keycloak:26.7.4 start-dev --import-realm
+          docker run -d --name pdp --network identity-e2e \
+            -v "$PWD/mocks/identity/authzen/openapi.yaml:/contracts/openapi.yaml:ro" \
+            -p 127.0.0.1:4010:4010 stoplight/prism:5.15.10 mock -h 0.0.0.0 --errors --multiprocess=false /contracts/openapi.yaml
+          docker run -d --name appr --network identity-e2e \
+            -v "$PWD/mocks/identity/approval/openapi.yaml:/contracts/openapi.yaml:ro" \
+            -p 127.0.0.1:4011:4010 stoplight/prism:5.15.10 mock -h 0.0.0.0 --errors --multiprocess=false /contracts/openapi.yaml
+          for i in $(seq 1 60); do
+            curl -sf "http://127.0.0.1:8080/realms/saoaf-dev/.well-known/openid-configuration" >/dev/null 2>&1 && break
+            sleep 2
+          done
+          curl -sf "http://127.0.0.1:8080/realms/saoaf-dev/.well-known/openid-configuration" >/dev/null
+      - name: run the identity contract suite (e2e + fail-closed + SoD)
+        env:
+          SAOAF_E2E_IDENTITY: "1"
+          SAOAF_E2E_ISSUER: http://127.0.0.1:8080/realms/saoaf-dev
+          SAOAF_E2E_PDP_URL: http://127.0.0.1:4010
+          SAOAF_E2E_APPROVAL_URL: http://127.0.0.1:4011
+          KC_URL: http://127.0.0.1:8080
+          KC_BOOTSTRAP_ADMIN_USERNAME: admin
+          KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+        run: |
+          go test -race -count=1 -v -run "TestIdentityE2E|TestPDPEveryFailureClassFailsClosed|TestPDPFlappingNeverDegradesToAllow|TestApprovalRetryIdempotent|TestApprovalSelfApprovalRefused|TestApprovalOutageFailsClosed" ./internal/platform/
+
   worm-archive:
     name: evidence WORM archive (real PG + S3 object lock)
     runs-on: ubuntu-latest
