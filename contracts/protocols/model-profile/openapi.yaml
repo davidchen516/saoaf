@@ -77,23 +77,21 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ChatResponse'}
+              example:
+                id: chatcmpl-mock-001
+                object: chat.completion
+                created: 1789984800
+                model: reasoning-high-v1
+                choices:
+                  - index: 0
+                    message: {role: assistant, content: 'MMR mock response'}
+                    finish_reason: stop
+                usage: {prompt_tokens: 2, completion_tokens: 3, total_tokens: 5}
+                model_route_decision_id: mrd-mock-001
+                resource_plan_id: plan-mock-001
+                status: SUCCEEDED
+                usage_ref: usage-mock-001
               examples:
-                succeeded:
-                  summary: Mock routed completion (correlation outcome SUCCEEDED)
-                  value:
-                    id: chatcmpl-mock-001
-                    object: chat.completion
-                    created: 1789984800
-                    model: reasoning-high-v1
-                    choices:
-                      - index: 0
-                        message: {role: assistant, content: 'MMR mock response'}
-                        finish_reason: stop
-                    usage: {prompt_tokens: 2, completion_tokens: 3, total_tokens: 5}
-                    model_route_decision_id: mrd-mock-001
-                    resource_plan_id: plan-mock-001
-                    status: SUCCEEDED
-                    usage_ref: usage-mock-001
                 fallback:
                   summary: Served via fallback backend (correlation outcome FALLBACK)
                   value:

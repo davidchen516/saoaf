@@ -81,7 +81,7 @@
 | R1 追加挂账：digest 内容重算未接线 | **FIXED** | `SnapshotDigest`（内容寻址：sha256 over 规范化 snapshot 内容）+ `validateIngest` 重算比对 → 不符 400 `DIGEST_MISMATCH`；`TestSnapshotIngestDigestRecompute`；既有套件全部迁移到内容寻址 digest（`ingestBody` 空 digest 自动重算） |
 | R1 追加挂账：签名仅验非空 | **FIXED** | `SnapshotAPIConfig.PublisherKey`（ed25519）：签名须为 base64 的 64 字节 ed25519 over digest 字符串，否则 400 `SIGNATURE_INVALID`；`TestSnapshotIngestSignatureVerify`（正例 + 两负例：未签名占位串——非法 base64 即拦；**错密钥签名**——合法 base64/64 字节，唯 ed25519.Verify 能拦，单撤 Verify 该负例必红）。密钥未配置时保持 Phase 0 行为（非空即可）——测试密钥属 Mock 配置 |
 | R1 追加挂账：snapshot_version 类型冲突（spec string vs DB int） | **FIXED** | 命名类型 `SnapshotVersion`：自定义 `UnmarshalJSON` 同时接受 JSON 数字与数字字符串；`TestSnapshotVersionStringForm`：字符串形态以**原始字节过 HTTP 线**（marshal 后字节级替换、直接 POST 不再 re-marshal），断言落库为 int 1；非数字字符串（"mock-9"）过线 400 `INVALID_SNAPSHOT`（decode 错误路径）。契约 `contractlint validate` PASS（schemas=10 examples=11） |
-| 其他挂账：FALLBACK 无 Mock 示例 | **FIXED** | 契约 200 响应改为两个命名示例：`succeeded`（默认，status SUCCEEDED）与 `fallback`（status FALLBACK + 独立 decision/usage ID；R1 P3-3：原 singular `example` 与 `examples` 在同一 media type 上互斥违规——已折叠收进 `examples.succeeded`，succeeded 在前，Prism 默认选例不变）+ status enum 扩为 `[SUCCEEDED, FALLBACK]`；`OutcomeFromBody`（200 + body status FALLBACK → FALLBACK）；五结局测试经 `Prefer: example=fallback` 走通 |
+| 其他挂账：FALLBACK 无 Mock 示例 | **FIXED** | 契约 200 响应保留默认 singular `example`（SUCCEEDED，已发布字段——contractlint breaking 闸判定移除即破坏性变更，不能动）+ 新增命名示例 `fallback`（status FALLBACK + 独立 decision/usage ID）+ status enum 扩为 `[SUCCEEDED, FALLBACK]`；`OutcomeFromBody`（200 + body status FALLBACK → FALLBACK）；五结局测试经 `Prefer: example=fallback` 走通。`example`/`examples` 在同一 media type 共存违反 OAS 3.x 互斥——Prism 5.15/contractlint 容忍，作为已知偏差披露（见「残余披露」），整改需协调的契约变更（删已发布字段）另立批次 |
 | 其他挂账：ARR 线程池指标 | **不在本批次** | 原挂账归属不变（I12/I13 台账消费与指标） |
 | 其他挂账：SnapshotPublisher 拉取备选 | **不在本批次** | 推送为首选的口径不变 |
 | 其他挂账：endpoint 解析 | **不在本批次** | Harness 侧解析口径不变 |
@@ -96,7 +96,7 @@
 | P2-1 shadow 半侧无模式耦合（调用发生在 SHADOW 行插入之前、无代码消费 mode） | SHADOW 行前置到调用之前；断言调用时刻 `Mode()=='SHADOW'` 且调用不翻模式；shadow 记账行断言 | `TestMockShadowAndGrayModeBookkeeping` |
 | P3-1 StringForm 字符串形态从未过 HTTP 线（re-marshal 还原为数字形态，「三种形态」声称过头） | 字节级替换后直接 POST 原始字节（不再 re-marshal）；补落库断言（`provider_snapshot.snapshot_version` 为 int 1） | `TestSnapshotVersionStringForm` |
 | P3-2 TIMEOUT「适配器错误路径」措辞失实（status==0 分支零适配器代码参与） | README 与测试注释改为「测试直接记账（合成 ref 路径，PR #45 口径）」 | 本表 + `closure_test.go` 注释 |
-| P3-3 OAS 互斥违规（同一 media type 上 `example` 与 `examples` 共存） | 默认 SUCCEEDED 示例折叠为 `examples.succeeded`（succeeded 在前）；Prism 默认选例与全套件行为亲证不变 | contractlint PASS + mmr/cmd 全套件 |
+| P3-3 OAS 互斥违规（同一 media type 上 `example` 与 `examples` 共存） | **尝试折叠被 contractlint breaking 闸否决**（singular `example` 为已发布字段，移除判破坏性变更、无豁免机制）——恢复共存并如实披露为已知 OAS 偏差（Prism/contractlint 均容忍）；整改需协调的契约变更，另立批次 | contractlint validate + breaking（vs f54d725）双 PASS + mmr/cmd 全套件 + 「残余披露」 |
 | P3-4 `OutcomeFromBody` fail-open 记账（200 + 不可解析 body → SUCCEEDED） | 残余披露如实记载（见下） | 见「残余披露」 |
 | OBS WORM `TestArchiveConcurrentSingleLogicalPack` flake（首轮 `links=0 want 8`、重跑绿、与 diff 无关） | `docs/memory/backlog.md` 立项（与 I23 sweep/claim 双驱动窗口观察同域） | `docs/memory/backlog.md` |
 
@@ -105,6 +105,7 @@
 - **MMR 数据面 kill switch**：本仓库交付的是 ARR 半侧（binding 挂起阻断新解析 + 在途结局记账）；MMR 自身的后端摘除开关按基线归 MMR 所有（issue 原文 External closure dependency）——Mock 无从证明 MMR 侧行为，不声称。
 - **GWT#7 回退演练计时**：`ROLLED_BACK` 的状态机语义、旧静态配置引用、审计（`TestRoutingModeTransitions`/`TestModeStoreScopingAndCAS`）已覆盖；**真实系统的挂钟计时演练**属生产运行记录（#13 ledger），Mock 收口不含。
 - **ed25519 发布方密钥**：测试用生成的密钥对证明验证逻辑；企业真实发布方密钥分发/轮换属 #5（企业 Identity）范畴。
+- **OAS 互斥偏差（R1 P3-3 未整改）**：200 响应 media type 上 singular `example`（默认 SUCCEEDED，已发布字段）与命名示例 `examples.fallback` 共存，违反 OAS 3.x 互斥——Prism 5.15 与 contractlint 均容忍，行为无影响；删除已发布字段过不了 breaking 闸，整改需与消费方协调的契约变更（届时 `example` 折叠进 `examples` 并走破坏性变更评审）。
 - **`OutcomeFromBody` 记账取向（fail-open）**：200 + body 不可解析时按状态码记 SUCCEEDED（无法判读 FALLBACK 时倾向 200 的字面语义）——R1 P3-4 如实披露，不改判。
 - **TIMEOUT 结局的 decision id**：Mock 收口中为合成（`mrd-e2e-4`）——真实超时的 decision id 只在 MMR 后续 retry/审计导出中出现（I12 消费），Mock 无从取回。
 
