@@ -179,9 +179,11 @@ func RateLimit(rate int, burst int) func(http.Handler) http.Handler {
 	}
 	var mu sync.Mutex
 	buckets := map[string]*bucket{}
-	// rate 0 = unconfigured (tests mounting without rate config): disable
-	// limiting rather than dividing by zero (review R1: MountAdmin with a
-	// zero AdminConfig panicked at mount time)
+	// rate 0 = unconfigured (tests mounting without rate config): a true
+	// pass-through — every request proceeds without bucket accounting
+	// (review R2 P3-3: the previous guard stopped the refill math but
+	// kept the token check, turning rate=0 into deny-all 429s rather
+	// than "disabled")
 	var refill time.Duration
 	if rate > 0 {
 		refill = time.Second / time.Duration(rate)
@@ -189,6 +191,10 @@ func RateLimit(rate int, burst int) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if refill == 0 {
+				next.ServeHTTP(w, r) // rate 0: pass-through (disabled limiter)
+				return
+			}
 			id := IdentityFrom(r.Context())
 			key := "anonymous"
 			if id != nil {

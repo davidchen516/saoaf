@@ -32,13 +32,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/davidchen516/saoaf/internal/platform/approval"
 	"github.com/davidchen516/saoaf/internal/platform/authn"
 	"github.com/davidchen516/saoaf/internal/platform/authz"
-	"github.com/davidchen516/saoaf/internal/platform/httpapi"
 )
 
 // PDP fault-injection harness: every failure class the issue names
@@ -213,53 +211,28 @@ func TestApprovalOutageFailsClosed(t *testing.T) {
 	}
 }
 
-// P1-1 (review): the previous structural grep used literal-substring
-// patterns written as regexes — it was ALWAYS green (fake gate, proven by
-// injecting a real body-tenant assignment). Replaced by a BEHAVIORAL
-// test: the publish path builds PublishInput.TenantRef from the VERIFIED
-// identity — a request body claiming a different tenant cannot change
-// what lands in the input. This drives the REAL httpapi handler with a
-// stub identity: the input tenant must equal the token claim.
+// P1-1 (review R1): the original structural test used literal-substring
+// patterns written as regexes — always green. The replacement pins the
+// trusted-claim invariant at two REAL layers:
+//  1. BEHAVIORAL: a token issued by a stub OIDC issuer validates, and
+//     the resulting Identity.TenantRef equals the TOKEN claim (the
+//     trusted source the publish/ops surfaces read).
+//  2. STRUCTURAL (auxiliary): real regexes over admin.go/ops.go — the
+//     publish input's TenantRef must be assigned from id.TenantRef and
+//     never directly from body/input/payload sources. The regex only
+//     catches DIRECT struct-literal references; the behavioral safety
+//     net against indirection is TestPublishHandlerSuccessPassthrough
+//     (httpapi/admin_test.go), which asserts the handler's captured
+//     input carries the IDENTITY tenant. (Review R2 P3-1/P3-2: the
+//     earlier draft's fake-server scaffolding was dead theater — mount
+//     without driving; removed.)
 func TestTenantTrustedClaimSourceOnly(t *testing.T) {
-	// hand-built fake adapters recording what the handler saw
-	var gotTenant atomic.Value
-	var gotActor atomic.Value
-	fakePublish := func(ctx context.Context, in httpapi.PublishInput) (httpapi.PublishResult, error) {
-		gotTenant.Store(in.TenantRef)
-		gotActor.Store(in.Actor)
-		return httpapi.PublishResult{Revision: 2, State: "PUBLISHED"}, nil
-	}
-	adminCfg := httpapi.AdminConfig{
-		PublishBinding: fakePublish,
-	}
-	_ = adminCfg
-	// mount with a stub identity chain: the httpapi package requires the
-	// middleware identity; drive it through the mount with a stub issuer
 	iss := newStubIssuerI22(t)
 	v, err := authn.NewValidator(iss.srv.URL, "saoaf-control-plane")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// token claims tenant-a; the request BODY will claim tenant-evil
 	tok := iss.token(t, "resource.publish", "user:admin", "tenant-a")
-	r := chi.NewRouter()
-	httpapi.MountAdmin(r, httpapi.AdminConfig{
-		Authn: v, PublishBinding: fakePublish,
-	})
-	srv := httptest.NewServer(r)
-	t.Cleanup(srv.Close)
-
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/admin/v1/bindings/b-1/publish",
-		strings.NewReader(`{"expected_revision":1,"change_reason":"body tenant injection probe","tenant_ref":"tenant-evil"}`))
-	req.Header.Set("Authorization", "Bearer "+tok)
-	req.Header.Set("X-Saoaf-Approval-Ref", "")
-	_ = req
-	// NOTE: the full gated path needs PDP/approval stubs — the identity
-	// tenant assertion below uses the same adapter wiring as the real
-	// handler without those dependencies by validating the TOKEN claims
-	// first, then asserting the mapping code reads identity-only. The
-	// complete chain is covered by TestIdentityE2EGateOrder + the ops
-	// scope() tests. Here we pin the claim-trust core directly:
 	id, err := v.Validate(t.Context(), tok)
 	if err != nil {
 		t.Fatalf("validate: %v", err)
@@ -267,33 +240,24 @@ func TestTenantTrustedClaimSourceOnly(t *testing.T) {
 	if id.TenantRef != "tenant-a" {
 		t.Fatalf("identity tenant = %q, want the token claim tenant-a", id.TenantRef)
 	}
-	// the publish input construction (httpapi.admin.go) reads
-	// IdentityFrom(ctx).TenantRef — a structural guarantee we can
-	// REGRESSION-PIN with a real regex over the real file:
+	// structural auxiliary: the ONLY TenantRef source feeding PublishInput
 	src, err := os.ReadFile("httpapi/admin.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// the ONLY TenantRef assignment into PublishInput must source from id.
-	pat := regexp.MustCompile(`TenantRef:\s*id\.TenantRef`)
-	if !pat.Match(src) {
+	if !regexp.MustCompile(`TenantRef:\s*id\.TenantRef`).Match(src) {
 		t.Fatal("PublishInput.TenantRef is not assigned from the verified identity (id.TenantRef)")
 	}
-	// and NO assignment from any body/decoded source
-	bad := regexp.MustCompile(`TenantRef:\s*(body|input|payload|req|json|b\.)`)
-	if loc := bad.Find(src); loc != nil {
+	if loc := regexp.MustCompile(`TenantRef:\s*(body|input|payload|req|json|b\.)`).Find(src); loc != nil {
 		t.Fatalf("request-body tenant assignment found in admin.go: %q", loc)
 	}
-	// the same for ops.go (the scope() tenant filter)
 	opsSrc, err := os.ReadFile("../ops/ops.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if badOps := regexp.MustCompile(`TenantRef\s*[:=]\s*(body|input|payload|req|json)`).Find(opsSrc); badOps != nil {
-		t.Fatalf("request-body tenant assignment found in ops.go: %q", badOps)
+	if loc := regexp.MustCompile(`TenantRef\s*[:=]\s*(body|input|payload|req|json)`).Find(opsSrc); loc != nil {
+		t.Fatalf("request-body tenant assignment found in ops.go: %q", loc)
 	}
-	_ = gotTenant
-	_ = gotActor
 }
 
 func newStubIssuerI22(t *testing.T) *stubIssuerI22 {

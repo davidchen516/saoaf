@@ -67,3 +67,14 @@ issue 核心是「对接企业服务并保持契约不变」。**Mock 与生产 
 整改后：`internal/platform` 全套 -race 绿（7 包 + 根包）；e2e 双测真栈绿（含窄 scope 硬 403）。
 
 **挂账（R1 OBS）**：wildcardDigest "sha256:mock" 生产放行面（I05 预留——真实审批服务不得回传该字面量；随企业审批服务接入时收口）；CI identity job Prism 就绪等待已补。
+
+## 审查 R2 整改（残余 1×P2 + 3×P3 → 全项修复）
+
+| Finding | 修复 | 验证 |
+|---|---|---|
+| NEW-P2-1 空 requester fail-open 修复无回归钉（蓝军 revert 全套绿） | **TestSatisfiedForEmptyRequesterRefFailsClosed**（approval 包）：空 requester 对任意主体 false + 空 subject false + 对照腿（有 requester 通过） | **蓝军反验**：还原 `!= "" &&` 短路 → 测试红；恢复绿 |
+| NEW-P3-1 P1-1 重写的行为腿是死代码剧场（mount 未 drive；fakePublish 记录器全弃用） | **删除全部死支架**（fakePublish/gotTenant/gotActor/req/adminCfg）；注释改为如实：行为腿=validator 层 claim 断言 + regex 辅助 + 行为保护网指向 admin_test.go 的 TestPublishHandlerSuccessPassthrough（该测试亲证能抓间接绕过探针） | 代码 + 注释 |
+| NEW-P3-2 regex 可被间接化绕过（tenantOverride 别名）+ 正向 pin 被 audit 行满足 | 测试注释如实声明 regex 仅防直引形态；**行为安全网**（admin_test 捕获 input.TenantRef 断言）在注释中显式指向——R2 亲证该网抓住间接探针 | 注释 |
+| NEW-P3-3 RateLimit rate=0 注释称"disable"实为 deny-all（refill 停但 token 检查在，(0,0) 全 429） | **真 pass-through**：refill==0 → next.ServeHTTP 直通（无桶记账） | middleware 套件绿（含既有限流测试不回归） |
+
+整改后：`internal/platform` 8 包 -race 全绿；e2e 双测真栈绿（17.9s 冷栈首次 mint + 0.2s）；regex 门禁红运行复验（bodyTenant 注入 → 红）。

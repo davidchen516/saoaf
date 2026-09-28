@@ -92,3 +92,31 @@ func TestClientGetAndFailure(t *testing.T) {
 		t.Fatal("empty ref accepted")
 	}
 }
+
+// TestSatisfiedForEmptyRequesterRefFailsClosed pins the R2 rework of the
+// review-R1 P2-2 defect: an approval decision WITHOUT a recorded
+// requester is malformed and must not be satisfiable by ANY subject —
+// blue-team verified: reverting to the `!= "" &&` short-circuit makes
+// this test red while the rest of the suite stays green.
+func TestSatisfiedForEmptyRequesterRefFailsClosed(t *testing.T) {
+	decided := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	d := Decision{
+		ApprovalRef:  "approval:empty-req",
+		Status:       "APPROVED",
+		RequesterRef: "", // malformed/downgraded response: no requester recorded
+		ApproverRefs: []string{"user:bob"},
+		DecidedAt:    &decided,
+		ObjectDigest: "sha256:mock",
+	}
+	if d.SatisfiedFor("user:mallory", "sha256:mock") {
+		t.Fatal("empty requester_ref must fail closed (mallory rode a requester-less approval)")
+	}
+	if d.SatisfiedFor("", "sha256:mock") {
+		t.Fatal("empty requester_ref must fail closed even for an empty subject")
+	}
+	// control leg: a recorded requester still passes
+	d.RequesterRef = "user:alice"
+	if !d.SatisfiedFor("user:alice", "sha256:mock") {
+		t.Fatal("control leg: recorded requester must pass")
+	}
+}
