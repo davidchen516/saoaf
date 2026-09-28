@@ -1,0 +1,80 @@
+=== RUN   TestInvocationHeaders
+--- PASS: TestInvocationHeaders (0.00s)
+=== RUN   TestValidateResponse
+--- PASS: TestValidateResponse (0.00s)
+=== RUN   TestRoutingModeTransitions
+--- PASS: TestRoutingModeTransitions (0.00s)
+=== RUN   TestCorrelationFiveOutcomes
+--- PASS: TestCorrelationFiveOutcomes (0.20s)
+=== RUN   TestModeStoreScopingAndCAS
+--- PASS: TestModeStoreScopingAndCAS (0.19s)
+=== RUN   TestMockClosedLoopFiveOutcomes
+--- PASS: TestMockClosedLoopFiveOutcomes (2.40s)
+=== RUN   TestMockShadowAndGrayModeBookkeeping
+--- PASS: TestMockShadowAndGrayModeBookkeeping (2.36s)
+=== RUN   TestMockSucceededCorrelation
+--- PASS: TestMockSucceededCorrelation (2.17s)
+=== RUN   TestMockErrorPassthrough
+--- PASS: TestMockErrorPassthrough (2.16s)
+=== RUN   TestMockProfileNotFoundNoAutoSwitch
+--- PASS: TestMockProfileNotFoundNoAutoSwitch (2.18s)
+=== RUN   TestMockTimeoutOutcome
+--- PASS: TestMockTimeoutOutcome (0.00s)
+PASS
+ok  	github.com/davidchen516/saoaf/internal/mmr	13.130s
+=== RUN   TestSnapshotValidationNegatives
+=== RUN   TestSnapshotValidationNegatives/bad_digest
+=== RUN   TestSnapshotValidationNegatives/missing_signature
+=== RUN   TestSnapshotValidationNegatives/missing_workload
+=== RUN   TestSnapshotValidationNegatives/workload_mismatch
+=== RUN   TestSnapshotValidationNegatives/contract_major_mismatch
+=== RUN   TestSnapshotValidationNegatives/valid_until_before_generated
+=== RUN   TestSnapshotValidationNegatives/already_expired
+--- PASS: TestSnapshotValidationNegatives (0.00s)
+    --- PASS: TestSnapshotValidationNegatives/bad_digest (0.00s)
+    --- PASS: TestSnapshotValidationNegatives/missing_signature (0.00s)
+    --- PASS: TestSnapshotValidationNegatives/missing_workload (0.00s)
+    --- PASS: TestSnapshotValidationNegatives/workload_mismatch (0.00s)
+    --- PASS: TestSnapshotValidationNegatives/contract_major_mismatch (0.00s)
+    --- PASS: TestSnapshotValidationNegatives/valid_until_before_generated (0.00s)
+    --- PASS: TestSnapshotValidationNegatives/already_expired (0.00s)
+=== RUN   TestSnapshotIngestFlow
+    snapshotapi_test.go:330: ingest response 409: {"error_code":"SNAPSHOT_DIGEST_CONFLICT","message":"same snapshot_version ingested with a different digest (contract drift)"}
+    snapshotapi_test.go:339: ingest response 400: {"error_code":"INVALID_VERSION","message":"snapshot_version must be \u003e= 1"}
+--- PASS: TestSnapshotIngestFlow (0.66s)
+=== RUN   TestSnapshotIngestValidation
+    snapshotapi_test.go:357: ingest response 400: {"error_code":"INVALID_DIGEST","message":"digest must be sha256:\u003c64hex\u003e"}
+    snapshotapi_test.go:363: ingest response 400: {"error_code":"SIGNATURE_REQUIRED","message":"signature required"}
+    snapshotapi_test.go:374: ingest response 400: {"error_code":"DIGEST_MISMATCH","message":"digest does not match the snapshot content (recompute failed)"}
+    snapshotapi_test.go:380: ingest response 400: {"error_code":"PROVIDER_MISMATCH","message":"body provider_id \"other-provider\" does not match path"}
+--- PASS: TestSnapshotIngestValidation (0.70s)
+=== RUN   TestSnapshotIngestWorkloadIdentity
+2026/09/29 00:53:43 http: TLS handshake error from 127.0.0.1:59526: tls: client didn't provide a certificate
+--- PASS: TestSnapshotIngestWorkloadIdentity (0.61s)
+=== RUN   TestSnapshotIngestHalfCommitReplayResumes
+--- PASS: TestSnapshotIngestHalfCommitReplayResumes (0.59s)
+=== RUN   TestSnapshotIngestConcurrentSameKeyConverges
+--- PASS: TestSnapshotIngestConcurrentSameKeyConverges (0.86s)
+=== RUN   TestSnapshotIngestVersionRegression409
+--- PASS: TestSnapshotIngestVersionRegression409 (0.52s)
+=== RUN   TestSnapshotIngestContractMajorConfig
+--- PASS: TestSnapshotIngestContractMajorConfig (1.04s)
+=== RUN   TestSnapshotIngestWrongSAN403
+--- PASS: TestSnapshotIngestWrongSAN403 (0.39s)
+=== RUN   TestSnapshotIngestDigestRecompute
+    snapshotapi_test.go:655: ingest response 400: {"error_code":"DIGEST_MISMATCH","message":"digest does not match the snapshot content (recompute failed)"}
+--- PASS: TestSnapshotIngestDigestRecompute (0.63s)
+=== RUN   TestSnapshotIngestSignatureVerify
+    snapshotapi_test.go:680: ingest response 400: {"error_code":"SIGNATURE_INVALID","message":"signature must be base64"}
+    snapshotapi_test.go:692: ingest response 400: {"error_code":"SIGNATURE_INVALID","message":"signature verification failed"}
+--- PASS: TestSnapshotIngestSignatureVerify (0.51s)
+=== RUN   TestSnapshotVersionStringForm
+--- PASS: TestSnapshotVersionStringForm (0.58s)
+PASS
+ok  	github.com/davidchen516/saoaf/internal/registry	8.328s
+=== RUN   TestClosurePlanInvarianceAcrossSnapshotRepublish
+--- PASS: TestClosurePlanInvarianceAcrossSnapshotRepublish (0.34s)
+=== RUN   TestClosureKillSwitchBlocksNewPlans
+--- PASS: TestClosureKillSwitchBlocksNewPlans (2.32s)
+PASS
+ok  	github.com/davidchen516/saoaf/cmd/control-plane-api	4.301s
