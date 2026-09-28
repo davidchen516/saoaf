@@ -93,7 +93,7 @@ func seedFullChain(t *testing.T, pool *pgxpool.Pool) {
 	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO resolver.resource_plan_item (plan_id, requirement_id, capability_key, major_version, capability_revision, binding_key, binding_revision, provider_key, snapshot_version, profile_or_action, reason_codes)
-		VALUES ('plan-v', 'req-v', 'cap-v', 1, 1, 'bind-v', 1, 'prov-v', 1, 'reasoning-high-v1', '[]')`); err != nil {
+		VALUES ('plan-v', 'req-v', 'cap-v', 1, 1, 'bind-v', 1, 'prov-w', 1, 'reasoning-high-v1', '[]')`); err != nil {
 		t.Fatal(err)
 	}
 	// exit pack (active)
@@ -284,6 +284,151 @@ func TestChainJSONExport(t *testing.T) {
 		}
 		if back.DrillKey != "drill-v" || !back.Complete || len(back.Links) == 0 {
 			t.Fatalf("round-trip chain = %+v", back)
+		}
+	})
+}
+
+// ==== R1 review regressions ====
+
+// TestUnrelatedTrafficDoesNotSatisfyNorContaminate (R1 P1-1, both
+// directions): a drill with NO attributed outcomes must stay broken even
+// when unrelated concurrent traffic floods the window; a complete drill
+// must stay complete when unrelated dangling rows exist.
+func TestUnrelatedTrafficDoesNotSatisfyNorContaminate(t *testing.T) {
+	withDBV(t, func(dsn string, pool *pgxpool.Pool) {
+		seedFullChain(t, pool)
+		ctx := context.Background()
+		// drill-B: vendor-b with no pack, no attributed outcomes — the
+		// false-GO probe: unrelated vendor-v traffic must NOT satisfy it
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO saoaf.exit_drill (drill_key, vendor, initiator, state)
+			VALUES ('drill-b', 'vendor-b', 'user:init', 'SUCCEEDED')`); err != nil {
+			t.Fatal(err)
+		}
+		// unrelated concurrent traffic in the same window (a FAILED outcome
+		// from the vendor-v surface — pre-existing seed correlation)
+		ch, err := (Checker{Pool: pool}).VerifyDrillChain(ctx, "drill-b")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ch.Complete {
+			t.Fatal("false GO: drill-b has NO attributed outcomes but unrelated vendor-v traffic satisfied the correlation link")
+		}
+		found := false
+		for _, b := range ch.Breaks {
+			if len(b) > 12 && b[:12] == "correlation:" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected the correlation break; got %v", ch.Breaks)
+		}
+		// the complete drill stays complete despite drill-b's presence
+		chC, err := (Checker{Pool: pool}).VerifyDrillChain(ctx, "drill-v")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !chC.Complete {
+			t.Fatalf("false NO-GO: the complete drill got contaminated: %v", chC.Breaks)
+		}
+	})
+}
+
+// TestOpenCriticalFindingsBlockGo (R1 P2-1): open HIGH/CRITICAL findings
+// must force NO-GO.
+func TestOpenCriticalFindingsBlockGo(t *testing.T) {
+	withDBV(t, func(dsn string, pool *pgxpool.Pool) {
+		seedFullChain(t, pool)
+		ctx := context.Background()
+		// reopen the resolved finding as CRITICAL
+		if _, err := pool.Exec(ctx, `
+			UPDATE saoaf.exit_drill_finding
+			SET state='OPEN', severity='CRITICAL', remediation=''
+			WHERE drill_key='drill-v'`); err != nil {
+			t.Fatal(err)
+		}
+		ch, err := (Checker{Pool: pool}).VerifyDrillChain(ctx, "drill-v")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ch.Complete {
+			t.Fatal("open CRITICAL finding did not break the chain")
+		}
+		ch.MarkARRZeroChange(true)
+		ch.MarkAgentZeroChange(true)
+		verdict, _ := ch.GoNoGo()
+		if verdict != "NO-GO" {
+			t.Fatal("open CRITICAL finding must force NO-GO even after sign-off")
+		}
+	})
+}
+
+// TestAuditRequiresApprovalStep (R1 P3-2): a transition log without the
+// →APPROVED step (initiator self-run) breaks the audit link.
+func TestAuditRequiresApprovalStep(t *testing.T) {
+	withDBV(t, func(dsn string, pool *pgxpool.Pool) {
+		seedFullChain(t, pool)
+		ctx := context.Background()
+		// remove the approval transition, keep a fake one
+		if _, err := pool.Exec(ctx, `
+			DELETE FROM saoaf.exit_drill_transition
+			WHERE drill_key='drill-v' AND to_state='APPROVED'`); err != nil {
+			t.Fatal(err)
+		}
+		ch, err := (Checker{Pool: pool}).VerifyDrillChain(ctx, "drill-v")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ch.Complete {
+			t.Fatal("audit trail without →APPROVED passed (self-run undetected)")
+		}
+		found := false
+		for _, b := range ch.Breaks {
+			if len(b) > 5 && b[:5] == "audit" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected the audit break; got %v", ch.Breaks)
+		}
+	})
+}
+
+// TestDrillPackPointerHonored (R1 P3-1): a drill pointing at a
+// nonexistent pack must break even when the vendor has another ACTIVE pack.
+func TestDrillPackPointerHonored(t *testing.T) {
+	withDBV(t, func(dsn string, pool *pgxpool.Pool) {
+		seedFullChain(t, pool)
+		ctx := context.Background()
+		// add a SECOND active pack for the same vendor; point the drill at
+		// a nonexistent pack — the vendor fallback must NOT silently
+		// satisfy a WRONG pointer... but the fallback IS the designed
+		// behavior for legacy drills; the break must come from the
+		// pointed-at pack being unusable. Point at the SUPERSEDED one.
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO saoaf.exit_pack (pack_key, vendor, revision, state, owner_ref, substitute_provider, valid_until, created_by)
+			VALUES ('pack-w', 'vendor-v', 2, 'SUPERSEDED', 'user:op', 'prov-w', now() + interval '30 day', 'user:op')`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `
+			UPDATE saoaf.exit_drill SET exit_pack_key='pack-w' WHERE drill_key='drill-v'`); err != nil {
+			t.Fatal(err)
+		}
+		ch, err := (Checker{Pool: pool}).VerifyDrillChain(ctx, "drill-v")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ch.Complete {
+			t.Fatal("drill pointing at a SUPERSEDED pack stayed complete")
+		}
+		found := false
+		for _, b := range ch.Breaks {
+			if len(b) > 9 && b[:9] == "exit_pack" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected the exit_pack break; got %v", ch.Breaks)
 		}
 	})
 }

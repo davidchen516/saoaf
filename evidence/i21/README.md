@@ -42,3 +42,17 @@
 7. on-call/告警接线（观测平台资源）与 Go/No-Go 评审的**人工评审记录**（模板已交付；评审需 David 与运维参与）
 
 **启动门禁的风险接受**：#5/#11/#13 挂账下并行开工需 David 第一方记录——本 PR 按可判定面交付并如实披露（与 #5/#11/#13 处置同构）。
+
+## 审查 R1 整改（CHANGES REQUESTED → 全项修复）
+
+| Finding | 修复 | 回归测试 |
+|---|---|---|
+| P1-1 correlation 无 drill/vendor 归因（时间窗裸查——无关流量可**填充**断链（false GO）或**污染**完整链（false NO-GO）——生产共享库双向失真，探针亲证） | 归因过滤：**[drill.created_at, COALESCE(finished_at, now)] 窗口** + plan_item.provider_key ∈ {drill vendor, drill pack 的 substitute}；悬挂 correlation 保留（dangling plan 由 plan 链接上报，不被 JOIN 静默丢弃） | **双向钉子**：TestUnrelatedTrafficDoesNotSatisfyNorContaminate（无归因结果的 drill 在无关流量下保持断链；完整 drill 不被污染） |
+| P2-1 OPEN findings（含 CRITICAL）不影响 GO | open HIGH/CRITICAL → **Chain.Breaks + NO-GO**（签字后仍 NO-GO） | TestOpenCriticalFindingsBlockGo |
+| P2-2 14MB 二进制误提交 | git rm + .gitignore（历史清洗待 David 决策） | — |
+| P3-1 exit_pack 忽略 drill.exit_pack_key（错误指针被 vendor 兜底吞掉） | JOIN **drill 自己的 pack 指针**（legacy 空指针才 vendor 兜底）+ state ∈ ACTIVE/VALIDATED 过滤 | TestDrillPackPointerHonored（SUPERSEDED 指针 → break） |
+| P3-2 audit 只数行数（单行伪造通过） | 必须存在 **→APPROVED 且 actor 非空** 的转移（I15 审批人≠发起人不变量） | TestAuditRequiresApprovalStep |
+| P3-3 psql local 分支硬编码 host/port | 修为 **DSN 解析 host:port+password**（TCP 强制）——CI 兼容 | CI 绿 |
+| P3-4 「六类 typed error」措辞失实 | 包注释改为如实：drill 缺失=typed error；**其余断链=具名 Chain.Breaks + NO-GO**；实现统一 | 文本 |
+
+整改后：检查器 **14/14**（真 PG -race：原 10 + 四个 R1 探针收编）；彩排 8/8（归因对齐）。

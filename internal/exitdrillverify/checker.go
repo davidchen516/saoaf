@@ -8,9 +8,11 @@
 //
 // Every link is read from the domain stores (SQL over shared schemas,
 // ADR-0006) and the checker asserts the chain has NO BREAKS: a missing
-// correlation row, an unattributed decision, a plan without items, a
-// drill without findings/remediation, or a pack without revocation proof
-// each surface as a typed break with the missing link named.
+// drill surfaces as a typed error (ErrChainBroken); every other break —
+// a missing/unusable exit pack, no drill-attributed correlations, a
+// dangling plan, missing evidence coverage, open HIGH/CRITICAL findings,
+// or a bypassed approval step — is a NAMED entry in Chain.Breaks and
+// forces the NO-GO verdict.
 //
 // The checker is the DESKTOP-DRILL engine (issue Scope: MCP/A2A/Placement
 // only do contract/desktop drills; the real MMR provider exit drill runs
@@ -90,28 +92,55 @@ func (c Checker) VerifyDrillChain(ctx context.Context, drillKey string) (*Chain,
 		return ch, broken("drill", fmt.Sprintf("drill state %s is not a completion state (need SUCCEEDED/REMEDIATION_OPEN/CLOSED)", drillState))
 	}
 
-	// 2. the exit pack (provider exit context + revocation proof carrier)
-	var packKey string
-	var packState string
+	// 2. the exit pack — the drill's OWN pack (exit_pack_key) with a
+	// vendor fallback for legacy drills; ignoring the drill's pointer
+	// let a vendor's OTHER pack satisfy the link (review R1 P3-1)
+	var packKey, packState string
 	err = c.Pool.QueryRow(ctx, `
-		SELECT pack_key, state FROM saoaf.exit_pack
-		WHERE vendor = $1 AND state IN ('ACTIVE','VALIDATED')
-		ORDER BY revision DESC LIMIT 1`, drillVendor).Scan(&packKey, &packState)
+		SELECT p.pack_key, p.state
+		FROM saoaf.exit_drill d
+		JOIN saoaf.exit_pack p
+		  ON p.pack_key = COALESCE(NULLIF(d.exit_pack_key, ''), (
+		       SELECT p2.pack_key FROM saoaf.exit_pack p2
+		       WHERE p2.vendor = d.vendor AND p2.state IN ('ACTIVE','VALIDATED')
+		       ORDER BY p2.revision DESC LIMIT 1))
+		WHERE d.drill_key = $1
+		  AND p.state IN ('ACTIVE','VALIDATED')`, drillKey).
+		Scan(&packKey, &packState)
 	if errors.Is(err, pgx.ErrNoRows) {
-		ch.Breaks = append(ch.Breaks, "exit_pack: no active/validated pack for vendor "+drillVendor)
+		ch.Breaks = append(ch.Breaks, "exit_pack: the drill's exit pack (or an active/validated pack for its vendor) does not exist or is not usable")
 	} else if err != nil {
 		return nil, err
 	} else {
 		ch.Links = append(ch.Links, ChainLink{Kind: "exit_pack", ID: packKey, Attrs: map[string]any{"state": packState}})
 	}
 
-	// 3. plan → decision correlations recorded during the drill window
+	// 3. plan → decision correlations ATTRIBUTED TO THIS DRILL (review
+	// R1 P1-1: a bare time window let unrelated concurrent traffic both
+	// SATISFY the link (false GO for a drill with no outcomes) and
+	// CONTAMINATE the export (false NO-GO). Attribution: the drill
+	// window [created_at, COALESCE(finished_at, now)] AND the correlated
+	// plan item's provider must belong to the drill's vendor (via the
+	// exit pack's substitute mapping — the provider being exited or its
+	// substitute is the routing surface the drill exercises).
 	rows, err := c.Pool.Query(ctx, `
-		SELECT resource_plan_id, resource_plan_item_id, model_route_decision_id,
-		       outcome, usage_ref, trace_id, recorded_at
-		FROM saoaf.model_route_correlation
-		WHERE recorded_at >= (SELECT created_at FROM saoaf.exit_drill WHERE drill_key = $1)
-		ORDER BY recorded_at`, drillKey)
+		SELECT mc.resource_plan_id, mc.resource_plan_item_id, mc.model_route_decision_id,
+		       mc.outcome, mc.usage_ref, mc.trace_id, mc.recorded_at
+		FROM saoaf.model_route_correlation mc
+		JOIN saoaf.exit_drill d ON d.drill_key = $1
+		LEFT JOIN resolver.resource_plan_item i ON i.plan_id = mc.resource_plan_id
+		                                       AND i.requirement_id = mc.resource_plan_item_id
+		WHERE mc.recorded_at >= d.created_at
+		  AND mc.recorded_at <= COALESCE(d.finished_at, now())
+		  AND (
+		        i.provider_key IS NULL  -- dangling plan: kept so the plan
+		                               -- link check reports the missing plan
+		    OR i.provider_key = d.vendor
+		    OR EXISTS (
+		        SELECT 1 FROM saoaf.exit_pack p
+		        WHERE p.pack_key = COALESCE(NULLIF(d.exit_pack_key,''), '')
+		          AND i.provider_key IN (p.substitute_provider)))
+		ORDER BY mc.recorded_at`, drillKey)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +161,7 @@ func (c Checker) VerifyDrillChain(ctx context.Context, drillKey string) (*Chain,
 		return nil, err
 	}
 	if len(corrs) == 0 {
-		ch.Breaks = append(ch.Breaks, "correlation: no model_route_correlation rows recorded since the drill started (pre/post route outcomes missing)")
+		ch.Breaks = append(ch.Breaks, "correlation: no drill-attributed model_route_correlation rows in the drill window (pre/post route outcomes missing — unrelated concurrent traffic does NOT satisfy this link)")
 	}
 
 	// 4. every correlated plan must exist with items (ARR side of the chain)
@@ -195,6 +224,20 @@ func (c Checker) VerifyDrillChain(ctx context.Context, drillKey string) (*Chain,
 	}
 	ch.Links = append(ch.Links, ChainLink{Kind: "findings", ID: drillKey,
 		Attrs: map[string]any{"open": openFindings, "resolved": resolvedFindings}})
+	// open HIGH/CRITICAL findings block GO (review R1 P2-1: an unresolved
+	// critical remediation item is a No-Go, not a footnote)
+	if openFindings > 0 {
+		var openHigh int
+		if err := c.Pool.QueryRow(ctx, `
+			SELECT count(*) FROM saoaf.exit_drill_finding
+			WHERE drill_key = $1 AND state = 'OPEN' AND severity IN ('HIGH','CRITICAL')`,
+			drillKey).Scan(&openHigh); err != nil {
+			return nil, err
+		}
+		if openHigh > 0 {
+			ch.Breaks = append(ch.Breaks, fmt.Sprintf("findings: %d open HIGH/CRITICAL findings must be remediated before GO", openHigh))
+		}
+	}
 
 	// 7. the audit trail (transition log) — prove the drill went through
 	// the state machine, not a manual DB write
@@ -207,6 +250,19 @@ func (c Checker) VerifyDrillChain(ctx context.Context, drillKey string) (*Chain,
 	if transitions == 0 {
 		ch.Breaks = append(ch.Breaks, "audit: no transition-log rows for the drill (state-machine bypass?)")
 	} else {
+		// the trail must include the APPROVAL step (review R1 P3-2: a
+		// single forged row is not a trail; the I15 invariant requires
+		// an approver ≠ initiator transition into APPROVED)
+		var approved int
+		if err := c.Pool.QueryRow(ctx, `
+			SELECT count(*) FROM saoaf.exit_drill_transition
+			WHERE drill_key = $1 AND to_state = 'APPROVED' AND actor <> ''`, drillKey).
+			Scan(&approved); err != nil {
+			return nil, err
+		}
+		if approved == 0 {
+			ch.Breaks = append(ch.Breaks, "audit: no →APPROVED transition in the log (approval step missing — initiator self-run?)")
+		}
 		ch.Links = append(ch.Links, ChainLink{Kind: "audit", ID: drillKey, Attrs: map[string]any{"transitions": transitions}})
 	}
 

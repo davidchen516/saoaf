@@ -75,7 +75,7 @@ FROM registry.resource_provider WHERE provider_key='prov-r';
 INSERT INTO resolver.resource_plan (id, caller_ref, tenant_ref, fingerprint, request_digest, idempotency_key, status, expires_at)
 VALUES ('plan-r', 'user:caller', 'tenant-a', '$Z64', '$Z64', 'idem-r', 'RESOLVED', now() + interval '1 hour');
 INSERT INTO resolver.resource_plan_item (plan_id, requirement_id, capability_key, major_version, capability_revision, binding_key, binding_revision, provider_key, snapshot_version, profile_or_action, reason_codes)
-VALUES ('plan-r', 'req-r', 'cap-r', 1, 1, 'bind-r', 1, 'prov-r', 1, 'reasoning-high-v1', '[]');
+VALUES ('plan-r', 'req-r', 'cap-r', 1, 1, 'bind-r', 1, 'prov-w', 1, 'reasoning-high-v1', '[]');
 INSERT INTO saoaf.exit_pack (pack_key, vendor, revision, state, owner_ref, substitute_provider, valid_until, created_by)
 VALUES ('pack-r', 'vendor-r', 1, 'ACTIVE', 'user:op', 'prov-w', now() + interval '30 day', 'user:op');
 INSERT INTO saoaf.exit_drill (drill_key, vendor, exit_pack_key, initiator, state, result_evidence)
@@ -107,7 +107,7 @@ INSERT INTO saoaf.exit_drill (drill_key, vendor, initiator, state)
 VALUES ('broken-$DRILL_KEY', 'vendor-no-pack', 'user:init', 'SUCCEEDED');
 SQL
 OUT3=$(/tmp/exit-chain-verify -dsn "$PSQL_DSN" -drill "broken-$DRILL_KEY" 2>&1 || true)
-check "broken drill: correlation break reported" "$(echo "$OUT3" | grep -c 'correlation: no model_route_correlation')" "1"
+check "broken drill: correlation break reported" "$(echo "$OUT3" | grep -c 'correlation:')" "1"
 check "broken drill: exit pack break reported" "$(echo "$OUT3" | grep -c 'exit_pack:')" "1"
 check "broken drill: NO-GO" "$(echo "$OUT3" | grep -c 'NO-GO')" "1"
 
