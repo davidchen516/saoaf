@@ -21,3 +21,4 @@ web/dist/
 
 # migrator build output
 tools/migrator/migrator
+/exit-chain-verify
