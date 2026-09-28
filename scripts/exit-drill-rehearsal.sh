@@ -32,9 +32,10 @@ DB="exit_rehearsal_$$_$RANDOM"
 PSQLContainer=""
 psql_run() {
   if command -v psql >/dev/null 2>&1; then
-    # force TCP: service-container PG is not on the local unix socket
-    # (CI runners have a local psql client but no local server)
-    psql -h 127.0.0.1 -U postgres "$@"
+    # force TCP with the DSN's password: service-container PG is not on
+    # the runner's unix socket and requires SASL auth
+    PGPASSWORD="$(echo "$DSN" | sed -E 's|.*://[^:]+:([^@]+)@.*|\1|')" \
+      psql -h 127.0.0.1 -U postgres "$@"
   else
     if [ -z "$PSQLContainer" ]; then
       PGPORT=$(echo "$DSN" | sed -E 's|.*:([0-9]+)/.*|\1|')
