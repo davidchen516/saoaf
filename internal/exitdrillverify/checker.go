@@ -57,6 +57,11 @@ type Chain struct {
 	Links         []ChainLink `json:"links"`
 	ARRConfigDiff string      `json:"arr_config_diff"` // "0" when ARR/Agent config unchanged (issue: ARR/Agent 配置零变更)
 	AgentCodeDiff string      `json:"agent_code_diff"` // "0" when Agent business code unchanged
+	// Attribution (review R3 P2-A): the export MUST distinguish exact
+	// (drill-named plans) from provider-scope fallback and record the
+	// named plans — the sign-off reviews THIS artifact.
+	AttributionMode  string   `json:"attribution_mode"` // "exact-plans" | "provider-scope"
+	AttributionPlans []string `json:"attribution_plans,omitempty"`
 }
 
 // Checker reads the domain stores and verifies a drill's chain.
@@ -81,9 +86,14 @@ func (c Checker) VerifyDrillChain(ctx context.Context, drillKey string) (*Chain,
 // evidence; the rehearsal and production runbook use explicit plans).
 func (c Checker) VerifyDrillChainScoped(ctx context.Context, drillKey string, plans []string) (*Chain, error) {
 	ch := &Chain{
-		DrillKey:   drillKey,
-		VerifiedAt: time.Now().UTC().Format(time.RFC3339),
-		Links:      []ChainLink{},
+		DrillKey:         drillKey,
+		VerifiedAt:       time.Now().UTC().Format(time.RFC3339),
+		Links:            []ChainLink{},
+		AttributionMode:  "provider-scope",
+		AttributionPlans: plans,
+	}
+	if plans != nil {
+		ch.AttributionMode = "exact-plans"
 	}
 
 	// 1. the drill itself
@@ -102,6 +112,20 @@ func (c Checker) VerifyDrillChainScoped(ctx context.Context, drillKey string, pl
 		Attrs: map[string]any{"vendor": drillVendor, "state": drillState, "initiator": drillInitiator}})
 	if drillState != "SUCCEEDED" && drillState != "REMEDIATION_OPEN" && drillState != "CLOSED" {
 		return ch, broken("drill", fmt.Sprintf("drill state %s is not a completion state (need SUCCEEDED/REMEDIATION_OPEN/CLOSED)", drillState))
+	}
+	// A completion state without finished_at leaves the attribution window
+	// open-ended (COALESCE(finished_at, now()) would absorb traffic forever
+	// — review R3 P3). The datum is untrustworthy: break.
+	if drillState == "SUCCEEDED" || drillState == "CLOSED" {
+		var finished *time.Time
+		if ferr := c.Pool.QueryRow(ctx,
+			`SELECT finished_at FROM saoaf.exit_drill WHERE drill_key = $1`, drillKey).
+			Scan(&finished); ferr != nil {
+			return nil, ferr
+		}
+		if finished == nil {
+			ch.Breaks = append(ch.Breaks, "drill: completion state without finished_at (attribution window unbounded — datum untrustworthy)")
+		}
 	}
 
 	// 2. the exit pack — the drill's OWN pack (exit_pack_key) with a
@@ -155,7 +179,11 @@ func (c Checker) VerifyDrillChainScoped(ctx context.Context, drillKey string, pl
 		        OR i.provider_key = d.vendor
 		        OR EXISTS (
 		                SELECT 1 FROM saoaf.exit_pack p
-		                WHERE p.pack_key = COALESCE(NULLIF(d.exit_pack_key, ''), '')
+		                WHERE p.pack_key = COALESCE(
+		                      NULLIF(d.exit_pack_key, ''),
+		                      (SELECT p2.pack_key FROM saoaf.exit_pack p2
+		                       WHERE p2.vendor = d.vendor AND p2.state IN ('ACTIVE','VALIDATED')
+		                       ORDER BY p2.revision DESC LIMIT 1))
 		                  AND i.provider_key IN (p.substitute_provider)))))
 		ORDER BY mc.recorded_at`, drillKey, plans)
 	if err != nil {

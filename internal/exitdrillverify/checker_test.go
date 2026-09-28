@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,8 +105,8 @@ func seedFullChain(t *testing.T, pool *pgxpool.Pool) {
 	}
 	// drill (SUCCEEDED) + transition log + a resolved finding
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO saoaf.exit_drill (drill_key, vendor, exit_pack_key, initiator, approver, state, result_evidence)
-		VALUES ('drill-v', 'vendor-v', 'pack-v', 'user:init', 'user:approver', 'SUCCEEDED', 'evidence://drill-v')`); err != nil {
+		INSERT INTO saoaf.exit_drill (drill_key, vendor, exit_pack_key, initiator, approver, state, result_evidence, finished_at)
+		VALUES ('drill-v', 'vendor-v', 'pack-v', 'user:init', 'user:approver', 'SUCCEEDED', 'evidence://drill-v', now() + interval '1 hour')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
@@ -546,37 +547,129 @@ func TestSelfApprovalDetected(t *testing.T) {
 	})
 }
 
-// TestLegacyDrillFallbackScope (R2 P2-2): a legacy drill (empty
-// exit_pack_key) still attributes via the vendor-key match branch —
-// its pack link resolves via the vendor fallback and correlations on
-// the vendor-named provider enter the chain.
+// TestLegacyDrillFallbackScope (R2 P2-2 / R3 P1 rewrite): a legacy drill
+// (empty exit_pack_key) attributes via the vendor-fallback pack's
+// SUBSTITUTE — the R2 probeD scenario (vendor-v legacy drill whose window
+// covers substitute-routed traffic) must find the correlation and NOT
+// break. Both assertion directions are hard (no t.Log escape).
 func TestLegacyDrillFallbackScope(t *testing.T) {
 	withDBV(t, func(dsn string, pool *pgxpool.Pool) {
 		seedFullChain(t, pool)
 		ctx := context.Background()
-		// legacy drill: vendor IS the provider key; pack exists (vendor
-		// fallback); correlation routed on the vendor-named provider
+		// legacy drill: vendor-v, NO pack pointer — the vendor fallback
+		// must resolve pack-v (ACTIVE) and its substitute prov-w carries
+		// its window traffic. Backdate the drill start so the SEEDED
+		// correlation (inserted moments ago) falls inside the window,
+		// and give it a proper approval trail.
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO saoaf.exit_drill (drill_key, vendor, initiator, approver, state)
-			VALUES ('drill-legacy', 'prov-w', 'user:init', 'user:approver', 'SUCCEEDED')`); err != nil {
+			INSERT INTO saoaf.exit_drill (drill_key, vendor, initiator, approver, state, finished_at, created_at)
+			VALUES ('drill-legacy', 'vendor-v', 'user:init', 'user:approver', 'SUCCEEDED', now() + interval '1 hour', now() - interval '5 minutes')`); err != nil {
 			t.Fatal(err)
 		}
-		// prov-w IS pack-v's substitute → the fallback scope matches
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO saoaf.exit_drill_transition (drill_key, from_state, to_state, actor)
+			VALUES ('drill-legacy','DRAFT','APPROVED','user:approver'), ('drill-legacy','APPROVED','SUCCEEDED','user:worker')`); err != nil {
+			t.Fatal(err)
+		}
 		ch, err := (Checker{Pool: pool}).VerifyDrillChain(ctx, "drill-legacy")
 		if err != nil {
 			t.Fatal(err)
 		}
-		found := false
+		// direction 1: NO correlation break (the substitute-routed window
+		// traffic attributes via the vendor-fallback pack)
 		for _, b := range ch.Breaks {
 			if len(b) > 12 && b[:12] == "correlation:" {
-				found = true
+				t.Fatalf("legacy drill failed to attribute substitute-routed traffic (vendor-fallback pack not in the substitute branch): %v", ch.Breaks)
+			}
+		}
+		if !ch.Complete {
+			t.Fatalf("legacy drill chain incomplete: %v", ch.Breaks)
+		}
+		// direction 2: an EMPTY vendor (no pack anywhere) still breaks
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO saoaf.exit_drill (drill_key, vendor, initiator, approver, state, finished_at)
+			VALUES ('drill-legacy-none', 'vendor-none', 'user:init', 'user:approver', 'SUCCEEDED', now() + interval '1 hour')`); err != nil {
+			t.Fatal(err)
+		}
+		ch2, err := (Checker{Pool: pool}).VerifyDrillChain(ctx, "drill-legacy-none")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ch2.Complete {
+			t.Fatal("legacy drill with no pack at all stayed complete (vendor fallback must not fabricate attribution)")
+		}
+	})
+}
+
+// TestChainExportDisclosesAttribution (R3 P2-A): the JSON export carries
+// the attribution mode and the named plans — the sign-off reviews THIS
+// artifact, so a fallback export must be distinguishable from an exact
+// one at rest.
+func TestChainExportDisclosesAttribution(t *testing.T) {
+	withDBV(t, func(dsn string, pool *pgxpool.Pool) {
+		seedFullChain(t, pool)
+		ctx := context.Background()
+		chFallback, err := (Checker{Pool: pool}).VerifyDrillChain(ctx, "drill-v")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if chFallback.AttributionMode != "provider-scope" {
+			t.Fatalf("fallback export mode = %q", chFallback.AttributionMode)
+		}
+		if chFallback.AttributionPlans != nil {
+			t.Fatalf("fallback export plans = %v, want nil", chFallback.AttributionPlans)
+		}
+		chExact, err := (Checker{Pool: pool}).VerifyDrillChainScoped(ctx, "drill-v", []string{"plan-v"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if chExact.AttributionMode != "exact-plans" || len(chExact.AttributionPlans) != 1 || chExact.AttributionPlans[0] != "plan-v" {
+			t.Fatalf("exact export attribution = %q %v", chExact.AttributionMode, chExact.AttributionPlans)
+		}
+		// the JSON round-trip keeps both fields
+		b, err := json.Marshal(chExact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back Chain
+		if err := json.Unmarshal(b, &back); err != nil {
+			t.Fatal(err)
+		}
+		if back.AttributionMode != "exact-plans" || len(back.AttributionPlans) != 1 {
+			t.Fatalf("round-trip attribution = %q %v", back.AttributionMode, back.AttributionPlans)
+		}
+	})
+}
+
+// TestCompletionWithoutFinishedAtBreaks (R3 P3): a completion-state drill
+// without finished_at leaves the attribution window unbounded — the
+// checker must break instead of absorbing traffic forever.
+func TestCompletionWithoutFinishedAtBreaks(t *testing.T) {
+	withDBV(t, func(dsn string, pool *pgxpool.Pool) {
+		seedFullChain(t, pool)
+		ctx := context.Background()
+		// wipe finished_at on the completed drill (schema allows NULL)
+		if _, err := pool.Exec(ctx, `
+			UPDATE saoaf.exit_drill SET finished_at = NULL WHERE drill_key='drill-v'`); err != nil {
+			t.Fatal(err)
+		}
+		ch, err := (Checker{Pool: pool}).VerifyDrillChain(ctx, "drill-v")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ch.Complete {
+			t.Fatal("completion state without finished_at passed (unbounded attribution window)")
+		}
+		found := false
+		for _, b := range ch.Breaks {
+			if len(b) > 5 && b[:5] == "drill" && len(b) > 30 && b[:30] != "" {
+				if strings.Contains(b, "finished_at") {
+					found = true
+				}
 			}
 		}
 		if !found {
-			// legacy drill with substitute-routed window traffic: expected
-			// the seed correlation (provider prov-w) to attribute → no
-			// correlation break — the legacy path works via substitute
-			t.Log("legacy drill attributed via the substitute branch (no correlation break) — OK")
+			t.Fatalf("expected the finished_at break; got %v", ch.Breaks)
 		}
 	})
 }

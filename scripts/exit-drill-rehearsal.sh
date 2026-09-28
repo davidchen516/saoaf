@@ -78,8 +78,8 @@ INSERT INTO resolver.resource_plan_item (plan_id, requirement_id, capability_key
 VALUES ('plan-r', 'req-r', 'cap-r', 1, 1, 'bind-r', 1, 'prov-w', 1, 'reasoning-high-v1', '[]');
 INSERT INTO saoaf.exit_pack (pack_key, vendor, revision, state, owner_ref, substitute_provider, valid_until, created_by)
 VALUES ('pack-r', 'vendor-r', 1, 'ACTIVE', 'user:op', 'prov-w', now() + interval '30 day', 'user:op');
-INSERT INTO saoaf.exit_drill (drill_key, vendor, exit_pack_key, initiator, approver, state, result_evidence)
-VALUES ('$DRILL_KEY', 'vendor-r', 'pack-r', 'user:init', 'user:approver', 'SUCCEEDED', 'evidence://$DRILL_KEY');
+INSERT INTO saoaf.exit_drill (drill_key, vendor, exit_pack_key, initiator, approver, state, result_evidence, finished_at)
+VALUES ('$DRILL_KEY', 'vendor-r', 'pack-r', 'user:init', 'user:approver', 'SUCCEEDED', 'evidence://$DRILL_KEY', now() + interval '1 hour');
 INSERT INTO saoaf.exit_drill_finding (drill_key, finding_key, description, severity, state, remediation, remediation_evidence)
 VALUES ('$DRILL_KEY', 'f-r', 'latency regression', 'MEDIUM', 'RESOLVED', 'scaled pool', 'evidence://f-r');
 INSERT INTO saoaf.exit_drill_transition (drill_key, from_state, to_state, actor)

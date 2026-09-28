@@ -65,9 +65,20 @@ R2 核心命中：归因修复的「双向钉子」声称与事实不符（悬�
 |---|---|---|
 | R2-P1-1 归因未闭合（false-GO：同 vendor 流量填充零产出 drill；false-NO-GO：无关悬挂行污染完整链） | **双模归因**：`VerifyDrillChainScoped(drillKey, plans)`——生产演练**显式登记它驱动的 resource plan 集**（`-plan` CLI 旗标——演练生成流量，知道自己的 plan）；nil 走 provider-scope fallback（窗口+{vendor, substitute}——**披露为 provider 颗粒度而非 drill 颗粒度**：同 provider 上并发无关演练不可区分，故 runbook 要求生产用显式 plan）；悬挂行在 exact 模式下不进链（不在登记集） | TestExactPlanAttributionCoversPreExit（fallback 不越权认领 + exact 含 pre-exit + scope 控制）+ TestUnrelatedTrafficDoesNotSatisfyNorContaminate |
 | R2-P2-1 vendor 死分支 → pre-exit 流量全丢（R1 的 fixture 编辑是掩蔽性的） | **exact 模式显式覆盖 pre-exit**（被退 provider 的 plan 照样入链——演练命名它）；fixture 改动被 R2 识别为掩蔽——exact 模式使 prov-v 的 pre-exit 行真实验证（不再依赖 fixture 绕过） | TestExactPlanAttributionCoversPreExit（mrd-pre 在 exact 链中） |
-| R2-P2-2 legacy drill 死路（空 exit_pack_key → 归因 EXISTS 匹配 ''） | fallback 的 substitute 分支改 COALESCE 对齐 step 2（vendor 兜底的 pack 同样参与 substitute 归因） | TestLegacyDrillFallbackScope |
-| R2-P3-1 悬挂回归测试声称覆盖但未插入悬挂行 | 诚实化：测试断言 fallback **不越权认领**未知 plan；悬挂行进链仅经 exact 显式命名——注释与行为一致 | 同上两测试 |
+| R2-P2-2 legacy drill 死路（空 exit_pack_key → 归因 EXISTS 匹配 ''） | **R3 揭示 R2 的该行修复声称不实**（SQL 未变 + 恒绿假钉）。本轮真修：correlation 查询的 substitute 分支 COALESCE 对齐 step 2 的 vendor 兜底子查询；TestLegacyDrillFallbackScope **重写为双向硬断言**（legacy drill 归因 substitute 流量 → Complete；无 pack vendor → 断链） | 重写版 TestLegacyDrillFallbackScope（两方向都 t.Fatal） |
+| R2-P3-1 悬挂回归测试声称覆盖但未插入悬挂行 | 诚实化（R3 修正口径）：fallback 对**悬挂行（无 plan item）**走 IS NULL 分支**保留**并经 plan 链报断链（fail-toward-NO-GO 保守方向，代码注释如实）；对**其它 provider 的已知 plan** 不认领。README 先前「不越权认领未知 plan」措辞错误已改 | 同上两测试 + 本行 |
 | R2-P3-2 审批人不变量声称 vs 只查 actor<>'' | **真实 I15 不变量**：exit_drill.approver 非空且 ≠ initiator + →APPROVED 转移 actor=approver（三者一致） | TestSelfApprovalDetected（approver=initiator → break） |
-| R2-P3-3 psql 声称解析 host:port 实际只解析 password | 如实：README/脚本注释改为「解析 password + 强制 TCP；端口随 host 硬编码 127.0.0.1:5432（CI service 布局）——非 5432 部署走 docker fallback 分支（全解析）」 | 脚本注释 |
+| R2-P3-3 psql 声称解析 host:port 实际只解析 password | 如实对齐（R3）：local psql 分支解析 **password** + 强制 TCP 到 127.0.0.1，**端口默认 5432**（CI service 布局）；非 5432 部署走 docker fallback 分支（该分支才解析端口）。README 行 55 的 R1 旧口径已删除 | 脚本注释 + 本行 |
 
 整改后：检查器 **17/17**（真 PG -race：14 + 三个 R2 探针）；彩排 8/8（含 approver 种子）；`-plan` 旗标进 CLI 与 runbook。
+
+## 审查 R3 整改（CHANGES REQUESTED → 全项修复）
+
+| Finding | 修复 | 回归测试 |
+|---|---|---|
+| R3-P2-A 导出物零归因披露（exact/fallback 不可区分；-plan 不留痕） | **Chain 增 attribution_mode + attribution_plans 字段**（JSON 导出常驻——签字审的就是这份 artifact）；洗白/瞒报探针的关联面由此可审计 | TestChainExportDisclosesAttribution（两模式导出 + JSON 往返保字段） |
+| R3-P1 legacy 修复声称不实 + 恒绿假钉 + 掩蔽 fixture（第 7 次声称/事实不符） | **真修**：correlation 查询 substitute 分支的 COALESCE 真对齐 step 2（vendor 兜底 pack 参与归因）；假钉重写为**双向硬断言**；fixture 用真 vendor-v 场景（不再绕分支） | 重写版 TestLegacyDrillFallbackScope |
+| R3-P3 finished_at NULL 窗口开放（完成态吸收永远流量） | 完成态（SUCCEEDED/CLOSED）缺 finished_at → **break**（数据不可信） | TestCompletionWithoutFinishedAtBreaks |
+| R3-P3 psql/悬挂/R2 表行三处措辞 | 上方三行修正（R1 旧行删除、口径与行为一致） | 文本 |
+
+整改后：检查器 **19/19**（真 PG -race：17 + 导出披露 + finished_at）；彩排 8/8。
