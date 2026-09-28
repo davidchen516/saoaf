@@ -168,3 +168,29 @@ ARR Resolve 可能仍成功，因为它不是数据面健康探针。处置由 M
 
 不得在工单中复制 Token、Prompt、工具参数或模型响应。
 
+
+## I21 — MMR Provider 退出演练证据链导出（桌面/生产同流程）
+
+桌面彩排（无生产依赖）：
+
+```bash
+SAOAF_TEST_PG_DSN=... GOOSE_BIN=... ./scripts/exit-drill-rehearsal.sh
+```
+
+生产演练后导出并核验证据链（Go/No-Go 输入）：
+
+```bash
+exit-chain-verify -dsn <prod-dsn> -drill <drill-key>            # 核验 + 导出（NO-GO until sign-off）
+exit-chain-verify -dsn <prod-dsn> -drill <drill-key> -arr-zero -agent-zero  # 操作者签字后
+```
+
+零变更对比（签字前置）：
+
+```bash
+# ARR 逻辑 profile 与 Agent 配置（演练前后导出对比，diff 必须为 0）
+<生产环境配置导出命令> > /tmp/arr-pre.yaml   # 演练前
+<生产环境配置导出命令> > /tmp/arr-post.yaml  # 演练后
+diff /tmp/arr-pre.yaml /tmp/arr-post.yaml    # 必须 0
+```
+
+模板：`docs/templates/go-no-go-review.md`。

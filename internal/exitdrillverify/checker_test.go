@@ -1,0 +1,289 @@
+package exitdrillverify
+
+// Real-PostgreSQL tests for the I21 evidence-chain checker: complete-chain
+// export (GO), each break class (named link), and the zero-change
+// proof flow (NO-GO → GO after operator sign-off).
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+func withDBV(t *testing.T, fn func(dsn string, pool *pgxpool.Pool)) {
+	t.Helper()
+	base := os.Getenv("SAOAF_TEST_PG_DSN")
+	if base == "" {
+		t.Skip("SAOAF_TEST_PG_DSN not set")
+	}
+	ctx := context.Background()
+	admin, err := pgx.Connect(ctx, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = admin.Close(ctx) })
+	name := fmt.Sprintf("edv_%d_%d", os.Getpid(), time.Now().UnixNano())
+	if _, err := admin.Exec(ctx, "CREATE DATABASE "+name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(ctx, "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
+	})
+	u, _ := url.Parse(base)
+	u.Path = "/" + name
+	dsn := u.String()
+	bin := os.Getenv("GOOSE_BIN")
+	if bin == "" {
+		if bin, err = exec.LookPath("goose"); err != nil {
+			t.Skip("goose CLI not found")
+		}
+	}
+	wd, _ := os.Getwd()
+	if out, err := exec.Command(bin, "-dir", filepath.Join(wd, "..", "..", "migrations"),
+		"postgres", dsn, "up").CombinedOutput(); err != nil {
+		t.Fatalf("goose up: %v\n%s", err, out)
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	fn(dsn, pool)
+}
+
+func seedFullChain(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	// capability → provider → snapshot → binding (registry prerequisites)
+	for _, stmt := range []string{
+		`INSERT INTO registry.capability_definition (capability_key, major_version, revision, resource_type, requirement_schema, state, owner_ref)
+		  VALUES ('cap-v', 1, 1, 'MODEL', '{}', 'PUBLISHED', 'user:op') ON CONFLICT DO NOTHING`,
+		`INSERT INTO registry.resource_provider (provider_key, provider_type, endpoint_ref, owner_ref, workload_identity, state, revision, active_revision)
+		  VALUES ('prov-v', 'MODEL', 'ref://mmr', 'user:op', 'spiffe://saoaf.test/ns/default/sa/mmr', 'PUBLISHED', 1, 1) ON CONFLICT DO NOTHING`,
+	} {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			t.Fatalf("seed registry: %v", err)
+		}
+	}
+	var pid int
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM registry.resource_provider WHERE provider_key='prov-v'`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO registry.provider_snapshot (provider_id, snapshot_version, contract_version, digest, signature, workload_identity, generated_at, valid_until)
+		VALUES ($1, 1, '2026.09', 'sha256:0000000000000000000000000000000000000000000000000000000000000000', 'sig', 'spiffe://saoaf.test/ns/default/sa/mmr', now(), now() + interval '1 day')`,
+		pid); err != nil {
+		t.Fatal(err)
+	}
+	// plan + item
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO resolver.resource_plan (id, caller_ref, tenant_ref, fingerprint, request_digest, idempotency_key, status, expires_at)
+		VALUES ('plan-v', 'user:caller', 'tenant-a', 'sha256:0000000000000000000000000000000000000000000000000000000000000000', 'sha256:0000000000000000000000000000000000000000000000000000000000000000', 'idem-v', 'RESOLVED', now() + interval '1 hour')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO resolver.resource_plan_item (plan_id, requirement_id, capability_key, major_version, capability_revision, binding_key, binding_revision, provider_key, snapshot_version, profile_or_action, reason_codes)
+		VALUES ('plan-v', 'req-v', 'cap-v', 1, 1, 'bind-v', 1, 'prov-v', 1, 'reasoning-high-v1', '[]')`); err != nil {
+		t.Fatal(err)
+	}
+	// exit pack (active)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO saoaf.exit_pack (pack_key, vendor, revision, state, owner_ref, substitute_provider, valid_until, created_by)
+		VALUES ('pack-v', 'vendor-v', 1, 'ACTIVE', 'user:op', 'prov-w', now() + interval '30 day', 'user:op')`); err != nil {
+		t.Fatal(err)
+	}
+	// drill (SUCCEEDED) + transition log + a resolved finding
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO saoaf.exit_drill (drill_key, vendor, exit_pack_key, initiator, state, result_evidence)
+		VALUES ('drill-v', 'vendor-v', 'pack-v', 'user:init', 'SUCCEEDED', 'evidence://drill-v')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO saoaf.exit_drill_finding (drill_key, finding_key, description, severity, state, remediation, remediation_evidence)
+		VALUES ('drill-v', 'f-v', 'latency regression', 'MEDIUM', 'RESOLVED', 'scaled pool', 'evidence://f-v')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO saoaf.exit_drill_transition (drill_key, from_state, to_state, actor)
+		VALUES ('drill-v','DRAFT','APPROVED','user:approver'), ('drill-v','APPROVED','SUCCEEDED','user:worker')`); err != nil {
+		t.Fatal(err)
+	}
+	// correlation + evidence
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO saoaf.model_route_correlation (resource_plan_id, resource_plan_item_id, model_route_decision_id, outcome, usage_ref, trace_id)
+		VALUES ('plan-v', 'req-v', 'mrd-v', 'SUCCEEDED', 'usage-v', 'trace-v')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO saoaf.evidence_record (event_id, source_topic, aggregate_kind, aggregate_id, tenant_ref, occurred_at, payload_digest, content, plan_id, state)
+		VALUES ('ev-v', 'mmr.routed', 'mmr', 'mrd-v', 'tenant-a', now(), 'sha256:0000000000000000000000000000000000000000000000000000000000000000', '{}', 'plan-v', 'LINKED')`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Complete chain → GO after the operator signs the zero-change proofs.
+func TestVerifyDrillChainCompleteGo(t *testing.T) {
+	withDBV(t, func(dsn string, pool *pgxpool.Pool) {
+		seedFullChain(t, pool)
+		c := Checker{Pool: pool}
+		ch, err := c.VerifyDrillChain(context.Background(), "drill-v")
+		if err != nil {
+			t.Fatalf("verify: %v", err)
+		}
+		if len(ch.Breaks) > 0 {
+			t.Fatalf("unexpected breaks: %v", ch.Breaks)
+		}
+		// before sign-off: NO-GO (diffs unverified)
+		verdict, reasons := ch.GoNoGo()
+		if verdict != "NO-GO" || len(reasons) != 2 {
+			t.Fatalf("pre-signoff verdict = %s %v, want NO-GO with 2 unverified-diff reasons", verdict, reasons)
+		}
+		// operator runs the documented export-diff commands and signs
+		ch.MarkARRZeroChange(true)
+		ch.MarkAgentZeroChange(true)
+		verdict, reasons = ch.GoNoGo()
+		if verdict != "GO" || len(reasons) != 0 {
+			t.Fatalf("post-signoff verdict = %s %v, want GO", verdict, reasons)
+		}
+		// the chain exports every link kind
+		kinds := map[string]bool{}
+		for _, l := range ch.Links {
+			kinds[l.Kind] = true
+		}
+		for _, want := range []string{"drill", "exit_pack", "plan", "decision", "evidence", "findings", "audit"} {
+			if !kinds[want] {
+				t.Fatalf("chain export missing link kind %q", want)
+			}
+		}
+	})
+}
+
+// Every break class is a NAMED missing link (issue: 全链无断点).
+func TestVerifyDrillChainBreaks(t *testing.T) {
+	cases := []struct {
+		name  string
+		broke func(t *testing.T, pool *pgxpool.Pool)
+		link  string // the break must name this link
+	}{
+		{"missing drill", func(t *testing.T, pool *pgxpool.Pool) {}, "drill"},
+		{"in-flight drill", func(t *testing.T, pool *pgxpool.Pool) {
+			// drill exists but RUNNING
+			if _, err := pool.Exec(context.Background(), `
+				INSERT INTO saoaf.exit_drill (drill_key, vendor, initiator, state)
+				VALUES ('drill-v', 'vendor-v', 'user:init', 'RUNNING')`); err != nil {
+				t.Fatal(err)
+			}
+		}, "drill"},
+		{"no exit pack", func(t *testing.T, pool *pgxpool.Pool) {
+			seedFullChain(t, pool)
+			// verified packs are UNDELETABLE (audit red line) — the break
+			// is simulated by reverting to a non-usable state instead
+			if _, err := pool.Exec(context.Background(),
+				`UPDATE saoaf.exit_pack SET state='SUPERSEDED' WHERE pack_key='pack-v'`); err != nil {
+				t.Fatal(err)
+			}
+		}, "exit_pack"},
+		{"correlations deleted", func(t *testing.T, pool *pgxpool.Pool) {
+			seedFullChain(t, pool)
+			if _, err := pool.Exec(context.Background(),
+				`DELETE FROM saoaf.model_route_correlation WHERE resource_plan_id='plan-v'`); err != nil {
+				t.Fatal(err)
+			}
+		}, "correlation"},
+		{"plan missing", func(t *testing.T, pool *pgxpool.Pool) {
+			seedFullChain(t, pool)
+			// resolver plans/items are IMMUTABLE decision-ledger records —
+			// the break is simulated by pointing the correlation at a
+			// nonexistent plan (the shape a broken ARR write leaves)
+			if _, err := pool.Exec(context.Background(), `
+				INSERT INTO saoaf.model_route_correlation
+					(resource_plan_id, resource_plan_item_id, model_route_decision_id, outcome)
+				VALUES ('plan-missing', 'req-missing', 'mrd-missing', 'SUCCEEDED')`); err != nil {
+				t.Fatal(err)
+			}
+		}, "plan"},
+		{"evidence missing", func(t *testing.T, pool *pgxpool.Pool) {
+			seedFullChain(t, pool)
+			if _, err := pool.Exec(context.Background(),
+				`DELETE FROM saoaf.evidence_record WHERE plan_id='plan-v'`); err != nil {
+				t.Fatal(err)
+			}
+		}, "evidence"},
+		{"audit trail bypassed", func(t *testing.T, pool *pgxpool.Pool) {
+			seedFullChain(t, pool)
+			if _, err := pool.Exec(context.Background(),
+				`DELETE FROM saoaf.exit_drill_transition WHERE drill_key='drill-v'`); err != nil {
+				t.Fatal(err)
+			}
+		}, "audit"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withDBV(t, func(dsn string, pool *pgxpool.Pool) {
+				tc.broke(t, pool)
+				c := Checker{Pool: pool}
+				ch, err := c.VerifyDrillChain(context.Background(), "drill-v")
+				if err != nil {
+					// the missing-drill case returns a typed error
+					var eb *ErrChainBroken
+					if !errors.As(err, &eb) {
+						t.Fatalf("verify: %v", err)
+					}
+					if eb.Link != tc.link {
+						t.Fatalf("typed break link = %q, want %q", eb.Link, tc.link)
+					}
+					return
+				}
+				if ch.Complete {
+					t.Fatalf("%s: chain claims complete — break not detected", tc.name)
+				}
+				found := false
+				for _, b := range ch.Breaks {
+					if len(b) > len(tc.link) && b[:len(tc.link)] == tc.link {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("%s: no break names link %q (breaks: %v)", tc.name, tc.link, ch.Breaks)
+				}
+				verdict, _ := ch.GoNoGo()
+				if verdict != "NO-GO" {
+					t.Fatalf("%s: verdict = %s, want NO-GO", tc.name, verdict)
+				}
+			})
+		})
+	}
+}
+
+// The exported chain is JSON-serializable for the Go/No-Go pack.
+func TestChainJSONExport(t *testing.T) {
+	withDBV(t, func(dsn string, pool *pgxpool.Pool) {
+		seedFullChain(t, pool)
+		c := Checker{Pool: pool}
+		ch, err := c.VerifyDrillChain(context.Background(), "drill-v")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := json.Marshal(ch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back Chain
+		if err := json.Unmarshal(b, &back); err != nil {
+			t.Fatal(err)
+		}
+		if back.DrillKey != "drill-v" || !back.Complete || len(back.Links) == 0 {
+			t.Fatalf("round-trip chain = %+v", back)
+		}
+	})
+}
