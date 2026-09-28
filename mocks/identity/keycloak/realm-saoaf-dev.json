@@ -101,6 +101,61 @@
           }
         }
       ]
+    },
+    {
+      "name": "profile",
+      "description": "Standard profile claims (sub/username/email) — the e2e and adapter chain relies on them",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "username",
+            "claim.name": "sub",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "jsonType.label": "String",
+            "lightweight.claim": "false"
+          }
+        },
+        {
+          "name": "preferred username",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "username",
+            "claim.name": "preferred_username",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "email",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "email",
+            "claim.name": "email",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "jsonType.label": "String"
+          }
+        }
+      ]
     }
   ],
   "clients": [
@@ -144,6 +199,56 @@
       "enabled": true,
       "defaultAction": true,
       "priority": 10
+    }
+  ],
+  "users": [
+    {
+      "username": "e2e-operator",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "op@e2e.test",
+      "firstName": "E2E",
+      "lastName": "Operator",
+      "requiredActions": [],
+      "credentials": [
+        {
+          "type": "password",
+          "algorithm": "pbkdf2-sha256",
+          "hashIterations": 210000,
+          "salt": "fDZne2cS1cGVCcvXkW32cA==",
+          "hashedSaltedValue": "QRoCE5E/TruJZduhvChRE5qRcxjvEU9KlWx2fm0r99Q=",
+          "temporary": false
+        }
+      ],
+      "attributes": {
+        "tenant_ref": [
+          "tenant-a"
+        ]
+      }
+    },
+    {
+      "username": "e2e-outsider",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "out@e2e.test",
+      "firstName": "E2E",
+      "lastName": "Outsider",
+      "requiredActions": [],
+      "credentials": [
+        {
+          "type": "password",
+          "algorithm": "pbkdf2-sha256",
+          "hashIterations": 210000,
+          "salt": "n1yAlfXX2qtybXAGduLDyw==",
+          "hashedSaltedValue": "rkqs3024QfMLo4LAdWwG4xpBTwPW2pJtoCtmyEXvghA=",
+          "temporary": false
+        }
+      ],
+      "attributes": {
+        "tenant_ref": [
+          "tenant-b"
+        ]
+      }
     }
   ]
 }

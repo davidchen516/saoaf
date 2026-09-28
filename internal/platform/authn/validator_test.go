@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -17,10 +18,11 @@ import (
 
 // testIssuer is an OIDC + JWKS test double with its own RSA key.
 type testIssuer struct {
-	key   *rsa.PrivateKey
-	kid   string
-	jwks  *httptest.Server
-	disco *httptest.Server
+	key       *rsa.PrivateKey
+	kid       string
+	rotateSeq int
+	jwks      *httptest.Server
+	disco     *httptest.Server
 }
 
 func newTestIssuer(t *testing.T) *testIssuer {
@@ -31,12 +33,14 @@ func newTestIssuer(t *testing.T) *testIssuer {
 	}
 	iss := &testIssuer{key: key, kid: "test-kid-1"}
 
+	// the handler reads iss.key/iss.kid AT REQUEST TIME so rotateKey()
+	// swaps what the JWKS serves (rotation semantics: the old key leaves)
 	iss.jwks = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"keys": []any{map[string]string{
 				"kty": "RSA", "kid": iss.kid, "alg": "RS256", "use": "sig",
-				"n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
-				"e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes()),
+				"n": base64.RawURLEncoding.EncodeToString(iss.key.N.Bytes()),
+				"e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(iss.key.E)).Bytes()),
 			}},
 		})
 	}))
@@ -54,6 +58,19 @@ func newTestIssuer(t *testing.T) *testIssuer {
 	t.Cleanup(iss.jwks.Close)
 	t.Cleanup(iss.disco.Close)
 	return iss
+}
+
+// rotateKey retires the current signing key (it leaves the JWKS) and
+// installs a fresh one — the production rotation semantics: the JWKS
+// serves ONLY the new key, so old-key tokens must fail validation.
+func (iss *testIssuer) rotateKey() {
+	newKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic(err)
+	}
+	iss.key = newKey
+	iss.rotateSeq++
+	iss.kid = "rotated-kid-" + strconv.Itoa(iss.rotateSeq)
 }
 
 // issue mints a signed token with the given claims.
@@ -208,13 +225,24 @@ func TestValidateFailsClosedWhenJWKSDown(t *testing.T) {
 func TestValidateFollowsKeyRotation(t *testing.T) {
 	iss := newTestIssuer(t)
 	v := newValidator(t, iss)
-	if _, err := v.Validate(context.Background(), iss.issue(t, validClaims(iss))); err != nil {
+	oldTok := iss.issue(t, validClaims(iss))
+	if _, err := v.Validate(context.Background(), oldTok); err != nil {
 		t.Fatalf("initial: %v", err)
 	}
-	iss.kid = "rotated-kid-2"
+	// rotate: the issuer retires the OLD kid (removed from the JWKS) and
+	// signs with a new one — a full key-set replacement, mirroring the
+	// production rotation semantics
+	iss.rotateKey()
 	c := validClaims(iss)
 	c["jti"] = "tok-0003"
-	if _, err := v.Validate(context.Background(), iss.issue(t, c)); err != nil {
+	newTok := iss.issue(t, c)
+	if _, err := v.Validate(context.Background(), newTok); err != nil {
 		t.Fatalf("rotated key rejected: %v", err)
+	}
+	// the OLD-key token MUST stop validating once its kid left the JWKS
+	// (review R1 P2-3: refreshKeys must REPLACE the key map, not merge —
+	// a merge would keep validating retired keys silently)
+	if _, err := v.Validate(context.Background(), oldTok); err == nil {
+		t.Fatal("OLD-key token still validates after rotation (retired key must be rejected)")
 	}
 }

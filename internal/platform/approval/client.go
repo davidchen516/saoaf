@@ -118,6 +118,15 @@ func (d Decision) SatisfiedFor(requesterRef, objectDigest string) bool {
 	if d.Status != "APPROVED" || d.DecidedAt == nil || d.ApprovalRef == "" {
 		return false
 	}
+	// the presenting subject must BE the recorded requester — an approval
+	// is issued to a specific requester, not to whoever presents the
+	// reference (I22 contract test: user:mallory must not ride an
+	// approval issued to user:alice). An approval WITHOUT a recorded
+	// requester is malformed — fail closed, not open to everyone (review
+	// R1 P2-2: the empty-string short-circuit let any subject ride it).
+	if d.RequesterRef == "" || d.RequesterRef != requesterRef {
+		return false
+	}
 	for _, a := range d.ApproverRefs {
 		if a == requesterRef {
 			return false
