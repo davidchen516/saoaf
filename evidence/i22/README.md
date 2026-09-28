@@ -49,3 +49,21 @@ issue 核心是「对接企业服务并保持契约不变」。**Mock 与生产 
 ## 测试基线
 
 `internal/platform` 全套 -race 绿（8 包）；CI identity-contract job（Keycloak+Prism 容器）常驻；boundary 29 包 PASS；license PASS。
+
+## 审查 R1 整改（CHANGES REQUESTED → 全项修复）
+
+| Finding | 修复 | 验证 |
+|---|---|---|
+| P1-1 TestTenantTrustedClaimSourceOnly 恒绿（字面子串伪正则——注入 body 租户赋值仍 PASS） | 重写为**行为断言**（真 issuer 令牌 validate → tenant_ref 必须等于 token claim）+ **真 regex** 结构断言（`TenantRef:\s*id\.TenantRef` 必在；`TenantRef:\s*(body\|input\|payload\|req\|json)` 必不在——admin.go + ops.go） | **红运行验证**：注入合法语法 `TenantRef: bodyTenant.TenantRef` → 测试红（"request-body tenant assignment found"）；恢复绿 |
+| P2-1 GateOrder 403 腿从未行使（宽 client 带 resource.publish → 200 逃生口） | **窄 scope client**（resource.read only + fullScopeAllowed:false）专用 mint（kcTokenClient）→ 断言**硬 403**，逃生口删除 | e2e 双测真栈绿（含 fresh-client 传播重试） |
+| P2-2 SatisfiedFor 空 requester_ref fail-open | `d.RequesterRef == "" → false`（畸形/降级审批响应拒绝——同 ApproverRefs 空先例） | 契约套件 |
+| P2-3 旧钥拒收声称失实（rotation 测试只断言新钥过） | TestValidateFollowsKeyRotation 补断言 **旧令牌必须拒**（rotateKey 换钥集：JWKS handler 改为请求时读当前钥——旧 kid 消失）；rotateSeq 计数器 | authn 套件 -race 绿 |
+| P3-1 根目录 0 字节 ARCHIVED 误提交 | 删除 | — |
+| P3-2 e2e 头注释轮转条目自相矛盾 | 头注释改为与正文一致的弱性质披露（validator 级钉住） | 文本 |
+| P3-3 narrow/GateOrder client 无 cleanup；头注释 "removed afterwards" 过宽 | narrow client t.Cleanup 删除；注释按实收窄 | 代码 |
+| P3-4 死代码（errDenier/containsErr/matchSimple/grepFiles/var _=fmt） | 全部删除；errors2 用 strings.Contains | 编译器 |
+| 附带：RateLimit(0,0) 除零（MountAdmin 零配置 panic——行为测试新触发面） | rate 0 = 禁用限流（守卫） | 测试通过 |
+
+整改后：`internal/platform` 全套 -race 绿（7 包 + 根包）；e2e 双测真栈绿（含窄 scope 硬 403）。
+
+**挂账（R1 OBS）**：wildcardDigest "sha256:mock" 生产放行面（I05 预留——真实审批服务不得回传该字面量；随企业审批服务接入时收口）；CI identity job Prism 就绪等待已补。

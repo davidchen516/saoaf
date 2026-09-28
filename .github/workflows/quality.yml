@@ -239,7 +239,11 @@ jobs:
             -v "$PWD/mocks/identity/approval/openapi.yaml:/contracts/openapi.yaml:ro" \
             -p 127.0.0.1:4011:4010 stoplight/prism:5.15.10 mock -h 0.0.0.0 --errors --multiprocess=false /contracts/openapi.yaml
           for i in $(seq 1 60); do
-            curl -sf "http://127.0.0.1:8080/realms/saoaf-dev/.well-known/openid-configuration" >/dev/null 2>&1 && break
+            curl -sf "http://127.0.0.1:8080/realms/saoaf-dev/.well-known/openid-configuration" >/dev/null 2>&1 \
+              && curl -sf -X POST "http://127.0.0.1:4010/access/v1/evaluation" \
+                   -H 'Content-Type: application/json' \
+                   -d '{"subject":{"type":"identity","id":"probe"},"action":{"name":"probe"}}' >/dev/null 2>&1 \
+              && break
             sleep 2
           done
           curl -sf "http://127.0.0.1:8080/realms/saoaf-dev/.well-known/openid-configuration" >/dev/null
@@ -253,7 +257,7 @@ jobs:
           KC_BOOTSTRAP_ADMIN_USERNAME: admin
           KC_BOOTSTRAP_ADMIN_PASSWORD: admin
         run: |
-          go test -race -count=1 -v -run "TestIdentityE2E|TestPDPEveryFailureClassFailsClosed|TestPDPFlappingNeverDegradesToAllow|TestApprovalRetryIdempotent|TestApprovalSelfApprovalRefused|TestApprovalOutageFailsClosed" ./internal/platform/
+          go test -race -count=1 -v -run "TestIdentityE2E|TestPDPEveryFailureClassFailsClosed|TestPDPFlappingNeverDegradesToAllow|TestApprovalRetryIdempotent|TestApprovalSelfApprovalRefused|TestApprovalOutageFailsClosed|TestTenantTrustedClaimSourceOnly" ./internal/platform/
 
   worm-archive:
     name: evidence WORM archive (real PG + S3 object lock)

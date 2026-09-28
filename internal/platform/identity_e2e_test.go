@@ -16,8 +16,10 @@ package platform_test
 //   3. cross-tenant and scope-less tokens rejected by the SAME chain
 //   4. authz.PDPClient: real AuthZEN evaluation (allow and deny examples)
 //   5. approval.Client: real approval fetch + SatisfiedFor
-//   6. JWKS rotation: admin-rotated realm keys → an OLD-key token stops
-//      validating (forced refresh picks the new key; the old one is gone)
+//   6. JWKS rotation substrate: Keycloak 26.7 exposes NO admin rotation
+//      API (disclosed in-test); old-key rejection semantics are pinned at
+//      the validator level (TestValidateFollowsKeyRotation: retired kid
+//      → forced refresh → old token REJECTED, new key accepted)
 import (
 	"bytes"
 	"encoding/json"
@@ -202,23 +204,39 @@ func provisionTestClient(t *testing.T, admin *kcAdmin) string {
 
 func kcToken(t *testing.T, secret, username, password string) string {
 	t.Helper()
+	return kcTokenClient(t, e2eClientID, secret, username, password)
+}
+
+// kcTokenClient mints a password-grant token for a SPECIFIC client id —
+// the narrow GateOrder client differs from the wide e2e client. Retries
+// briefly: a freshly created client can take a moment to propagate to
+// Keycloak's token endpoint cache (invalid_client right after 201).
+func kcTokenClient(t *testing.T, clientID, secret, username, password string) string {
+	t.Helper()
 	issuer := os.Getenv("SAOAF_E2E_ISSUER")
-	form := strings.NewReader(fmt.Sprintf(
-		"client_id=%s&client_secret=%s&username=%s&password=%s&grant_type=password",
-		e2eClientID, secret, username, password))
-	resp, err := http.Post(issuer+"/protocol/openid-connect/token",
-		"application/x-www-form-urlencoded", form)
-	if err != nil {
-		t.Fatalf("token: %v", err)
-	}
-	defer resp.Body.Close()
 	var out struct {
 		AccessToken string `json:"access_token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.AccessToken == "" {
-		t.Fatalf("token decode: %v (empty access token — direct grants disabled?)", err)
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		form := strings.NewReader(fmt.Sprintf(
+			"client_id=%s&client_secret=%s&username=%s&password=%s&grant_type=password",
+			clientID, secret, username, password))
+		resp, err := http.Post(issuer+"/protocol/openid-connect/token",
+			"application/x-www-form-urlencoded", form)
+		if err != nil {
+			t.Fatalf("token: %v", err)
+		}
+		out.AccessToken = ""
+		if err := json.NewDecoder(resp.Body).Decode(&out); err == nil && out.AccessToken != "" {
+			resp.Body.Close()
+			return out.AccessToken
+		}
+		resp.Body.Close()
+		time.Sleep(500 * time.Millisecond) // fresh-client propagation
 	}
-	return out.AccessToken
+	t.Fatalf("token grant did not succeed within 15s for client %s (direct grants disabled?)", clientID)
+	return ""
 }
 
 func TestIdentityE2E(t *testing.T) {
@@ -352,18 +370,63 @@ func TestIdentityE2E(t *testing.T) {
 }
 
 // The gate chain order (401 → 403 → PDP → approval) over the REAL
-// Keycloak-issued tokens: exercised through the middleware harness in
-// middleware_test with stub tokens; this e2e re-proves it with real
-// tokens through a minimal inline chain.
+// Keycloak-issued tokens. The 403 leg runs against a NARROW-scope client
+// (resource.read only) so the scope denial is exercised with a real
+// token — no 200 escape hatch (review R1 P2-1: the wide client carried
+// resource.publish and silently turned the leg into a 200).
 func TestIdentityE2EGateOrder(t *testing.T) {
 	if os.Getenv("SAOAF_E2E_IDENTITY") != "1" {
 		t.Skip("SAOAF_E2E_IDENTITY=1 with the mocks/identity stack required")
 	}
 	issuer := os.Getenv("SAOAF_E2E_ISSUER")
 	admin := newKCAdmin(t)
-	secret := provisionTestClient(t, admin)
 
-	tok := kcToken(t, secret, "e2e-operator", "op-pass")
+	// narrow-scope client: audience + tenant claims but NO write scopes
+	secret := "narrow-" + fmt.Sprint(time.Now().UnixNano())
+	narrow := map[string]any{
+		"clientId":                  e2eClientID + "-narrow",
+		"enabled":                   true,
+		"secret":                    secret,
+		"publicClient":              false,
+		"standardFlowEnabled":       false,
+		"directAccessGrantsEnabled": true,
+		"serviceAccountsEnabled":    false,
+		"fullScopeAllowed":          false,
+		"protocol":                  "openid-connect",
+		"redirectUris":              []string{"http://127.0.0.1:1/callback"},
+		"defaultClientScopes": []string{
+			"profile", "tenant-ref", "saoaf-control-plane-audience", "resource.read",
+		},
+	}
+	b, _ := json.Marshal(narrow)
+	code, body := admin.do(t, http.MethodPost, "/admin/realms/saoaf-dev/clients", string(b))
+	if code != 201 && code != 204 && code != 409 {
+		t.Fatalf("create narrow client: %d %s", code, body)
+	}
+	// converge a leftover (409 keeps the old secret/scope set) — same as
+	// the wide client
+	if c, cb := admin.do(t, http.MethodGet,
+		"/admin/realms/saoaf-dev/clients?clientId="+e2eClientID+"-narrow", ""); c == 200 {
+		var cs []struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(cb, &cs) == nil && len(cs) > 0 {
+			_, _ = admin.do(t, http.MethodPut, "/admin/realms/saoaf-dev/clients/"+cs[0].ID, string(b)) //nolint:errcheck
+		}
+	}
+	t.Cleanup(func() {
+		if c, cb := admin.do(t, http.MethodGet,
+			"/admin/realms/saoaf-dev/clients?clientId="+e2eClientID+"-narrow", ""); c == 200 {
+			var cs []struct {
+				ID string `json:"id"`
+			}
+			if json.Unmarshal(cb, &cs) == nil && len(cs) > 0 {
+				_, _ = admin.do(t, http.MethodDelete, "/admin/realms/saoaf-dev/clients/"+cs[0].ID, "") //nolint:errcheck
+			}
+		}
+	})
+
+	tok := kcTokenClient(t, e2eClientID+"-narrow", secret, "e2e-operator", "op-pass")
 	v, err := authn.NewValidator(issuer, "saoaf-control-plane")
 	if err != nil {
 		t.Fatal(err)
@@ -394,7 +457,7 @@ func TestIdentityE2EGateOrder(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("anonymous = %d, want 401 (order: authn first)", resp.StatusCode)
 	}
-	// authenticated but (likely) no publish scope → 403
+	// authenticated with a real token carrying NO resource.publish → 403
 	req, _ := http.NewRequest(http.MethodPost, srv.URL, nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	resp, err = http.DefaultClient.Do(req)
@@ -402,7 +465,7 @@ func TestIdentityE2EGateOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusOK {
-		t.Fatalf("authenticated = %d, want 403 (no scope) or 200 (if realm default grants it — document either)", resp.StatusCode)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("narrow-scope authenticated = %d, want a HARD 403 (scope denial with a real token)", resp.StatusCode)
 	}
 }

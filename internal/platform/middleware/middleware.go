@@ -179,7 +179,13 @@ func RateLimit(rate int, burst int) func(http.Handler) http.Handler {
 	}
 	var mu sync.Mutex
 	buckets := map[string]*bucket{}
-	var refill = time.Second / time.Duration(rate)
+	// rate 0 = unconfigured (tests mounting without rate config): disable
+	// limiting rather than dividing by zero (review R1: MountAdmin with a
+	// zero AdminConfig panicked at mount time)
+	var refill time.Duration
+	if rate > 0 {
+		refill = time.Second / time.Duration(rate)
+	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -196,9 +202,11 @@ func RateLimit(rate int, burst int) func(http.Handler) http.Handler {
 				buckets[key] = b
 			}
 			elapsed := now.Sub(b.last)
-			b.tokens += float64(elapsed) / float64(refill)
-			if b.tokens > float64(burst) {
-				b.tokens = float64(burst)
+			if refill > 0 {
+				b.tokens += float64(elapsed) / float64(refill)
+				if b.tokens > float64(burst) {
+					b.tokens = float64(burst)
+				}
 			}
 			b.last = now
 			allowed := b.tokens >= 1
